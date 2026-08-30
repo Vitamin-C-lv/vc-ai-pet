@@ -1,26 +1,41 @@
 # VC AI Pet — Project State
 
-Status: integrated locally; ready for public GitHub push.
+Status: v0.1 closeout recorded; public GitHub push is complete, while the end-to-end browser-click RPC assertion remains unverified in the available browser surface.
 
-- DSH version: `0.1.1-rc.2`
-- DSH web profile: `/home/vitamin_c/.dsh/profiles/web`
-- Installed package link: `/home/vitamin_c/.dsh/profiles/web/node_modules/vc-ai-pet`
-- Pet sandbox: `/home/vitamin_c/.local/share/vc-ai-pet/sandbox`
-- Pet memory DB: `/home/vitamin_c/.local/share/vc-ai-pet/sandbox/memory/pet-memory.db`
-- Existing DSH memory DB checked: `/home/vitamin_c/桌面/测试/.dsh-meow/memory.db`
-- Database isolation: confirmed; the DSH fact-row count remained `0`, while the pet DB records its own interaction facts.
+```text
+DSH_VERSION=0.1.1-rc.2
+REPO_PATH=/home/vitamin_c/projects/personal/vc-ai-pet
+GITHUB_REPO=https://github.com/Vitamin-C-lv/vc-ai-pet
+GITHUB_VISIBILITY=PUBLIC
+DSH_PLUGIN_INSTALL_PATH=/home/vitamin_c/.dsh/profiles/web/node_modules/vc-ai-pet
+PET_SANDBOX=/home/vitamin_c/.local/share/vc-ai-pet/sandbox
+PET_MEMORY_DB=/home/vitamin_c/.local/share/vc-ai-pet/sandbox/memory/pet-memory.db
+DSH_MEMORY_DB=/home/vitamin_c/桌面/测试/.dsh-meow/memory.db
+DATABASES_SEPARATE=YES
+CLIENT_HOST_RPC=UNVERIFIED_END_TO_END (HOST_ROUTE=PASS)
+PET_VISIBLE=PASS
+CLICK_INTERACTION=UNVERIFIED_END_TO_END
+PERSISTENCE=PASS
+DEEPSEEK_REQUESTS_FROM_PET=0
+CONVERSATION_INJECTION=NONE
+MODEL_TOOL_REGISTERED=NO
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+CURRENT_COMMIT=2d0250bb356918ed35f24d93338d71c6b0c266d0
+```
 
-Changed for DSH adaptation:
+Closeout evidence:
 
-- `src/dsh/host-plugin.js` — fixed sandbox runtime, exact private RPC, read-only packaged sprite route.
-- `src/dsh/client-plugin.js` — additive `shell.overlay` mount and narrow bridge.
-- `scripts/build-client.mjs`, `lib/client.js`, `package.json`, `cordis.patch.yml`, `.gitignore` — client bundle and DSH package metadata.
+- The host registers the package-private `/vc-ai-pet` channel with `connection.rpc.handle`; a local HTTP `readState` request returned a valid server response.
+- The real DSH page rendered the dog and a real pointer click changed `idle` to `happy`, but the available Codex in-app browser page exposes neither `fetch` nor `WebSocket`. The client bridge therefore cannot transmit that click in this test surface; the pet DB remained at two facts and `lifetimeInteractions` remained `1`.
+- The pre-existing runtime interaction and restart check remain passing: `pet-memory.db` retains its interaction fact and state, and the DSH memory DB remains at zero facts.
+- `https://github.com/Vitamin-C-lv/vc-ai-pet` is public; remote `main` matched the local implementation commit above before this documentation-only closeout commit. No README, LICENSE, or initialization commit was added by GitHub.
 
-Acceptance observed:
+v0.1 explicitly does not include:
 
-- DSH starts normally; the dog is visible in the bottom-right global overlay.
-- Click changes the dog from idle to happy; direct runtime persistence confirms the interaction fact and restart preservation.
-- The pet uses no model tool, prompt/context injection, conversation node, Luna integration, or DSH memory DB.
-- Luna Team and `vc-tool-activity-fold` were left unchanged and still render in the DSH page.
+- local LLM or VLM
+- Dream or Reflection
+- DSH event awareness
+- computer control
 
-Integration commit: `3baf35dd815432dc9964e2e631d7b98fa380e63f`.
+The DSH adaptation leaves Luna Team and `vc-tool-activity-fold` unchanged.
