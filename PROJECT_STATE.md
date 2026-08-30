@@ -23,4 +23,4 @@ Acceptance observed:
 - The pet uses no model tool, prompt/context injection, conversation node, Luna integration, or DSH memory DB.
 - Luna Team and `vc-tool-activity-fold` were left unchanged and still render in the DSH page.
 
-Commit: recorded in the final integration commit.
+Integration commit: `3baf35dd815432dc9964e2e631d7b98fa380e63f`.
