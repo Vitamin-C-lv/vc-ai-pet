@@ -36,8 +36,4 @@ PASS when:
 - v0.1 click regression remains PASS
 - Luna and tool-fold remain unchanged
 
-Fallback only if an actual measured 4B compatibility/performance problem occurs on this machine:
-`Qwen3.5-4B-Q4_K_M.gguf` (~1.28 GB).
-Do not downgrade merely to save a small amount of disk/VRAM.
-
 A/B does not yet require the DSH chat bubble. That is v0.2-C.

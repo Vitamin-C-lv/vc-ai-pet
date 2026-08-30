@@ -3,9 +3,10 @@ import { createInitialState, advanceState, interact } from '../core/pet-state-en
 import { assertPetPolicy } from '../core/pet-policy.js'
 import { ensurePetIdentity } from '../core/pet-identity.js'
 import { PetMemory } from '../memory/pet-memory.js'
+import { LocalBrain } from '../brain/local-brain.js'
 
 export class PetRuntime {
-  constructor({ sandboxRoot }) { this.sandbox = new PetSandbox(sandboxRoot); this.memory = null; this.state = null; this.identity = null }
+  constructor({ sandboxRoot }) { this.sandbox = new PetSandbox(sandboxRoot); this.memory = null; this.brain = null; this.state = null; this.identity = null }
   async initialize() {
     assertPetPolicy()
     await this.sandbox.initialize()
@@ -15,6 +16,7 @@ export class PetRuntime {
     this.memory = new PetMemory(this.sandbox.root)
     this.memory.seedIfFresh(this.state.bornAt)
     this.memory.migrateIdentity(this.identity)
+    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox })
     await this.persist()
     return this.snapshot()
   }
@@ -22,7 +24,8 @@ export class PetRuntime {
   identitySnapshot() { return JSON.parse(JSON.stringify(this.identity)) }
   async tick(now = Date.now()) { this.state = advanceState(this.state, now); await this.persist(); return this.snapshot() }
   async interact(kind = 'pet', now = Date.now()) { this.state = interact(this.state, kind, now); this.memory.rememberInteraction(kind, this.state.lifetimeInteractions); await this.persist(); return this.snapshot() }
+  async chat(userText) { return this.brain.reply({ identity: this.identitySnapshot(), state: this.snapshot(), userText }) }
   recall(query, k = 5) { return this.memory.recall(query, k) }
   async persist() { await this.sandbox.writeJson('world', 'state.json', this.state) }
-  close() { this.memory?.close() }
+  close() { this.brain?.stop('runtime-close'); this.memory?.close() }
 }

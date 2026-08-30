@@ -25,6 +25,10 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     const [state, setState] = React.useState(load);
     const [visual, setVisual] = React.useState(() => chooseVisual(state));
     const [pos, setPos] = React.useState({ x: null, y: null });
+    const [chatOpen, setChatOpen] = React.useState(false);
+    const [chatInput, setChatInput] = React.useState('');
+    const [chatPending, setChatPending] = React.useState(false);
+    const [chatMessages, setChatMessages] = React.useState([]);
     const stateRef = React.useRef(state);
     const clickTimer = React.useRef(null);
     const drag = React.useRef(null);
@@ -112,6 +116,30 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       void act('play');
     }
 
+    function appendChat(role, text) {
+      setChatMessages((previous) => [...previous, { role, text }].slice(-8));
+    }
+
+    async function sendChat() {
+      const text = chatInput.trim();
+      if (!text || chatPending) return;
+
+      setChatInput('');
+      appendChat('user', text);
+      setChatPending(true);
+
+      try {
+        const result = await bridge?.chat?.(text);
+        if (result?.ok) appendChat('pet', result.text);
+        else if (result?.unavailable) appendChat('pet', result.petLine || '花花先在旁边等主人。');
+        else appendChat('pet', '花花脑袋刚刚卡了一下……');
+      } catch {
+        appendChat('pet', '花花脑袋刚刚卡了一下……');
+      } finally {
+        setChatPending(false);
+      }
+    }
+
     function down(event) {
       drag.current = {
         px: event.clientX,
@@ -150,17 +178,54 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
         'data-pet-state': state.current,
         style: pos.x == null ? undefined : { transform: `translate(${pos.x}px,${pos.y}px)` }
       },
+      chatOpen && React.createElement(
+        'section',
+        { className: 'vc-pet-chat-bubble', 'aria-label': '和李花花聊天' },
+        React.createElement(
+          'header',
+          { className: 'vc-pet-chat-header' },
+          React.createElement('strong', null, '李花花'),
+          React.createElement('button', { type: 'button', className: 'vc-pet-chat-close', onClick: () => setChatOpen(false), 'aria-label': '关闭聊天气泡' }, '×')
+        ),
+        React.createElement(
+          'div',
+          { className: 'vc-pet-chat-messages', 'aria-live': 'polite' },
+          chatMessages.length === 0 && React.createElement('p', { className: 'vc-pet-chat-empty' }, '🐶 在呀。'),
+          chatMessages.map((message, index) => React.createElement(
+            'p',
+            { className: `vc-pet-chat-message vc-pet-chat-message-${message.role}`, key: `${message.role}-${index}` },
+            React.createElement('b', null, message.role === 'user' ? '主人：' : '李花花：'),
+            ' ', message.text
+          )),
+          chatPending && React.createElement('p', { className: 'vc-pet-chat-thinking' }, '花花在想……')
+        ),
+        React.createElement(
+          'form',
+          { className: 'vc-pet-chat-composer', onSubmit: (event) => { event.preventDefault(); void sendChat(); } },
+          React.createElement('input', {
+            type: 'text',
+            maxLength: 500,
+            value: chatInput,
+            disabled: chatPending,
+            placeholder: '和花花说句话……',
+            onChange: (event) => setChatInput(event.target.value),
+            'aria-label': '和李花花说句话'
+          }),
+          React.createElement('button', { type: 'submit', disabled: chatPending || !chatInput.trim(), 'aria-label': '发送给李花花' }, '↑')
+        )
+      ),
+      React.createElement('button', { className: 'vc-pet-chat-toggle', type: 'button', title: '和李花花说话', 'aria-label': '和李花花说话', onClick: () => setChatOpen(true) }, '💬'),
       React.createElement(
         'button',
         {
           className: 'vc-pet-hitbox',
           type: 'button',
-          title: '小伯恩山',
+          title: '李花花',
           onPointerDown: down,
           onPointerMove: move,
           onPointerUp: up,
           onDoubleClick: doubleClick,
-          'aria-label': 'AI pet'
+          'aria-label': '李花花 AI pet'
         },
         React.createElement('img', {
           className: `vc-pet-sprite vc-pet-state-${state.current}`,

@@ -31,10 +31,32 @@
 - Ran the v0.2 core smoke, sealed v0.1 core smoke, asset validation, and
   client build successfully.
 
-## Remaining v0.2-C/D work
+## v0.2-C
 
-- Add the DSH chat bubble and user text input.
-- Add the intentionally deferred memory-write gate, Dream/Reflection design,
-  and any later UI integration without crossing the v0.1 isolation boundary.
-- Keep screenshot vision/mmproj, Luna awareness, work-state awareness, TTS,
-  ASR, and computer-control tools out of the v0.2-A/B scope.
+- `CHAT_RPC=PASS`: the existing `/vc-ai-pet` RPC accepts only a bounded
+  `userText` string and returns the existing LocalBrain result.
+- `CHAT_BUBBLE=PASS` and `TEXT_INPUT=PASS`: the DSH overlay has a transient,
+  bounded single-line chat bubble beside 李花花.
+- `LOCAL_BRAIN_UI=PASS`: opening the bubble does not load the model; only a
+  submitted message invokes LocalBrain.
+- `NAME_UI_RECALL=PASS` and `BIRTHDAY_UI_RECALL=PASS` by manual UI acceptance.
+- `AGE_CONTEXT_FIX=PASS`: every chat prompt now supplies the local calendar
+  date, computed Gregorian age, and birthday flag. On 2026-08-31 the UI
+  correctly described 李花花 as 0 years old and on her first birthday day.
+- `OWNER_BUSY_UI_PATH=CONTRACT_PASS`: the bubble renders LocalBrain's safe
+  deterministic pet line without exposing GPU telemetry.
+- `OPEN_BUBBLE_MODEL_START=NO`; `CHAT_MEMORY_WRITE=DEFERRED_V0_2_D`; and
+  `DEEPSEEK_USAGE=NONE`.
+- `CLICK_REGRESSION=PASS`, `LUNA_REGRESSION=PASS`, and
+  `TOOL_FOLD_REGRESSION=PASS` by manual UI acceptance.
+- `UI_MANUAL_ACCEPTANCE=PASS`: pet visibility, click, double-click, drag,
+  bubble placement, text input, response latency, birthday recall, and DSH
+  input-area non-obstruction were accepted by the user.
+
+## Remaining v0.2-D work
+
+- Add the memory-write gate, important-conversation candidate extraction, and
+  deduplication without persisting raw chat history.
+- Complete final v0.2 closeout after the v0.2-D memory-write gate work.
+- Keep Dream/Reflection, screenshot vision/mmproj, Luna awareness,
+  work-state awareness, TTS, ASR, and computer-control tools deferred.

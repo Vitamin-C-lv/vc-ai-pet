@@ -1,11 +1,24 @@
 function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : 0 }
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
 function memoryLines(memories = []) { return memories.slice(0, 6).map((m) => `- [${m.level}] ${String(m.content).slice(0, 220)}`).join('\n') }
-export function buildPetMessages({ identity, state, memories, userText }) {
+function localDateKey(now) { return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
+export function petAgeContext(birthday, now = new Date()) {
+  const [birthYear, birthMonth, birthDay] = String(birthday).split('-').map(Number)
+  const currentYear = now.getFullYear(), currentMonth = now.getMonth() + 1, currentDay = now.getDate()
+  const beforeBirthday = currentMonth < birthMonth || (currentMonth === birthMonth && currentDay < birthDay)
+  return {
+    today: localDateKey(now),
+    age: Math.max(0, currentYear - birthYear - (beforeBirthday ? 1 : 0)),
+    isBirthday: currentMonth === birthMonth && currentDay === birthDay,
+  }
+}
+export function buildPetMessages({ identity, state, memories, userText, now }) {
+  const birthday = identity?.birthday ?? '2026-08-31'
+  const age = petAgeContext(birthday, now)
   const system = `你是李花花。
 
 你是一只伯恩山犬，是主人的小宠物。
-你的生日是 2026-08-31。
+你的生日是 ${birthday}。
 你住在主人身边。
 
 你不是 AI 助手，不负责完成编程、系统管理、搜索、文件操作或工作任务。
@@ -20,7 +33,10 @@ export function buildPetMessages({ identity, state, memories, userText }) {
 当前身份：
 名字：${identity?.name ?? '李花花'}
 品种：${identity?.breedZh ?? '伯恩山犬'}
-生日：${identity?.birthday ?? '2026-08-31'}
+生日：${birthday}
+当前日期：${age.today}
+当前年龄：${age.age}岁
+今天是否生日：${age.isBirthday ? '是' : '否'}
 
 当前状态：
 ${stateSentence(state)}

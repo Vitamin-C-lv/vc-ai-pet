@@ -33,7 +33,7 @@ export function apply(ctx, rawConfig = {}) {
   ctx.inject(['connection'], (connectionCtx) => {
     connectionCtx.connection.rpc.handle(
       '/vc-ai-pet',
-      async (endpoint, payload) => invoke(runtime, ready, endpoint, payload),
+      async (endpoint, payload) => invoke(runtime, ready, endpoint, payload, ctx.logger),
       { authority: 'trusted-host' }
     );
   });
@@ -43,16 +43,26 @@ export function apply(ctx, rawConfig = {}) {
     clearInterval(tick);
     runtime.close();
   }, 'vc-ai-pet: runtime cleanup');
-  ctx.logger.info(`vc-ai-pet: active (sandbox=${sandboxRoot}, model=disabled)`);
+  ctx.logger.info(`vc-ai-pet: active (sandbox=${sandboxRoot}, model=on-demand)`);
 }
 
-async function invoke(runtime, ready, method, payload) {
+async function invoke(runtime, ready, method, payload, logger) {
   await ready;
   const args = payload?.args;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return failure('invalid request');
   if (method === 'readState' && Object.keys(args).length === 0) return success(runtime.snapshot());
   if (method === 'interact' && Object.keys(args).length === 1 && typeof args.kind === 'string' && ['pet', 'play', 'wake'].includes(args.kind)) {
     return success(await runtime.interact(args.kind));
+  }
+  if (method === 'chat' && Object.keys(args).length === 1 && typeof args.userText === 'string') {
+    const text = args.userText.trim();
+    if (text.length < 1 || text.length > 500) return failure('invalid request');
+    try {
+      return success(await runtime.chat(text));
+    } catch {
+      logger?.warn?.('vc-ai-pet: local brain request failed');
+      return success({ ok: false, unavailable: false, reason: 'local-brain-error', petLine: '花花脑袋刚刚卡了一下……' });
+    }
   }
   return failure('invalid request');
 }
