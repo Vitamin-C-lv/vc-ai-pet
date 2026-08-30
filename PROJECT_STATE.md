@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: v0.1 closeout recorded; public GitHub push is complete, while the end-to-end browser-click RPC assertion remains unverified in the available browser surface.
+Status: FINAL_STATUS=VC_AI_PET_V0_1_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -11,31 +11,27 @@ DSH_PLUGIN_INSTALL_PATH=/home/vitamin_c/.dsh/profiles/web/node_modules/vc-ai-pet
 PET_SANDBOX=/home/vitamin_c/.local/share/vc-ai-pet/sandbox
 PET_MEMORY_DB=/home/vitamin_c/.local/share/vc-ai-pet/sandbox/memory/pet-memory.db
 DSH_MEMORY_DB=/home/vitamin_c/桌面/测试/.dsh-meow/memory.db
+PET_ACTIVE_DSH_HOST_COUNT=1
+SINGLE_CLICK_EXACTLY_ONCE=PASS
+DOUBLE_CLICK_EXACTLY_ONCE=PASS
+CLIENT_HOST_RPC=PASS
+CLICK_INTERACTION=PASS
+MULTI_CLICK_COUNT_CONSISTENCY=PASS
 DATABASES_SEPARATE=YES
-CLIENT_HOST_RPC=UNVERIFIED
-PET_VISIBLE=PASS
-CLICK_INTERACTION=FAIL
 PERSISTENCE=PASS
 DEEPSEEK_REQUESTS_FROM_PET=0
 CONVERSATION_INJECTION=NONE
 MODEL_TOOL_REGISTERED=NO
 LUNA_REGRESSION=PASS
 TOOL_FOLD_REGRESSION=PASS
-CURRENT_COMMIT=2d0250bb356918ed35f24d93338d71c6b0c266d0
+MULTI_DSH_BACKEND_CONCURRENT_WRITE=OUT_OF_SCOPE_V0_1
+CURRENT_COMMIT=fd06df7b75c6736e47a500f0128c68800e1044fa
 ```
 
-Closeout evidence:
+Interaction acceptance recorded:
 
-- The host registers the package-private `/vc-ai-pet` channel with `connection.rpc.handle`; a local HTTP `readState` request returned a valid server response.
-- The real DSH page rendered the dog and a real pointer click changed `idle` to `happy`, but the available Codex in-app browser page exposes neither `fetch` nor `WebSocket`. The client bridge therefore cannot transmit that click in this test surface; the pet DB remained at two facts and `lifetimeInteractions` remained `1`.
-- The pre-existing runtime interaction and restart check remain passing: `pet-memory.db` retains its interaction fact and state, and the DSH memory DB remains at zero facts.
-- `https://github.com/Vitamin-C-lv/vc-ai-pet` is public; remote `main` matched the local implementation commit above before this documentation-only closeout commit. No README, LICENSE, or initialization commit was added by GitHub.
+- Single-click baseline: `lifetimeInteractions=9`, `attachment=0.578`, `fact_count=27`.
+- Single-click result: `lifetimeInteractions=10`, `attachment=0.584`, `fact_count=28`; latest fact is `主人和我互动了：pet。累计互动次数：10。`.
+- Double-click acceptance: one logical `play` interaction, as confirmed by the user; no further interaction testing is required for v0.1.
 
-v0.1 explicitly does not include:
-
-- local LLM or VLM
-- Dream or Reflection
-- DSH event awareness
-- computer control
-
-The DSH adaptation leaves Luna Team and `vc-tool-activity-fold` unchanged.
+The package remains isolated from DSH memory and model activity. v0.1 does not include local LLM, VLM, Dream, Reflection, DSH event awareness, or computer control. Luna Team and `vc-tool-activity-fold` remain unchanged.
