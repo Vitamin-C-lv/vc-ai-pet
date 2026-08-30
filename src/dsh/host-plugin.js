@@ -31,10 +31,9 @@ export function apply(ctx, rawConfig = {}) {
   tick.unref?.();
 
   ctx.inject(['connection'], (connectionCtx) => {
-    connectionCtx.connection.rpc.intercept(
+    connectionCtx.connection.rpc.handle(
       '/vc-ai-pet',
-      (method) => method === 'readState' || method === 'interact',
-      async (method, payload) => invoke(runtime, ready, method, payload),
+      async (endpoint, payload) => invoke(runtime, ready, endpoint, payload),
       { authority: 'trusted-host' }
     );
   });
