@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "character": "Pixel Bernese Mountain Dog",
+  "frameSize": [
+    192,
+    192
+  ],
+  "displayHintPx": 126,
+  "states": {
+    "idle": [
+      "idle-front.png",
+      "idle-3q.png",
+      "blink-happy.png"
+    ],
+    "curious": [
+      "curious.png"
+    ],
+    "happy": [
+      "playbow.png",
+      "jump.png"
+    ],
+    "sit": [
+      "sit.png"
+    ],
+    "rest": [
+      "rest-awake.png",
+      "rest-curled.png"
+    ],
+    "sleepy": [
+      "sleepy-sit.png"
+    ],
+    "sleep": [
+      "sleep-curled.png",
+      "sleep-side.png"
+    ],
+    "stretch": [
+      "stretch.png"
+    ],
+    "walkRight": [
+      "walk-right-1.png",
+      "walk-right-2.png",
+      "walk-right-3.png",
+      "walk-right-4.png",
+      "walk-right-5.png",
+      "walk-right-6.png"
+    ],
+    "walkLeft": [
+      "walk-left-idle.png"
+    ],
+    "surprised": [
+      "surprised.png"
+    ],
+    "beg": [
+      "beg.png"
+    ],
+    "bark": [
+      "bark.png"
+    ]
+  },
+  "strip": {
+    "walkRight": {
+      "file": "walk-right-strip.png",
+      "frames": 6,
+      "frameWidth": 192,
+      "frameHeight": 192
+    }
+  },
+  "icons": [
+    "avatar.png",
+    "toy-bone.png",
+    "icon-paw.png",
+    "toy-food-bowl.png",
+    "toy-ball.png"
+  ]
+}

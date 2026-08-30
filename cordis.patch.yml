@@ -1,0 +1,9 @@
+# Additive bundle row. The host owns one fixed pet sandbox and two exact
+# package-private RPC methods; the client occupies only the global shell.overlay.
+- insert:
+    - id: vc-ai-pet
+      name: vc-ai-pet
+      config:
+        sandboxRoot: /home/vitamin_c/.local/share/vc-ai-pet/sandbox
+        assetRoot: /home/vitamin_c/projects/personal/vc-ai-pet/assets/runtime
+        tickMs: 10000

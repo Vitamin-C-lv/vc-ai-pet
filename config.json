@@ -1,0 +1,15 @@
+{
+  "petName": null,
+  "species": "Bernese Mountain Dog",
+  "assetBaseUrl": "./assets/runtime",
+  "displaySizePx": 126,
+  "defaultAnchor": "bottom-right",
+  "tickMs": 10000,
+  "sandboxRelativePath": ".local/share/vc-ai-pet/sandbox",
+  "v0_1": {
+    "localModelEnabled": false,
+    "dreamEnabled": false,
+    "reflectionEnabled": false,
+    "dshEventBridgeEnabled": false
+  }
+}

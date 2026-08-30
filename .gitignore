@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.DS_Store
+sandbox/
+pet-data/
+*.db
+*.db-wal
+*.db-shm
+!sandbox-template/
+!sandbox-template/**

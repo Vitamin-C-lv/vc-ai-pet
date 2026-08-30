@@ -1,0 +1,1 @@
+import{readFile}from'node:fs/promises';const m=JSON.parse(await readFile(new URL('../assets/runtime/manifest.json',import.meta.url)));if(m.version!==1)throw new Error('bad manifest');if(m.states.walkRight.length!==6)throw new Error('walkRight must have 6 frames');console.log('VC_AI_PET_ASSETS=PASS')

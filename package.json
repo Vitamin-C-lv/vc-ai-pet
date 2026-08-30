@@ -1,0 +1,35 @@
+{
+  "name": "vc-ai-pet",
+  "version": "0.1.0",
+  "description": "A tiny isolated pixel Bernese Mountain Dog pet for DeepSeek Harness.",
+  "type": "module",
+  "scripts": {
+    "smoke": "node test/smoke.mjs",
+    "validate:assets": "node scripts/validate-assets.mjs",
+    "build": "node scripts/build-client.mjs"
+  },
+  "main": "src/dsh/host-plugin.js",
+  "exports": {
+    ".": "./src/dsh/host-plugin.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "assets/runtime/",
+    "lib/client.js",
+    "src/",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
+    }
+  }
+}

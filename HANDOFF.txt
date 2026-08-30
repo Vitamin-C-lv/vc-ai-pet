@@ -1,0 +1,2 @@
+VC AI PET v0.1 PREBUILT
+Give the entire ZIP/folder to Kali Codex. First read CODEX_KALI_EXECUTION_PROMPT.md, then AGENTS.md. Do not send only the prompt: the point is to reuse prepared code and art.
