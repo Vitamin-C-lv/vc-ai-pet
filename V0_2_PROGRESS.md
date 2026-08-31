@@ -53,10 +53,40 @@
   bubble placement, text input, response latency, birthday recall, and DSH
   input-area non-obstruction were accepted by the user.
 
-## Remaining v0.2-D work
+## v0.2-D Memory Gate
 
-- Add the memory-write gate, important-conversation candidate extraction, and
-  deduplication without persisting raw chat history.
-- Complete final v0.2 closeout after the v0.2-D memory-write gate work.
-- Keep Dream/Reflection, screenshot vision/mmproj, Luna awareness,
-  work-state awareness, TTS, ASR, and computer-control tools deferred.
+- `MEMORY_GATE=PASS`: Qwen may propose one structured candidate in the same
+  local completion that produces the visible reply. Only `MemoryGate` can
+  pass an allowed candidate to `PetMemory.rememberCandidate()`.
+- `MODEL_INFERENCES_PER_CHAT=1`; `MODEL_TEMPERATURE=0.72`; and
+  `PET_DEEPSEEK_REQUESTS=0`.
+- `MEMORY_WRITE_POSITIVE=PASS` and `MEMORY_RECALL_AFTER_WRITE=PASS` by manual
+  UI acceptance: an explicit request to remember the owner's preferred test
+  color is stored and recalled as 群青色 on the next turn.
+- Explicit memory intent has a deterministic, current-message-only fallback
+  candidate when the model skips its optional candidate. It still traverses
+  the same level, evidence, sensitive-credential, duplicate, and opt-out
+  gates; the model never writes the database directly.
+- `MEMORY_OPT_OUT=PASS`: explicit “别记住 / 不要保存” has code-veto priority
+  over any model candidate. `CHATTER_NOT_STORED=PASS` for ordinary petting
+  chatter.
+- `MEMORY_DEDUPE=BEST_EFFORT_PASS`: exact and near-exact canonical repeats are
+  blocked. Related historical candidates with materially different text may
+  coexist and are accepted in v0.2.
+- `RAW_MEMORY_HISTORY_POLICY=PRESERVE`: the gate does not delete, archive,
+  supersede, or rewrite accepted rows. Future Dream consolidation is
+  additive/derived; original source memories stay available for later
+  historical recall. `RAW_CHAT_HISTORY_PERSISTED=NO`.
+- `DATABASES_SEPARATE=PASS`; `RESPONSE_LATENCY_REGRESSION=NONE_NOTICEABLE`;
+  `CHAT_BUBBLE_REGRESSION=PASS`; `CLICK_REGRESSION=PASS`;
+  `DOUBLE_CLICK_REGRESSION=PASS`; `DRAG_REGRESSION=PASS`;
+  `LUNA_REGRESSION=PASS`; `TOOL_FOLD_REGRESSION=PASS`; and
+  `UI_MANUAL_ACCEPTANCE=PASS`.
+
+## Deferred after v0.2
+
+- Dream, Reflection, recent conversation context, 8192 context experiment,
+  historical-recall mode, memory consolidation, and contradiction or
+  supersession understanding.
+- Vision/mmproj, screen perception, TTS/ASR, Luna awareness, work-state
+  awareness, and computer-control tools.

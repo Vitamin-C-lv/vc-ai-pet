@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { validateLocalBrainConfig } from './local-brain-config.js'
 import { buildPetMessages } from './prompt-builder.js'
+import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
 import { assertLoopbackUrl } from '../core/pet-policy.js'
 import { evaluateLocalBrainAvailability, busyPetLine } from './resource-gate.js'
 import { BrainAvailabilityTracker } from './brain-availability.js'
@@ -96,21 +97,14 @@ export class LocalBrain {
 
   startResourceMonitor() {
     if (this.monitorTimer) return
-
-    this.monitorTimer = setInterval(() => {
-      void this.monitorOnce()
-    }, this.config.resourceGate.probeIntervalMs)
-
+    this.monitorTimer = setInterval(() => { void this.monitorOnce() }, this.config.resourceGate.probeIntervalMs)
     this.monitorTimer.unref?.()
   }
 
   async monitorOnce() {
     if (!this.child || this.inferenceActive) return
-
     const availability = await this.checkAvailability()
-    if (!availability.available) {
-      this.stop('owner-busy')
-    }
+    if (!availability.available) this.stop('owner-busy')
   }
 
   stopResourceMonitor() {
@@ -158,7 +152,6 @@ export class LocalBrain {
       '--alias', this.config.modelAlias,
     ]
 
-    // v0.2 is text-only: deliberately DO NOT pass --mmproj.
     const env = {
       ...process.env,
       HF_HOME: this.config.cacheDir,
@@ -241,6 +234,13 @@ export class LocalBrain {
       userText,
     })
 
+    // Keep one model inference per chat turn. The same constrained response
+    // contains the visible reply and an optional memory candidate.
+    messages[0] = {
+      ...messages[0],
+      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}`,
+    }
+
     this.inferenceActive = true
     try {
       const response = await requestLocalServer(this.config, '/v1/chat/completions', {
@@ -248,10 +248,14 @@ export class LocalBrain {
         body: JSON.stringify({
           model: this.config.modelAlias,
           messages,
-          temperature: 0.75,
+          temperature: 0.72,
           top_p: 0.9,
-          max_tokens: 160,
+          max_tokens: 256,
           chat_template_kwargs: { enable_thinking: false },
+          response_format: {
+            type: 'json_object',
+            schema: PET_CHAT_RESPONSE_SCHEMA,
+          },
           stream: false,
         }),
         timeoutMs: 60_000,
@@ -260,15 +264,16 @@ export class LocalBrain {
       if (!response.ok) throw new Error(`PET_LOCAL_MODEL_HTTP_${response.status}`)
 
       const payload = await response.json()
-      const text = payload?.choices?.[0]?.message?.content
-      if (typeof text !== 'string' || !text.trim()) {
-        throw new Error('PET_LOCAL_MODEL_EMPTY_REPLY')
-      }
+      const rawText = payload?.choices?.[0]?.message?.content
+      const parsed = parseStructuredChatResponse(rawText, userText)
 
       return {
         ok: true,
         unavailable: false,
-        text: text.trim(),
+        text: parsed.text,
+        memoryCandidate: parsed.memoryCandidate,
+        rawMemoryCandidate: parsed.rawMemoryCandidate,
+        memoryDecision: parsed.memoryDecision,
       }
     } finally {
       this.inferenceActive = false
