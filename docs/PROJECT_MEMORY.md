@@ -19,3 +19,8 @@ Body + life skeleton only: overlay, pixel Bernese assets, zero-model state machi
 
 ## Character lock
 The supplied pixel Bernese design is the v0.1 canonical identity. Do not redraw or reinterpret proportions/markings during integration.
+
+## Current production baseline
+- v0.2.0 with Local Brain API v1 at `http://127.0.0.1:17862`.
+- v0.3-A adds Recent Conversation RAM continuity for the latest 12 successful turns.
+- Pet memory DB and DSH memory DB remain permanently isolated.

@@ -2,6 +2,20 @@ function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1,
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
 function memoryLines(memories = []) { return memories.slice(0, 6).map((m) => `- [${m.level}] ${String(m.content).slice(0, 220)}`).join('\n') }
 function localDateKey(now) { return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
+function recentConversationMessages(messages = []) {
+  return messages
+    .filter((message) =>
+      message &&
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof message.content === 'string' &&
+      message.content.trim()
+    )
+    .slice(-24)
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim().slice(0, 1200),
+    }))
+}
 export function petAgeContext(birthday, now = new Date()) {
   const [birthYear, birthMonth, birthDay] = String(birthday).split('-').map(Number)
   const currentYear = now.getFullYear(), currentMonth = now.getMonth() + 1, currentDay = now.getDate()
@@ -12,7 +26,7 @@ export function petAgeContext(birthday, now = new Date()) {
     isBirthday: currentMonth === birthMonth && currentDay === birthDay,
   }
 }
-export function buildPetMessages({ identity, state, memories, userText, now }) {
+export function buildPetMessages({ identity, state, memories, recentMessages = [], userText, now }) {
   const birthday = identity?.birthday ?? '2026-08-31'
   const age = petAgeContext(birthday, now)
   const system = `你是李花花。
@@ -44,6 +58,20 @@ ${stateSentence(state)}
 与你当前对话相关的记忆：
 ${memoryLines(memories) || '- 暂无相关长期记忆'}
 
+最近对话说明：
+你还会看到主人和你刚刚进行的几轮对话。
+这些内容属于短期上下文，用来保持当前聊天连续性。
+短期对话不等于长期记忆，不要因为它出现在这里就声称它已经永久记住。
+如果最近对话与固定身份、规则冲突，以固定身份和规则为准。
+主人当前这一句话始终是 messages 中最后一个 user message。
+
 只根据这些信息自然回应主人。`
-  return [{ role: 'system', content: system }, { role: 'user', content: String(userText ?? '').slice(0, 1200) }]
+  return [
+    { role: 'system', content: system },
+    ...recentConversationMessages(recentMessages),
+    {
+      role: 'user',
+      content: String(userText ?? '').slice(0, 1200),
+    },
+  ]
 }

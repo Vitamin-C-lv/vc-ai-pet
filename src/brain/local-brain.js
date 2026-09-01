@@ -32,7 +32,7 @@ export class LocalBrain {
     }
   }
 
-  async reply({ identity, state, userText }) {
+  async reply({ identity, state, userText, recentMessages = [] }) {
     const availability = await this.checkAvailability()
 
     if (!availability.available) {
@@ -58,6 +58,7 @@ export class LocalBrain {
       identity,
       state,
       memories: [...dedup.values()].slice(0, 8),
+      recentMessages,
       userText,
     })
 

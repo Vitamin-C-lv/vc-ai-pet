@@ -5,6 +5,7 @@ import { ensurePetIdentity } from '../core/pet-identity.js'
 import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
 import { LocalBrain } from '../brain/local-brain.js'
+import { RecentConversation } from '../conversation/recent-conversation.js'
 
 export class PetRuntime {
   constructor({ sandboxRoot }) {
@@ -14,6 +15,7 @@ export class PetRuntime {
     this.brain = null
     this.state = null
     this.identity = null
+    this.conversation = new RecentConversation({ maxTurns: 12 })
   }
 
   async initialize() {
@@ -57,11 +59,14 @@ export class PetRuntime {
       identity: this.identitySnapshot(),
       state: this.snapshot(),
       userText,
+      recentMessages: this.conversation.messages(),
     })
 
     if (!result?.ok) return result
 
     const gate = this.memoryGate.consider(userText, result.rawMemoryCandidate ?? result.memoryCandidate)
+
+    this.conversation.append(userText, result.text)
 
     // Never expose the candidate/evidence or internal gate details to the
     // browser. UI receives the same public reply shape as v0.2-C.
@@ -83,6 +88,7 @@ export class PetRuntime {
 
   close() {
     // Local Brain is now a shared external service. Pet owns no model process.
+    this.conversation?.clear()
     this.memory?.close()
   }
 }

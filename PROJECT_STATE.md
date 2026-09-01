@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_V0_1_PASS
+Status: FINAL_STATUS=VC_AI_PET_V0_3_A_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -35,3 +35,11 @@ Interaction acceptance recorded:
 - Double-click acceptance: one logical `play` interaction, as confirmed by the user; no further interaction testing is required for v0.1.
 
 The package remains isolated from DSH memory and model activity. v0.1 does not include local LLM, VLM, Dream, Reflection, DSH event awareness, or computer control. Luna Team and `vc-tool-activity-fold` remain unchanged.
+
+## v0.3-A implementation status
+
+Recent Conversation Continuity is implemented on branch
+`feat/v0.3-recent-conversation` as a host-side RAM-only buffer of the latest
+12 successful user/assistant turns. It is not persisted to the sandbox or any
+memory database. Automated and manual acceptance are complete; the package
+version is `0.3.0-alpha.1`.
