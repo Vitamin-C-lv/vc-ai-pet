@@ -6,8 +6,8 @@ export const PET_POLICY = Object.freeze({
   dshToolAccess: 'NONE',
   memoryDatabase: 'FULLY_ISOLATED',
   networkAccess: 'LOOPBACK_ONLY_V0_2',
-  modelStorage: 'D_DRIVE_ONLY',
-  backupStorage: 'E_DRIVE_RESERVED',
+  localBrainAccess: 'LOCAL_BRAIN_API_V1_ONLY',
+  localBrainLifecycle: 'EXTERNAL_SHARED_SERVICE',
 })
 
 export function assertPetPolicy() {
@@ -17,7 +17,8 @@ export function assertPetPolicy() {
   if (PET_POLICY.deepSeekUsage !== 'NONE') throw new Error('PET_POLICY_BROKEN: deepSeekUsage')
   if (PET_POLICY.memoryDatabase !== 'FULLY_ISOLATED') throw new Error('PET_POLICY_BROKEN: memoryDatabase')
   if (PET_POLICY.networkAccess !== 'LOOPBACK_ONLY_V0_2') throw new Error('PET_POLICY_BROKEN: networkAccess')
-  if (PET_POLICY.modelStorage !== 'D_DRIVE_ONLY') throw new Error('PET_POLICY_BROKEN: modelStorage')
+  if (PET_POLICY.localBrainAccess !== 'LOCAL_BRAIN_API_V1_ONLY') throw new Error('PET_POLICY_BROKEN: localBrainAccess')
+  if (PET_POLICY.localBrainLifecycle !== 'EXTERNAL_SHARED_SERVICE') throw new Error('PET_POLICY_BROKEN: localBrainLifecycle')
   return true
 }
 

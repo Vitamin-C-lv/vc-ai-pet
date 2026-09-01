@@ -25,34 +25,19 @@
     "memoryCandidatePerTurnMax": 1,
     "memoryMinimumImportance": 2,
     "memoryMinimumConfidence": 0.72,
-    "singleModelPolicy": "Qwen3.5-4B-Q4_K_M_ONLY",
-    "modelStorage": "D:\\VC-AI-Pet\\models",
-    "runtimeStorage": "D:\\VC-AI-Pet\\runtime",
-    "cacheStorage": "D:\\VC-AI-Pet\\cache",
-    "tempStorage": "D:\\VC-AI-Pet\\temp",
-    "backupStorageReserved": "E:\\VC-AI-Pet-Backup",
-    "model": {
-      "upstreamRepo": "Qwen/Qwen3.5-4B",
-      "ggufRepo": "unsloth/Qwen3.5-4B-GGUF",
-      "quant": "Q4_K_M",
-      "filename": "Qwen3.5-4B-Q4_K_M.gguf",
-      "approxModelSizeGB": 2.74,
-      "visionProjectorDownload": false
-    },
-    "server": {
-      "host": "127.0.0.1",
-      "port": 17861,
-      "ctxSize": 4096,
-      "sleepIdleSeconds": 900
+    "localBrain": {
+      "contract": "local-brain-v1",
+      "baseUrl": "http://127.0.0.1:17862",
+      "reasoningEffort": "off",
+      "lifecycleOwner": "VC_LOCAL_BRAIN_SERVICE"
     },
     "resourceAwareBrain": {
       "enabled": true,
       "gpuIndex": 0,
       "maxGpuUtilizationPct": 55,
-      "minFreeVramMiB": 6144,
+      "minFreeVramMiB": 0,
       "probeIntervalMs": 15000,
-      "behaviorBeforeStartWhenBusy": "DO_NOT_START_LOCAL_MODEL",
-      "behaviorWhenAlreadyRunningAndOwnerBusy": "STOP_LOCAL_MODEL_IF_NOT_INFERENCE_ACTIVE",
+      "behaviorWhenOwnerBusy": "DEFER_PET_INFERENCE",
       "recordBusyEpisodes": true,
       "longTermMemoryPerPoll": false,
       "cannedPetLine": "主人好像在忙……为什么不陪花花玩呀？"

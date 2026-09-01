@@ -82,7 +82,7 @@ export class PetRuntime {
   }
 
   close() {
-    this.brain?.stop('runtime-close')
+    // Local Brain is now a shared external service. Pet owns no model process.
     this.memory?.close()
   }
 }

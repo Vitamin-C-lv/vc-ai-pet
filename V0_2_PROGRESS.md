@@ -1,5 +1,10 @@
 # 李花花 v0.2-A/B Progress
 
+> Historical implementation note: the direct `17861`, model-path, and
+> Pet-owned llama entries below describe the pre-v0.2-E implementation and
+> remain historical evidence only. They are not active Pet runtime behavior
+> after the Local Brain API v1 migration.
+
 ## Completed
 
 - Migrated the sealed v0.1 pet identity to 李花花 (狗, 伯恩山犬), with birthday
@@ -82,6 +87,18 @@
   `DOUBLE_CLICK_REGRESSION=PASS`; `DRAG_REGRESSION=PASS`;
   `LUNA_REGRESSION=PASS`; `TOOL_FOLD_REGRESSION=PASS`; and
   `UI_MANUAL_ACCEPTANCE=PASS`.
+
+## v0.2-E Local Brain API v1 Migration
+
+- `PET_LOCAL_BRAIN_API_V1_MIGRATION=PASS`
+- `PET_DIRECT_LLAMA_OWNERSHIP=REMOVED`
+- `PET_LOCAL_BRAIN_ENDPOINT=http://127.0.0.1:17862`
+- `PET_MODEL_LIFECYCLE_OWNER=VC_LOCAL_BRAIN_SERVICE`
+- `PET_MEMORY_ISOLATION=PRESERVED`
+
+Pet now owns identity, state, memory, prompt, and business behavior only. The
+shared Local Brain service owns model lifecycle and runtime supervision; Pet
+does not start, stop, restart, or probe a Pet-owned model process.
 
 ## Deferred after v0.2
 
