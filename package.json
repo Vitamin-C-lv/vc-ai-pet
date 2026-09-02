@@ -1,12 +1,14 @@
 {
   "name": "vc-ai-pet",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0-alpha.2",
   "description": "李花花 — an isolated local pixel Bernese Mountain Dog pet for DeepSeek Harness.",
   "type": "module",
   "scripts": {
     "smoke": "node test/smoke.mjs",
     "smoke:v0.2-core": "node test/v0.2-core.mjs",
     "smoke:v0.3-recent": "node test/v0.3-recent-conversation.mjs",
+    "smoke:v0.3-dream": "node test/v0.3-dream.mjs",
+    "dream:once": "node scripts/run-pet-dream.mjs",
     "validate:assets": "node scripts/validate-assets.mjs",
     "build": "node scripts/build-client.mjs"
   },

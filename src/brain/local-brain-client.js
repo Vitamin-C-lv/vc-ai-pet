@@ -71,6 +71,7 @@ export class LocalBrainClient {
     temperature = 0.72,
     topP = 0.9,
     maxTokens = 256,
+    omitMaxTokens = false,
     responseFormat = undefined,
   }) {
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -90,7 +91,7 @@ export class LocalBrainClient {
     // Pet never sends model/n_ctx/context tier/mmproj/llama lifecycle parameters.
     if (temperature !== undefined) body.temperature = temperature
     if (topP !== undefined) body.top_p = topP
-    if (maxTokens !== undefined) body.max_tokens = maxTokens
+    if (!omitMaxTokens && maxTokens !== undefined) body.max_tokens = maxTokens
     if (responseFormat !== undefined) body.response_format = responseFormat
 
     let response

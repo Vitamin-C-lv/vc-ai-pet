@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_V0_3_A_PASS
+Status: FINAL_STATUS=VC_AI_PET_V0_3_B_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -43,3 +43,38 @@ Recent Conversation Continuity is implemented on branch
 12 successful user/assistant turns. It is not persisted to the sandbox or any
 memory database. Automated and manual acceptance are complete; the package
 version is `0.3.0-alpha.1`.
+
+## v0.3-B Dream / Reflection status
+
+The feature branch `feat/v0.3-dream` adds two independent, Pet-only thought
+layers. Micro Reflection uses a separate 30-minute checkpoint and a maximum of
+4 new raw memories, 4 related rows, and 1 additive derived row. Deep Dream is
+restricted to sleep, uses a 15-minute sleep minimum, allows night runs from
+22:30 to 08:00 or a daytime nap after 45 minutes of continuous fixed GPU
+availability, and uses 24 new / 24 related rows per batch with at most 3
+derived rows. Both layers use only Local Brain API v1 at
+`http://127.0.0.1:17862`; neither writes `rules` or uses physical context.
+
+Acceptance is complete on `feat/v0.3-dream`:
+
+```text
+VERSION=0.3.0-alpha.2
+DREAM_SOURCE_SESSION=vc-ai-pet:dream
+DREAM_WINDOW=vc-ai-pet:dream-window
+REFLECTION_SOURCE_SESSION=vc-ai-pet:reflection
+REFLECTION_WINDOW=vc-ai-pet:reflection-window
+CHECKPOINTS_INDEPENDENT=PASS
+RAW_MEMORY_HISTORY_PRESERVED=PASS
+EMERGENT_SOUL=PASS
+SOUL_WRITE_FROM_CHAT=DENIED
+SOUL_WRITE_FROM_REFLECTION=DENIED
+SOUL_WRITE_FROM_DREAM=ALLOWED_GATED
+PRODUCTION_DREAM_ACCEPTANCE=PASS
+PRODUCTION_DREAM_SOURCE_COUNT=4
+PRODUCTION_DREAM_BATCH_COUNT=1
+PRODUCTION_DREAM_DERIVED_COUNT=2
+PRODUCTION_DREAM_DUPLICATE_COUNT=1
+```
+
+The production `dream_log` entry is additive and records
+`changes.kind=dream`; no raw chat transcript or source-row rewrite occurred.

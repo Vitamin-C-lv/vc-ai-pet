@@ -10,3 +10,18 @@ GitHub is the project source of truth after the first Kali integration.
 6. Future work should be additive: v0.2 local brain, then memory recall/dream, then optional multimodal perception. Do not mix these into v0.1.
 
 Recommended first remote: public repo `vc-ai-pet` under the currently authenticated GitHub account.
+
+## Review and delegation rule
+
+GitHub is the authoritative review source.
+
+Accepted milestone:
+
+```text
+feature branch -> validation -> commit -> push
+```
+
+For medium or large tasks, Root Codex should proactively delegate independent
+workstreams to parallel subagents. Keep file ownership disjoint, have Root
+review and integrate every handoff, and retain scope, architecture, final
+validation, commit, and push decisions at Root.

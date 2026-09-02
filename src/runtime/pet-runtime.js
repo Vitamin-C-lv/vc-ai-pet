@@ -6,6 +6,72 @@ import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { RecentConversation } from '../conversation/recent-conversation.js'
+import { DreamGate } from '../dream/dream-gate.js'
+import { DreamEngine } from '../dream/dream-engine.js'
+import { DreamScheduler } from '../dream/dream-scheduler.js'
+import { ReflectionEngine, ReflectionGate } from '../dream/reflection-engine.js'
+
+const DREAM_MIN_NEW_MEMORIES = 8
+const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
+const REFLECTION_MIN_NEW_MEMORIES = 2
+const REFLECTION_OLDEST_SOURCE_AGE_MS = 60 * 60 * 1000
+
+function dreamEligibility(memory, { now, minNewMemories = DREAM_MIN_NEW_MEMORIES, oldestSourceAgeMs = DREAM_OLDEST_SOURCE_AGE_MS } = {}) {
+  const window = memory.dreamWindow()
+  const after = Number.isFinite(Number(window?.last_dream_time)) ? Number(window.last_dream_time) : 0
+  const sourceRows = memory.dreamSourceRows({ after, before: now })
+  const oldestCreatedAt = sourceRows[0]?.created_at ?? null
+  const oldEnough = oldestCreatedAt !== null && Number(now) - Number(oldestCreatedAt) >= oldestSourceAgeMs
+
+  return {
+    eligible: sourceRows.length >= minNewMemories || oldEnough,
+    sourceCount: sourceRows.length,
+    oldestCreatedAt,
+    checkpoint: after,
+    reason: sourceRows.length === 0
+      ? 'no-new-sources'
+      : sourceRows.length >= minNewMemories
+        ? 'new-source-threshold'
+        : oldEnough
+          ? 'oldest-source-age'
+          : 'eligibility-threshold-not-met',
+  }
+}
+
+function deepDreamEligibility(memory, { now } = {}) {
+  const window = memory.dreamWindow()
+  const after = Number.isFinite(Number(window?.last_dream_time)) ? Number(window.last_dream_time) : 0
+  const sourceRows = memory.dreamSourceRows({ after, before: now })
+  return {
+    eligible: sourceRows.length > 0,
+    sourceCount: sourceRows.length,
+    oldestCreatedAt: sourceRows[0]?.created_at ?? null,
+    checkpoint: after,
+    reason: sourceRows.length > 0 ? 'unprocessed-raw-source' : 'no-unprocessed-raw-sources',
+  }
+}
+
+function reflectionEligibility(memory, { now, minNewMemories = REFLECTION_MIN_NEW_MEMORIES, oldestSourceAgeMs = REFLECTION_OLDEST_SOURCE_AGE_MS } = {}) {
+  const window = memory.reflectionWindow()
+  const after = Number.isFinite(Number(window?.last_dream_time)) ? Number(window.last_dream_time) : 0
+  const sourceRows = memory.reflectionSourceRows({ after, before: now })
+  const oldestCreatedAt = sourceRows[0]?.created_at ?? null
+  const oldEnough = oldestCreatedAt !== null && Number(now) - Number(oldestCreatedAt) >= oldestSourceAgeMs
+
+  return {
+    eligible: sourceRows.length >= minNewMemories || oldEnough,
+    sourceCount: sourceRows.length,
+    oldestCreatedAt,
+    checkpoint: after,
+    reason: sourceRows.length === 0
+      ? 'no-unreflected-raw-sources'
+      : sourceRows.length >= minNewMemories
+        ? 'new-raw-source-threshold'
+        : oldEnough
+          ? 'oldest-unreflected-age'
+          : 'reflection-threshold-not-met',
+  }
+}
 
 export class PetRuntime {
   constructor({ sandboxRoot }) {
@@ -16,6 +82,10 @@ export class PetRuntime {
     this.state = null
     this.identity = null
     this.conversation = new RecentConversation({ maxTurns: 12 })
+    this.dreamEngine = null
+    this.reflectionEngine = null
+    this.dreamScheduler = null
+    this.chatInFlight = 0
   }
 
   async initialize() {
@@ -27,8 +97,29 @@ export class PetRuntime {
     this.memory = new PetMemory(this.sandbox.root)
     this.memory.seedIfFresh(this.state.bornAt)
     this.memory.migrateIdentity(this.identity)
+    this.memory.ensureDreamTracking()
+    this.memory.ensureReflectionTracking()
     this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox })
     this.memoryGate = new MemoryGate({ memory: this.memory })
+    this.dreamEngine = new DreamEngine({
+      memory: this.memory,
+      brain: this.brain,
+      gate: new DreamGate({ memory: this.memory }),
+    })
+    this.reflectionEngine = new ReflectionEngine({
+      memory: this.memory,
+      brain: this.brain,
+      gate: new ReflectionGate({ memory: this.memory }),
+    })
+    this.dreamScheduler = new DreamScheduler({
+      memory: this.memory,
+      brain: this.brain,
+      engine: this.dreamEngine,
+      reflectionEngine: this.reflectionEngine,
+      eligibility: (options) => dreamEligibility(this.memory, options),
+      deepDreamEligibility: (options) => deepDreamEligibility(this.memory, options),
+      reflectionEligibility: (options) => reflectionEligibility(this.memory, options),
+    })
     await this.persist()
     return this.snapshot()
   }
@@ -44,6 +135,30 @@ export class PetRuntime {
   async tick(now = Date.now()) {
     this.state = advanceState(this.state, now)
     await this.persist()
+    const schedulerState = {
+      state: this.snapshot(),
+      chatInFlight: this.chatInFlight > 0,
+      dreamInFlight: this.dreamEngine?.isInFlight?.() ?? false,
+      reflectionInFlight: this.reflectionEngine?.isInFlight?.() ?? false,
+      now,
+    }
+
+    let deepResult = null
+    if (typeof this.dreamScheduler?.maybeRunDeepDream === 'function') {
+      deepResult = await this.dreamScheduler.maybeRunDeepDream(schedulerState)
+    } else {
+      // Preserve the v0.3-B single-Dream contract for a partially upgraded
+      // scheduler; the bundled scheduler exposes the Deep Dream method.
+      deepResult = await this.dreamScheduler?.maybeRun(schedulerState)
+    }
+
+    const deepStarted = deepResult?.schedulerStatus === 'started'
+      || deepResult?.status === 'deferred-owner-busy'
+      || ['chat-in-flight', 'dream-in-flight', 'reflection-in-flight'].includes(deepResult?.reason)
+
+    if (!deepStarted && typeof this.dreamScheduler?.maybeRunReflection === 'function') {
+      await this.dreamScheduler.maybeRunReflection(schedulerState)
+    }
     return this.snapshot()
   }
 
@@ -55,27 +170,57 @@ export class PetRuntime {
   }
 
   async chat(userText) {
-    const result = await this.brain.reply({
-      identity: this.identitySnapshot(),
-      state: this.snapshot(),
-      userText,
-      recentMessages: this.conversation.messages(),
-    })
+    this.chatInFlight += 1
 
-    if (!result?.ok) return result
+    try {
+      const result = await this.brain.reply({
+        identity: this.identitySnapshot(),
+        state: this.snapshot(),
+        userText,
+        recentMessages: this.conversation.messages(),
+      })
 
-    const gate = this.memoryGate.consider(userText, result.rawMemoryCandidate ?? result.memoryCandidate)
+      if (!result?.ok) return result
 
-    this.conversation.append(userText, result.text)
+      const gate = this.memoryGate.consider(userText, result.rawMemoryCandidate ?? result.memoryCandidate)
 
-    // Never expose the candidate/evidence or internal gate details to the
-    // browser. UI receives the same public reply shape as v0.2-C.
-    return {
-      ok: true,
-      unavailable: false,
-      text: result.text,
-      memoryWrite: gate.status,
+      this.conversation.append(userText, result.text)
+
+      // Never expose the candidate/evidence or internal gate details to the
+      // browser. UI receives the same public reply shape as v0.2-C.
+      return {
+        ok: true,
+        unavailable: false,
+        text: result.text,
+        memoryWrite: gate.status,
+      }
+    } finally {
+      this.chatInFlight -= 1
     }
+  }
+
+  runDreamNow() {
+    const options = {
+      state: this.snapshot(),
+      chatInFlight: this.chatInFlight > 0,
+      reflectionInFlight: this.reflectionEngine?.isInFlight?.() ?? false,
+      dreamInFlight: this.dreamEngine?.isInFlight?.() ?? false,
+    }
+    return typeof this.dreamScheduler.runDeepDreamNow === 'function'
+      ? this.dreamScheduler.runDeepDreamNow(options)
+      : this.dreamScheduler.runNow(options)
+  }
+
+  runReflectionNow() {
+    if (typeof this.dreamScheduler?.runReflectionNow !== 'function') {
+      return Promise.resolve({ status: 'skipped', reason: 'reflection-scheduler-unavailable' })
+    }
+    return this.dreamScheduler.runReflectionNow({
+      state: this.snapshot(),
+      chatInFlight: this.chatInFlight > 0,
+      dreamInFlight: this.dreamEngine?.isInFlight?.() ?? false,
+      reflectionInFlight: this.reflectionEngine?.isInFlight?.() ?? false,
+    })
   }
 
   recall(query, k = 5) {

@@ -46,18 +46,32 @@ export class LocalBrain {
     }
 
     const related = this.memory?.recall?.(userText, 5) ?? []
-    const stable = this.memory?.stableIdentityContext?.() ?? []
-    const dedup = new Map()
-
-    for (const item of [...stable, ...related]) {
-      const key = `${item.level}:${item.content}`
-      if (!dedup.has(key)) dedup.set(key, item)
-    }
+    const stableRules = (this.memory?.stableRulesContext?.()
+      ?? this.memory?.stableIdentityContext?.()
+      ?? []).filter((item) => item?.level === 'rules')
+    const currentSelf = this.memory?.currentSelfContext?.(3) ?? []
+    const seen = new Set()
+    const unique = (items) => (Array.isArray(items) ? items : []).filter((item) => {
+      const key = `${item?.level ?? ''}:${item?.content ?? ''}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    const rules = unique(stableRules)
+    const self = unique(currentSelf)
+      .filter((item) => item?.level === 'soul')
+      .slice(0, 3)
+    let relatedSoulCount = 0
+    const relevant = unique(related).filter((item) =>
+      item?.level !== 'soul' || relatedSoulCount++ < Math.max(0, 3 - self.length),
+    )
 
     const messages = buildPetMessages({
       identity,
       state,
-      memories: [...dedup.values()].slice(0, 8),
+      stableRules: rules,
+      currentSelfContext: self,
+      memories: relevant.slice(0, 8),
       recentMessages,
       userText,
     })
@@ -110,6 +124,79 @@ export class LocalBrain {
           reason: 'local-brain-unavailable',
           petLine: busyPetLine('local-brain-unavailable'),
           sample: null,
+        }
+      }
+      throw error
+    }
+  }
+
+  async dreamCompletion({ messages, responseFormat }) {
+    try {
+      const { payload, requestId } = await this.client.chat({
+        messages,
+        reasoningEffort: 'medium',
+        temperature: 0.35,
+        topP: 0.85,
+        maxTokens: 1600,
+        omitMaxTokens: true,
+        responseFormat,
+      })
+
+      const rawText = payload?.choices?.[0]?.message?.content
+      if (typeof rawText !== 'string' || rawText.length === 0) {
+        throw new LocalBrainApiError('Local Brain Dream response did not contain assistant text', {
+          code: 'PET_LOCAL_BRAIN_BAD_DREAM_RESPONSE',
+          retryable: false,
+          requestId,
+        })
+      }
+
+      return {
+        ok: true,
+        rawText,
+        requestId,
+      }
+    } catch (error) {
+      if (error instanceof LocalBrainApiError && error.retryable) {
+        return {
+          ok: false,
+          unavailable: true,
+          reason: 'local-brain-unavailable',
+          requestId: error.requestId,
+        }
+      }
+      throw error
+    }
+  }
+
+  async reflectionCompletion({ messages, responseFormat }) {
+    try {
+      const { payload, requestId } = await this.client.chat({
+        messages,
+        reasoningEffort: 'low',
+        temperature: 0.45,
+        topP: 0.85,
+        maxTokens: 500,
+        responseFormat,
+      })
+
+      const rawText = payload?.choices?.[0]?.message?.content
+      if (typeof rawText !== 'string' || rawText.length === 0) {
+        throw new LocalBrainApiError('Local Brain Reflection response did not contain assistant text', {
+          code: 'PET_LOCAL_BRAIN_BAD_REFLECTION_RESPONSE',
+          retryable: false,
+          requestId,
+        })
+      }
+
+      return { ok: true, rawText, requestId }
+    } catch (error) {
+      if (error instanceof LocalBrainApiError && error.retryable) {
+        return {
+          ok: false,
+          unavailable: true,
+          reason: 'local-brain-unavailable',
+          requestId: error.requestId,
         }
       }
       throw error

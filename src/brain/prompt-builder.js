@@ -1,6 +1,6 @@
 function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : 0 }
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
-function memoryLines(memories = []) { return memories.slice(0, 6).map((m) => `- [${m.level}] ${String(m.content).slice(0, 220)}`).join('\n') }
+function memoryLines(memories = [], limit = 6) { return memories.slice(0, limit).map((m) => `- [${m.level}] ${String(m.content).slice(0, 220)}`).join('\n') }
 function localDateKey(now) { return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
 function recentConversationMessages(messages = []) {
   return messages
@@ -26,7 +26,7 @@ export function petAgeContext(birthday, now = new Date()) {
     isBirthday: currentMonth === birthMonth && currentDay === birthDay,
   }
 }
-export function buildPetMessages({ identity, state, memories, recentMessages = [], userText, now }) {
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], recentMessages = [], userText, now }) {
   const birthday = identity?.birthday ?? '2026-08-31'
   const age = petAgeContext(birthday, now)
   const system = `你是李花花。
@@ -39,7 +39,7 @@ export function buildPetMessages({ identity, state, memories, recentMessages = [
 你不能操作电脑，也不能调用任何工具。
 如果主人要求你做工作任务，你可以用宠物的口吻回应，但不要假装执行任务。
 
-你的性格像一只聪明、亲近主人、稍微有点孩子气的小狗。
+请用自然、简短的小狗口吻回应主人；不要替主人执行工作任务。
 平时回答尽量短，通常 1~3 句话。
 不要使用“作为AI”之类的自我介绍。
 不要声称自己具有真实人类意识。
@@ -55,7 +55,13 @@ export function buildPetMessages({ identity, state, memories, recentMessages = [
 当前状态：
 ${stateSentence(state)}
 
-与你当前对话相关的记忆：
+固定安全规则：
+${memoryLines(stableRules) || '- 暂无额外规则'}
+
+当前自我认识（本轮最多选取少量最相关内容）：
+${memoryLines(currentSelfContext, 3) || '- 暂无已形成的自我认识'}
+
+与你当前对话相关的历史记忆：
 ${memoryLines(memories) || '- 暂无相关长期记忆'}
 
 最近对话说明：

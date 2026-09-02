@@ -52,6 +52,27 @@ function jsonResponse(status, payload, extraHeaders = {}) {
 }
 
 {
+  let requestBody
+  const client = new LocalBrainClient({
+    fetchImpl: async (_url, init) => {
+      requestBody = JSON.parse(init.body)
+      return jsonResponse(200, {
+        choices: [{ message: { role: 'assistant', content: '{}' } }],
+      })
+    },
+  })
+
+  await client.chat({
+    messages: [{ role: 'user', content: 'dynamic output' }],
+    reasoningEffort: 'medium',
+    maxTokens: 1600,
+    omitMaxTokens: true,
+  })
+
+  assert.equal(Object.hasOwn(requestBody, 'max_tokens'), false)
+}
+
+{
   const client = new LocalBrainClient({
     fetchImpl: async () => jsonResponse(
       503,
