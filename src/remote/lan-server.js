@@ -1,0 +1,149 @@
+import { createServer } from 'node:http'
+import { readFile } from 'node:fs/promises'
+import { networkInterfaces } from 'node:os'
+import { basename, extname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
+const DEFAULT_PORT = 17870
+const CONTENT_TYPES = Object.freeze({
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.png': 'image/png',
+})
+
+export function isPrivateIPv4(address) {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(address ?? ''))
+  if (!match) return false
+  const octets = match.slice(1).map(Number)
+  if (octets.some((octet) => octet > 255)) return false
+  return octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168)
+}
+
+export function isAllowedLanAddress(address) {
+  const value = String(address ?? '').replace(/^::ffff:/i, '')
+  return value === '127.0.0.1' || value === '::1' || isPrivateIPv4(value)
+}
+
+export function localLanAddress(interfaces = networkInterfaces()) {
+  for (const values of Object.values(interfaces)) {
+    for (const entry of values ?? []) {
+      if (entry?.family === 'IPv4' && !entry.internal && isPrivateIPv4(entry.address)) return entry.address
+    }
+  }
+  return 'localhost'
+}
+
+export function actionToInteractionKind(action, state = {}) {
+  if (action === 'click') return state.current === 'sleep' ? 'wake' : 'pet'
+  if (action === 'double_click') return 'play'
+  if (action === 'long_press') return 'long-press'
+  return null
+}
+
+export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {} }) {
+  const assets = resolve(assetRoot)
+
+  return async (req, res) => {
+    if (!isAllowedLanAddress(req.socket?.remoteAddress)) return sendJson(res, 403, { error: 'lan-only' })
+    const url = new URL(req.url ?? '/', 'http://lan.local')
+
+    try {
+      if (req.method === 'GET' && url.pathname === '/api/pet/state') {
+        const presentation = runtime.presentationSnapshot(visualConfig)
+        return sendJson(res, 200, presentation)
+      }
+      if (req.method === 'POST' && url.pathname === '/api/pet/action') {
+        const body = await readJsonBody(req)
+        const kind = actionToInteractionKind(body?.action, runtime.snapshot())
+        if (!kind) return sendJson(res, 400, { error: 'invalid-action' })
+        const state = await runtime.interact(kind)
+        return sendJson(res, 200, { ok: true, state, ...runtime.presentationSnapshot(visualConfig) })
+      }
+      if (req.method === 'POST' && url.pathname === '/api/pet/chat') {
+        const body = await readJsonBody(req)
+        const message = typeof body?.message === 'string' ? body.message.trim() : ''
+        if (message.length < 1 || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
+        return sendJson(res, 200, await runtime.chat(message))
+      }
+      if (req.method === 'GET') return await serveStatic(url.pathname, assets, res)
+      return sendJson(res, 404, { error: 'not-found' })
+    } catch (error) {
+      if (error?.code === 'invalid-json' || error?.code === 'body-too-large') return sendJson(res, 400, { error: error.code })
+      return sendJson(res, 500, { error: 'remote-ui-error' })
+    }
+  }
+}
+
+export async function startLanServer({ runtime, assetRoot, visualConfig = {}, port = DEFAULT_PORT, host = '0.0.0.0', logger = console } = {}) {
+  if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
+  if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
+  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig }))
+  await new Promise((resolveStart, rejectStart) => {
+    server.once('error', rejectStart)
+    server.listen(port, host, () => {
+      server.off('error', rejectStart)
+      resolveStart()
+    })
+  })
+  const address = server.address()
+  const activePort = typeof address === 'object' && address ? address.port : port
+  const url = `http://${localLanAddress()}:${activePort}`
+  logger?.info?.('VC_AI_PET_LAN_UI')
+  logger?.info?.('LOCAL_ONLY=true')
+  logger?.info?.(`URL=${url}`)
+  return Object.assign(server, { lanUrl: url, localOnly: true })
+}
+
+async function serveStatic(pathname, assetRoot, res) {
+  const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
+  if (relative.includes('..')) return sendJson(res, 404, { error: 'not-found' })
+  const rootFile = join(REMOTE_ROOT, relative)
+  const assetFile = join(assetRoot, basename(relative))
+  const file = relative.startsWith('assets/') ? assetFile : rootFile
+  const extension = extname(file)
+  if (!CONTENT_TYPES[extension]) return sendJson(res, 404, { error: 'not-found' })
+  try {
+    const bytes = await readFile(file)
+    res.writeHead(200, {
+      'content-type': CONTENT_TYPES[extension],
+      'cache-control': extension === '.png' ? 'public, max-age=3600' : 'no-cache',
+      'x-content-type-options': 'nosniff',
+    })
+    res.end(bytes)
+  } catch {
+    sendJson(res, 404, { error: 'not-found' })
+  }
+}
+
+function readJsonBody(req) {
+  return new Promise((resolveBody, rejectBody) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 16_384) {
+        const error = new Error('body too large')
+        error.code = 'body-too-large'
+        rejectBody(error)
+        req.destroy()
+      }
+    })
+    req.on('end', () => {
+      try { resolveBody(JSON.parse(body || '{}')) } catch {
+        const error = new Error('invalid json')
+        error.code = 'invalid-json'
+        rejectBody(error)
+      }
+    })
+    req.on('error', rejectBody)
+  })
+}
+
+function sendJson(res, status, value) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+  res.end(JSON.stringify(value))
+}

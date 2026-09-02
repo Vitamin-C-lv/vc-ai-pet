@@ -25,3 +25,6 @@
           idleActionDurationMs: 1800
           zzzEnabled: true
           ambientMoveEnabled: true
+        lanUi:
+          enabled: true
+          port: 17870

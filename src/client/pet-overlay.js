@@ -47,6 +47,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     const [chatPending, setChatPending] = React.useState(false)
     const [chatMessages, setChatMessages] = React.useState([])
     const [hostPresence, setHostPresence] = React.useState(emptyPresence)
+    const [hostVisualState, setHostVisualState] = React.useState(null)
     const [visualConfig, setVisualConfig] = React.useState(() => normalizePetVisualConfig(DEFAULT_PET_VISUAL_CONFIG))
     const [feedback, setFeedback] = React.useState(null)
     const [emotion, setEmotion] = React.useState(() => createEmotionState({ attachment: state.attachment }))
@@ -79,7 +80,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       ...baseEnvironment,
       recentInteraction: baseEnvironment.recentInteraction || emotionRecentInteraction,
     }
-    const visual = resolvePetVisualState({
+    const calculatedVisual = resolvePetVisualState({
       petState: state,
       environment,
       feedback,
@@ -87,6 +88,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       config: visualConfig,
       now,
     })
+    const visual = hostVisualState ?? calculatedVisual
     const idleActionVisible = idleAction
       && idleAction.until > now
       && ['idle', 'waiting', 'curious', 'confused', 'relaxed'].includes(visual)
@@ -134,6 +136,14 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
             dreamRunning: presence.dreamRunning === true,
           }
           setHostPresence((current) => samePresence(current, nextPresence) ? current : nextPresence)
+          setHostVisualState([
+            'idle', 'thinking', 'happy', 'excited', 'relaxed', 'waiting', 'curious', 'confused', 'sleep', 'dreaming', 'walk',
+          ].includes(presence.visualState) ? presence.visualState : null)
+          if (presence.emotion && typeof presence.emotion === 'object') {
+            const nextEmotion = createEmotionState({ ...emotionRef.current, ...presence.emotion })
+            emotionRef.current = nextEmotion
+            setEmotion(nextEmotion)
+          }
           if (emotionRef.current.dreaming !== nextPresence.dreamRunning) {
             const nextEmotion = setDreaming(emotionRef.current, nextPresence.dreamRunning)
             emotionRef.current = nextEmotion
@@ -152,10 +162,12 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
 
       void refreshState()
       void refreshPresence()
+      const stateTimer = globalThis.setInterval?.(() => { void refreshState() }, PRESENCE_POLL_MS)
       const presenceTimer = globalThis.setInterval?.(() => { void refreshPresence() }, PRESENCE_POLL_MS)
 
       return () => {
         alive = false
+        if (stateTimer !== undefined) globalThis.clearInterval?.(stateTimer)
         if (presenceTimer !== undefined) globalThis.clearInterval?.(presenceTimer)
       }
     }, [bridge])
@@ -259,7 +271,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       stateRef.current = next
       setState(next)
       save(next)
-      const emotionKind = kind === 'play' ? 'play' : 'pet'
+      const emotionKind = kind === 'play' || kind === 'long-press' ? kind : 'pet'
       const nextEmotion = updateEmotion(emotionKind)
       showFeedback(visualFeedbackForInteraction(
         nextEmotion,
@@ -294,6 +306,14 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
         Date.now(),
         visualConfig.interactionBurstWindowMs,
       ))
+      // Use the established host interaction entry without turning a held
+      // pointer into a synthetic local persistent state update.
+      bridge?.interact?.('long-press')?.then?.((remote) => {
+        if (!remote) return
+        stateRef.current = remote
+        setState(remote)
+        save(remote)
+      })?.catch?.(() => {})
     }
 
     function scheduleSingleClick() {

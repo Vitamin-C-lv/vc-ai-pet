@@ -182,12 +182,12 @@ function chatToggle(tree) {
   harness.runTimers(700)
   await flushAsyncWork()
   tree = harness.render()
-  assert.deepEqual(calls, [])
+  assert.deepEqual(calls, ['long-press'])
   assert.equal(tree.props['data-pet-visual-state'], 'relaxed')
   hitbox.props.onPointerUp({})
   harness.runTimers(220)
   await flushAsyncWork()
-  assert.deepEqual(calls, [])
+  assert.deepEqual(calls, ['long-press'])
 }
 
 {

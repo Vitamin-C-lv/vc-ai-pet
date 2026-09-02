@@ -10,6 +10,10 @@ import { DreamGate } from '../dream/dream-gate.js'
 import { DreamEngine } from '../dream/dream-engine.js'
 import { DreamScheduler } from '../dream/dream-scheduler.js'
 import { ReflectionEngine, ReflectionGate } from '../dream/reflection-engine.js'
+import { advanceEmotion, applyInteractionEmotion, createEmotionState, syncAttachment, visualFeedbackForInteraction } from '../client/emotion-state.js'
+import { createPetEnvironment } from '../client/pet-environment.js'
+import { normalizePetVisualConfig, resolvePetVisualState } from '../client/pet-visual-state.js'
+import { spriteForAnimation } from '../client/pet-animation.js'
 
 const DREAM_MIN_NEW_MEMORIES = 8
 const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
@@ -86,6 +90,10 @@ export class PetRuntime {
     this.reflectionEngine = null
     this.dreamScheduler = null
     this.chatInFlight = 0
+    // Presentation telemetry is shared by every UI, kept only in host RAM,
+    // and deliberately remains outside state.json and pet-memory.db.
+    this.emotion = createEmotionState()
+    this.lastInteractionFeedback = null
   }
 
   async initialize() {
@@ -94,6 +102,7 @@ export class PetRuntime {
     this.state = await this.sandbox.readJson('world', 'state.json', null)
     if (!this.state) this.state = createInitialState()
     this.identity = await ensurePetIdentity(this.sandbox, this.state)
+    this.emotion = syncAttachment(this.emotion, this.state.attachment)
     this.memory = new PetMemory(this.sandbox.root)
     this.memory.seedIfFresh(this.state.bornAt)
     this.memory.migrateIdentity(this.identity)
@@ -136,12 +145,51 @@ export class PetRuntime {
     }
   }
 
+  /**
+   * Public, read-only presentation data for the desktop and LAN companion.
+   * This is the one source of emotion/visual truth; it never informs Brain,
+   * Memory, Dream, or persistent pet state.
+   */
+  presentationSnapshot(config = {}, now = Date.now()) {
+    const visualConfig = normalizePetVisualConfig(config)
+    const emotion = advanceEmotion(this.emotion, now, {
+      windowMs: visualConfig.interactionBurstWindowMs,
+    })
+    const presence = this.presenceSnapshot()
+    const feedback = this.feedbackAt(now, visualConfig)
+    const visualState = resolvePetVisualState({
+      petState: this.state,
+      environment: createPetEnvironment({
+        petState: this.state,
+        chatPending: presence.chatPending,
+        dreamRunning: presence.dreamRunning,
+        config: visualConfig,
+        now,
+      }),
+      feedback,
+      emotion,
+      config: visualConfig,
+      now,
+    })
+
+    return {
+      visualState,
+      emotion: {
+        happiness: emotion.happiness,
+        energy: emotion.energy,
+      },
+      dream: presence.dreamRunning,
+      sprite: spriteForAnimation(visualState, Math.floor(now / 420)),
+    }
+  }
+
   identitySnapshot() {
     return JSON.parse(JSON.stringify(this.identity))
   }
 
   async tick(now = Date.now()) {
     this.state = advanceState(this.state, now)
+    this.emotion = advanceEmotion(this.emotion, now)
     await this.persist()
     const schedulerState = {
       state: this.snapshot(),
@@ -170,10 +218,32 @@ export class PetRuntime {
   }
 
   async interact(kind = 'pet', now = Date.now()) {
-    this.state = interact(this.state, kind, now)
-    this.memory.rememberInteraction(kind, this.state.lifetimeInteractions)
+    // Long press is a first-class shared presentation action, while the
+    // established state-machine interaction remains the existing "pet" path.
+    const persistentKind = kind === 'long-press' ? 'pet' : kind
+    this.state = interact(this.state, persistentKind, now)
+    this.emotion = applyInteractionEmotion(this.emotion, kind, { now })
+    this.emotion = syncAttachment(this.emotion, this.state.attachment, now)
+    this.lastInteractionFeedback = {
+      kind: visualFeedbackForInteraction(this.emotion, kind, now),
+      at: now,
+    }
+    this.memory.rememberInteraction(persistentKind, this.state.lifetimeInteractions)
     await this.persist()
     return this.snapshot()
+  }
+
+  feedbackAt(now, config) {
+    const feedback = this.lastInteractionFeedback
+    if (!feedback || !Number.isFinite(Number(feedback.at))) return null
+    const duration = feedback.kind === 'excited'
+      ? config.excitedDurationMs
+      : feedback.kind === 'relaxed'
+        ? config.relaxedDurationMs
+        : feedback.kind === 'confused' || feedback.kind === 'curious'
+          ? config.confusedDurationMs
+          : config.happyDurationMs
+    return { kind: feedback.kind, until: Number(feedback.at) + duration }
   }
 
   async chat(userText) {

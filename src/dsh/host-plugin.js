@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { PetRuntime } from '../runtime/pet-runtime.js';
 import { normalizePetVisualConfig } from '../client/pet-visual-state.js';
+import { startLanServer } from '../remote/lan-server.js';
 
 export const name = 'vc-ai-pet';
 export const inject = ['connection'];
@@ -27,6 +28,12 @@ export function apply(ctx, rawConfig = {}) {
   const visualConfig = normalizePetVisualConfig(rawConfig?.petVisual);
   const runtime = new PetRuntime({ sandboxRoot });
   const ready = runtime.initialize();
+  const lanEnabled = rawConfig.lanUi?.enabled !== false;
+  const lanPort = Number.isInteger(rawConfig.lanUi?.port) ? rawConfig.lanUi.port : 17870;
+  const lanServer = lanEnabled
+    ? ready.then(() => startLanServer({ runtime, assetRoot, visualConfig, port: lanPort, logger: ctx.logger }))
+    : Promise.resolve(null);
+  lanServer.catch((error) => ctx.logger.warn(`vc-ai-pet: LAN UI failed to start: ${error.message}`));
   const tick = setInterval(() => {
     void ready.then(() => runtime.tick()).catch((error) => ctx.logger.warn(`vc-ai-pet: tick failed: ${error.message}`));
   }, tickMs);
@@ -43,6 +50,7 @@ export function apply(ctx, rawConfig = {}) {
   registerAssetRoute(ctx, assetRoot);
   ctx.effect(() => () => {
     clearInterval(tick);
+    void lanServer.then((server) => server?.close());
     runtime.close();
   }, 'vc-ai-pet: runtime cleanup');
   ctx.logger.info(`vc-ai-pet: active (sandbox=${sandboxRoot}, model=on-demand)`);
@@ -54,9 +62,9 @@ async function invoke(runtime, ready, method, payload, logger, visualConfig) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return failure('invalid request');
   if (method === 'readState' && Object.keys(args).length === 0) return success(runtime.snapshot());
   if (method === 'readPresence' && Object.keys(args).length === 0) {
-    return success({ ...runtime.presenceSnapshot(), visualConfig });
+    return success({ ...runtime.presenceSnapshot(), ...runtime.presentationSnapshot(visualConfig), visualConfig });
   }
-  if (method === 'interact' && Object.keys(args).length === 1 && typeof args.kind === 'string' && ['pet', 'play', 'wake'].includes(args.kind)) {
+  if (method === 'interact' && Object.keys(args).length === 1 && typeof args.kind === 'string' && ['pet', 'play', 'wake', 'long-press'].includes(args.kind)) {
     return success(await runtime.interact(args.kind));
   }
   if (method === 'chat' && Object.keys(args).length === 1 && typeof args.userText === 'string') {

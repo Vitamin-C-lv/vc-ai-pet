@@ -4,7 +4,7 @@
   "description": "李花花 — an isolated local pixel Bernese Mountain Dog pet for DeepSeek Harness.",
   "type": "module",
   "scripts": {
-    "smoke": "node test/smoke.mjs && node test/v0.3-ui-presence.mjs && node test/v0.3-emotion-layer.mjs && node test/v0.3-ui-overlay-interactions.mjs && npm run verify:client",
+    "smoke": "node test/smoke.mjs && node test/v0.3-ui-presence.mjs && node test/v0.3-emotion-layer.mjs && node test/v0.3-ui-overlay-interactions.mjs && node test/v0.3-lan-ui.mjs && npm run verify:client",
     "smoke:v0.2-core": "node test/v0.2-core.mjs",
     "smoke:v0.3-recent": "node test/v0.3-recent-conversation.mjs",
     "smoke:v0.3-dream": "node test/v0.3-dream.mjs",
@@ -13,6 +13,7 @@
     "smoke:v0.3-emotion": "node test/v0.3-emotion-layer.mjs",
     "smoke:v0.3-emotion-layer": "node test/v0.3-emotion-layer.mjs",
     "smoke:v0.3-ui-overlay": "node test/v0.3-ui-overlay-interactions.mjs",
+    "smoke:v0.3-lan-ui": "node test/v0.3-lan-ui.mjs",
     "verify:client": "npm run build && node --check lib/client.js && node scripts/verify-client-bundle.mjs",
     "dream:once": "node scripts/run-pet-dream.mjs",
     "validate:assets": "node scripts/validate-assets.mjs",

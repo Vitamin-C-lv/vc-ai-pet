@@ -18,11 +18,21 @@ Local Brain API. No browser-side environmental label reaches the brain.
 
 ## v0.3-E Phase 2 emotion seam
 
-`src/client/emotion-state.js` is a browser-only, momentary telemetry layer.
-Its values are held by the overlay and are never passed to host RPCs, Local
-Brain prompts, Dream/Reflection scheduling, `state.json`, localStorage, or
-`pet-memory.db`. Owner pointer interactions update bounded deltas; elapsed
-time applies only a small decay; Dream presence toggles a presentation flag;
-and the existing attachment is read as a refresh hint. The visual resolver
-remains the single authority for `dreaming > thinking > excited > happy >
-relaxed > waiting > confused > curious > sleep > walk > idle`.
+`src/client/emotion-state.js` provides the bounded, RAM-only emotion math.
+For the Phase 3-A companion page, PetRuntime holds its live values once and
+returns a narrow public presentation snapshot to both UIs. It is never written
+to `state.json`, localStorage, `pet-memory.db`, Local Brain prompts, or
+Dream/Reflection scheduling. The visual resolver remains the single authority
+for `dreaming > thinking > excited > happy > relaxed > waiting > confused >
+curious > sleep > walk > idle`.
+
+## v0.3-E Phase 3-A LAN companion seam
+
+`src/remote/lan-server.js` is a Node HTTP server owned by the existing DSH
+host plugin. It binds `0.0.0.0:17870` so a phone on the same Wi-Fi can reach
+it, but admits only localhost and RFC1918 IPv4 peers (`10/8`, `172.16/12`,
+`192.168/16`); all public IPv4 and non-loopback IPv6 peers receive `403`.
+The three endpoints call the existing runtime methods directly: state reads
+`presentationSnapshot`, actions call `runtime.interact`, and chat calls
+`runtime.chat` (therefore the existing Local Brain API v1). No model process,
+Memory schema, Dream behavior, or account/authentication system is added.

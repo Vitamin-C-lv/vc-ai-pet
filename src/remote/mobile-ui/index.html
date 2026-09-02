@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f5eee3">
+    <title>李花花</title>
+    <link rel="stylesheet" href="/mobile.css">
+  </head>
+  <body>
+    <main class="pet-page">
+      <header><span class="paw">🐾</span><h1>李花花</h1><span id="connection" aria-label="同步中">●</span></header>
+      <section class="pet-card" aria-live="polite">
+        <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
+        <p id="state-label">当前状态：idle</p>
+        <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
+      </section>
+      <section class="interaction" aria-label="和花花互动">
+        <button id="pet-button" type="button">摸摸头</button>
+        <button id="play-button" type="button">玩耍</button>
+        <button id="long-button" type="button">长按</button>
+      </section>
+      <section class="chat" aria-label="和李花花聊天">
+        <div id="messages" class="messages"><p class="pet-line">李花花：汪，在呀。</p></div>
+        <form id="chat-form"><input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容"><button type="submit">发送</button></form>
+      </section>
+    </main>
+    <script src="/mobile.js"></script>
+  </body>
+</html>

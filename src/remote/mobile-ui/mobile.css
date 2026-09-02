@@ -1,0 +1,12 @@
+:root { color-scheme: light; font-family: ui-rounded, "PingFang SC", system-ui, sans-serif; color: #4a392e; background: #f5eee3; }
+* { box-sizing: border-box; }
+body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 50% 0, #fffdf8, #f5eee3 58%); }
+.pet-page { width: min(100%, 540px); min-height: 100vh; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom)); }
+header { display: flex; align-items: center; justify-content: center; gap: 9px; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 24px; letter-spacing: .08em; } .paw { font-size: 22px; } #connection { color: #b9b0a7; font-size: 13px; } #connection.online { color: #71a773; }
+.pet-card { text-align: center; padding: 22px 16px 18px; border: 1px solid #eadccd; border-radius: 26px; background: rgba(255,255,255,.66); box-shadow: 0 10px 30px rgba(88,63,41,.08); }
+.sprite-wrap { display: grid; min-height: 230px; place-items: center; } #pet-sprite { width: min(72vw, 270px); image-rendering: pixelated; object-fit: contain; transition: transform .2s ease; } #pet-sprite.active { transform: scale(1.04); }
+#state-label { margin: 4px 0 12px; font-weight: 700; } .emotion { display: flex; justify-content: center; gap: 20px; font-size: 14px; color: #806b5d; } .emotion b { color: #5e4434; }
+.interaction { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; } button { min-height: 45px; border: 0; border-radius: 14px; background: #b77b54; color: white; font: inherit; font-weight: 700; cursor: pointer; } button:active { transform: translateY(1px); background: #9d6240; } button:disabled { opacity: .55; }
+.chat { overflow: hidden; border: 1px solid #eadccd; border-radius: 20px; background: #fffdf9; } .messages { min-height: 105px; max-height: 220px; padding: 12px 14px; overflow-y: auto; } .messages p { margin: 0 0 8px; line-height: 1.45; } .messages .user-line { color: #876046; text-align: right; } .messages .pet-line { color: #4a392e; }
+form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #f0e6db; } input { min-width: 0; flex: 1; border: 1px solid #dfcdbd; border-radius: 12px; padding: 10px 12px; font: inherit; } form button { min-width: 62px; min-height: 40px; }

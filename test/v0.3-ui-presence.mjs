@@ -200,15 +200,18 @@ try {
   applyHostPlugin(hostContext, {
     sandboxRoot: hostSandbox,
     petVisual: { nightStartHour: 21, zzzEnabled: false },
+    lanUi: { enabled: false },
   })
   assert.equal(typeof rpcHandler, 'function')
   const presenceResponse = await rpcHandler('readPresence', { args: {} })
   assert.equal(presenceResponse.ok, true)
-  assert.deepEqual(presenceResponse.value, {
-    chatPending: false,
-    dreamRunning: false,
-    visualConfig: normalizePetVisualConfig({ nightStartHour: 21, zzzEnabled: false }),
-  })
+  assert.equal(presenceResponse.value.chatPending, false)
+  assert.equal(presenceResponse.value.dreamRunning, false)
+  assert.equal(presenceResponse.value.visualState, 'idle')
+  assert.ok(Math.abs(presenceResponse.value.emotion.happiness - .5) < .001)
+  assert.ok(Math.abs(presenceResponse.value.emotion.energy - .7) < .001)
+  assert.equal(presenceResponse.value.dream, false)
+  assert.deepEqual(presenceResponse.value.visualConfig, normalizePetVisualConfig({ nightStartHour: 21, zzzEnabled: false }))
   assert.equal((await rpcHandler('readPresence', { args: { unexpected: true } })).ok, false)
 } finally {
   for (const cleanup of cleanups.reverse()) cleanup?.()

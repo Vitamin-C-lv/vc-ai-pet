@@ -112,8 +112,11 @@ export function resolvePetVisualState({
 
   const feedbackKind = activeFeedbackKind(feedback, now)
   if (feedbackKind === 'excited' || emotion?.burstLevel === 'excited' || current === 'excited') return 'excited'
-  if (feedbackKind === 'happy' || (current === 'happy' && recentInteraction(petState, now, visualConfig.happyDurationMs))) return 'happy'
+  if (feedbackKind === 'happy') return 'happy'
+  // A long press follows the established pet state-machine interaction, which
+  // is "happy". Its shared presentation feedback must still visibly win.
   if (feedbackKind === 'relaxed' || current === 'relaxed' || current === 'rest') return 'relaxed'
+  if (current === 'happy' && recentInteraction(petState, now, visualConfig.happyDurationMs)) return 'happy'
 
   // Waiting is intentionally quiet: it is only visible when the chat bubble
   // is closed and the owner interacted recently. It never emits text.

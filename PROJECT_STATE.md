@@ -243,3 +243,34 @@ Long press is a relaxed visual-only interaction and does not create an extra
 host persistence event. Waiting is silent and appears only when chat is closed
 after a recent interaction. Idle actions are weighted and scheduled by one
 low-frequency timeout in the browser.
+
+## v0.3-E Phase 3-A LAN Companion UI
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE3A_PASS
+LAN_SERVER=PASS
+MOBILE_UI=PASS
+STATE_SYNC=PASS
+CHAT_SYNC=PASS
+CLICK_SYNC=PASS
+DOUBLE_CLICK_SYNC=PASS
+LONG_PRESS_SYNC=PASS
+EMOTION_SYNC=PASS
+DREAM_SYNC=PASS
+LOCAL_ONLY=PASS
+PUBLIC_NETWORK_BIND=NO
+CHAT_BUBBLE_REGRESSION=PASS
+CLICK_REGRESSION=PASS
+DOUBLE_CLICK_REGRESSION=PASS
+DRAG_REGRESSION=PASS
+EMOTION_RUNTIME_REGRESSION=PASS
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+MEMORY_SCHEMA_CHANGED=NO
+LOCAL_BRAIN_API_CHANGED=NO
+```
+
+The host-owned LAN listener uses `0.0.0.0:17870` only to accept devices on the
+local network. It rejects every client except localhost and private IPv4
+(`10/8`, `172.16/12`, `192.168/16`). The mobile page polls every 1.5 seconds;
+it calls the same runtime interaction and chat methods as the desktop overlay.
