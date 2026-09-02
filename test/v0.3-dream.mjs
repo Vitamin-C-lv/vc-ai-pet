@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { LocalBrain } from '../src/brain/local-brain.js'
+import { LocalBrain, LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS } from '../src/brain/local-brain.js'
+import { validateLocalBrainConfig } from '../src/brain/local-brain-config.js'
 import { MemoryGate } from '../src/memory/memory-gate.js'
 import {
   PET_DREAM_SOURCE_SESSION,
@@ -36,11 +37,9 @@ import {
   validateReflectionCandidate,
 } from '../src/dream/reflection-engine.js'
 import {
-  AVAILABILITY_PROBE_MIN_INTERVAL_MS,
   DREAM_MIN_NEW_MEMORIES,
   DREAM_OLDEST_SOURCE_AGE_MS,
-  DREAM_OWNER_BUSY_COOLDOWN_MS,
-  DEEP_DREAM_DAYTIME_AVAILABILITY_MS,
+  DEEP_DREAM_DAYTIME_SLEEP_MS,
   DEEP_DREAM_MIN_SLEEP_MS,
   DEEP_DREAM_SUCCESS_COOLDOWN_MS,
   REFLECTION_MIN_INTERVAL_MS,
@@ -55,9 +54,7 @@ const DAY = 24 * HOUR
 const SOURCE_SESSION = 'vc-ai-pet'
 const CHAT_ONLY_SENTINEL = 'CHAT_ONLY_SENTINEL_NOT_FOR_DREAM'
 const MICRO_SLEEP_MIN_MS = 15 * 60 * 1000
-const MICRO_GPU_MIN_MS = 45 * 60 * 1000
 const MICRO_COOLDOWN_MS = 30 * 60 * 1000
-const OWNER_BUSY_COOLDOWN_MS = 15 * 60 * 1000
 const NIGHT_NOW = Date.parse('2033-05-18T23:00:00+08:00')
 const DAY_NOW = Date.parse('2033-05-18T12:00:00+08:00')
 const LEVELS = ['soul', 'user', 'project', 'fact', 'lesson', 'topic', 'rules']
@@ -238,17 +235,8 @@ async function withSchedulerFixture({ count, ageMs, checkpoint = NOW - 100 * HOU
     memory.finishDream(checkpoint)
 
     let now = NOW
-    let availability = { available: true, reason: 'available' }
-    let availabilityCalls = 0
     let eligibilityCalls = 0
     const runCalls = []
-
-    const brain = {
-      checkAvailability: async () => {
-        availabilityCalls += 1
-        return availability
-      },
-    }
 
     const eligibility = (options) => {
       eligibilityCalls += 1
@@ -261,11 +249,16 @@ async function withSchedulerFixture({ count, ageMs, checkpoint = NOW - 100 * HOU
         return { status: 'completed', sourceCount: count }
       },
     }
+    const forbiddenBrainProbe = {
+      checkAvailability: async () => {
+        throw new Error('scheduler must not probe Pet-side availability')
+      },
+    }
 
     const scheduler = new DreamScheduler({
       engine,
       memory,
-      brain,
+      brain: forbiddenBrainProbe,
       eligibility,
       now: () => now,
     })
@@ -276,14 +269,10 @@ async function withSchedulerFixture({ count, ageMs, checkpoint = NOW - 100 * HOU
       ids,
       engine,
       scheduler,
-      brain,
       eligibility,
       runCalls,
       get now() { return now },
       set now(value) { now = value },
-      get availability() { return availability },
-      set availability(value) { availability = value },
-      get availabilityCalls() { return availabilityCalls },
       get eligibilityCalls() { return eligibilityCalls },
     })
   })
@@ -652,10 +641,8 @@ function microReflectionCandidate(content, level, sourceIds) {
   }
 }
 
-function microSchedulerFixture({ kind, state, availability = { available: true, reason: 'available' }, initialNow = NOW }) {
+function microSchedulerFixture({ kind, state, initialNow = NOW }) {
   let now = initialNow
-  let currentAvailability = availability
-  let availabilityCalls = 0
   let deepEligibilityCalls = 0
   let reflectionEligibilityCalls = 0
   const runCalls = []
@@ -663,12 +650,6 @@ function microSchedulerFixture({ kind, state, availability = { available: true, 
     run: async (options) => {
       runCalls.push(options)
       return { status: 'completed', workflow: kind }
-    },
-  }
-  const brain = {
-    checkAvailability: async () => {
-      availabilityCalls += 1
-      return currentAvailability
     },
   }
   const deepDreamEligibility = () => {
@@ -682,12 +663,10 @@ function microSchedulerFixture({ kind, state, availability = { available: true, 
   const scheduler = new DreamScheduler({
     engine,
     reflectionEngine: engine,
-    brain,
     deepDreamEligibility,
     reflectionEligibility,
     now: () => now,
     timeZone: 'Asia/Shanghai',
-    availableSince: state.gpuAvailableSince ?? null,
     sleepSince: state.sleepSince ?? null,
   })
 
@@ -698,9 +677,6 @@ function microSchedulerFixture({ kind, state, availability = { available: true, 
     runCalls,
     get now() { return now },
     set now(value) { now = value },
-    get availability() { return currentAvailability },
-    set availability(value) { currentAvailability = value },
-    get availabilityCalls() { return availabilityCalls },
     get eligibilityCalls() { return deepEligibilityCalls + reflectionEligibilityCalls },
     get deepEligibilityCalls() { return deepEligibilityCalls },
     get reflectionEligibilityCalls() { return reflectionEligibilityCalls },
@@ -1148,6 +1124,11 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
       },
     },
   })
+  let gpuAvailabilityCalls = 0
+  brain.checkAvailability = async () => {
+    gpuAvailabilityCalls += 1
+    return { available: false, reason: 'gpu-busy' }
+  }
 
   const chatResult = await brain.reply({
     identity: LI_HUAHUA_IDENTITY,
@@ -1193,6 +1174,85 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
     assert.equal(Object.hasOwn(call, 'n_ctx'), false)
   }
   assert.equal(healthCalls, 0)
+  assert.equal(gpuAvailabilityCalls, 0)
+
+  console.log('PET_CHAT_SKIPS_GPU_BUSY_GATE=PASS')
+  console.log('PET_API_DIRECT_CALL=PASS')
+  console.log('OWNER_BUSY_PET_LINE_FROM_CHAT=NO')
+}
+
+// Queue admission errors are retried only through the API error contract, with
+// bounded backoff; a successful path still has one final semantic response.
+{
+  const callTimes = []
+  let attempts = 0
+  const brain = new LocalBrain({
+    memory: {
+      recall: () => [],
+      stableRulesContext: () => [],
+      currentSelfContext: () => [],
+    },
+    client: {
+      chat: async () => {
+        callTimes.push(Date.now())
+        attempts += 1
+        if (attempts <= LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS.length) {
+          throw { code: 'LOCAL_BRAIN_QUEUE_FULL', retryable: true, message: 'queue full' }
+        }
+        return {
+          payload: {
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({ reply: '排到啦。', memory: null }),
+              },
+            }],
+          },
+        }
+      },
+    },
+  })
+
+  const result = await brain.reply({
+    identity: LI_HUAHUA_IDENTITY,
+    state: { mood: .8, energy: .8, boredom: .1, sleepiness: .1, attachment: .8 },
+    userText: '队列重试成功测试',
+  })
+  assert.equal(result.ok, true)
+  assert.equal(attempts, 1 + LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS.length)
+  for (let index = 0; index < LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS.length; index += 1) {
+    assert.ok(callTimes[index + 1] - callTimes[index] >= LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS[index] - 30)
+  }
+
+  console.log('QUEUE_FULL_RETRY=250/500/1000ms')
+  console.log('QUEUE_FULL_RETRY_BOUNDED=PASS')
+}
+
+// Exhausted queue admission remains a neutral temporary failure and never
+// turns an API/resource condition into an assertion about the owner.
+{
+  let attempts = 0
+  const brain = new LocalBrain({
+    memory: { recall: () => [], stableRulesContext: () => [], currentSelfContext: () => [] },
+    client: {
+      chat: async () => {
+        attempts += 1
+        throw { code: 'LOCAL_BRAIN_QUEUE_FULL', retryable: true, message: 'queue full' }
+      },
+    },
+  })
+
+  const result = await brain.reply({
+    identity: LI_HUAHUA_IDENTITY,
+    state: { mood: .8, energy: .8, boredom: .1, sleepiness: .1, attachment: .8 },
+    userText: '队列重试失败测试',
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.unavailable, true)
+  assert.equal(attempts, 1 + LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS.length)
+  assert.doesNotMatch(result.petLine, /主人好像在忙/u)
+
+  console.log('OWNER_BUSY_CANNED_REPLY=REMOVED_FROM_PRODUCTION')
 }
 
 // J: normal Chat receives at most three current-self soul rows even when
@@ -1261,7 +1321,6 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   assert.equal(due.force, false)
   assert.deepEqual(runCalls, [{ force: false }])
   assert.equal(fixture.eligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 2)
 
   const idle = await scheduler.maybeRun({ state: { current: 'idle' }, now: fixture.now })
   assert.equal(idle.status, 'skipped')
@@ -1275,7 +1334,6 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(notDue.status, 'skipped')
   assert.equal(notDue.reason, 'eligibility-threshold-not-met')
   assert.equal(runCalls.length, 0)
-  assert.equal(fixture.availabilityCalls, 0)
 })
 
 await withSchedulerFixture({ count: 1, ageMs: 73 * HOUR }, async (fixture) => {
@@ -1292,7 +1350,6 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   assert.equal(chatBusy.status, 'skipped')
   assert.equal(chatBusy.reason, 'chat-in-flight')
   assert.equal(fixture.eligibilityCalls, 0)
-  assert.equal(fixture.availabilityCalls, 0)
   assert.equal(runCalls.length, 0)
 
   const dreamBusy = await scheduler.maybeRun({ state: { current: 'sleep' }, dreamInFlight: true, now: fixture.now })
@@ -1328,43 +1385,25 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   assert.equal(scheduler.dreamInFlight, false)
 })
 
-// H: owner-busy sets a 15-minute RAM-only retry cooldown and does not probe
-// again before it expires.
+// H: Scheduler execution is not blocked by a Pet-side GPU/owner gate.
 await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   const { scheduler, runCalls } = fixture
-  fixture.availability = { available: false, reason: 'gpu-busy' }
-  const busy = await scheduler.maybeRun({ state: { current: 'sleep' }, now: fixture.now })
-  assert.equal(busy.status, 'deferred-owner-busy')
-  assert.equal(busy.reason, 'gpu-busy')
-  assert.equal(busy.nextAttemptAt, NOW + DREAM_OWNER_BUSY_COOLDOWN_MS)
-  assert.equal(fixture.availabilityCalls, 1)
-  assert.equal(runCalls.length, 0)
-
-  fixture.now = NOW + 10 * 60 * 1000
-  const cooled = await scheduler.maybeRun({ state: { current: 'sleep' }, now: fixture.now })
-  assert.equal(cooled.status, 'skipped')
-  assert.equal(cooled.reason, 'owner-busy-cooldown')
-  assert.equal(fixture.availabilityCalls, 1)
-  assert.equal(runCalls.length, 0)
-
-  fixture.now = NOW + DREAM_OWNER_BUSY_COOLDOWN_MS
-  fixture.availability = { available: true, reason: 'available' }
-  const retry = await scheduler.maybeRun({ state: { current: 'sleep' }, now: fixture.now })
-  assert.equal(retry.schedulerStatus, 'started')
-  assert.equal(fixture.availabilityCalls, 3)
+  const direct = await scheduler.maybeRun({ state: { current: 'sleep' }, now: fixture.now })
+  assert.equal(direct.schedulerStatus, 'started')
   assert.equal(runCalls.length, 1)
-  assert.equal(scheduler.getNextAttemptAt(), null)
+
+  console.log('DREAM_GPU_BUSY_GATE=NO')
+  console.log('REFLECTION_GPU_BUSY_GATE=NO')
 })
 
-// H: force path skips sleep/count/age only; it still respects Chat and owner
-// resource guards.
+// H: force path skips sleep/count/age only; it still respects Pet-local
+// in-flight guards while Local Brain owns resource admission.
 await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   const { scheduler, runCalls } = fixture
   const forced = await scheduler.runNow({ state: { current: 'idle' }, chatInFlight: 0, now: fixture.now })
   assert.equal(forced.schedulerStatus, 'started')
   assert.equal(forced.force, true)
   assert.equal(fixture.eligibilityCalls, 0)
-  assert.equal(fixture.availabilityCalls, 2)
   assert.deepEqual(runCalls, [{ force: true }])
 
   const chatBusy = await scheduler.runNow({ state: { current: 'idle' }, chatInFlight: 1, now: fixture.now })
@@ -1372,16 +1411,9 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(runCalls.length, 1)
 })
 
-await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
-  fixture.availability = { available: false, reason: 'gpu-busy' }
-  const forcedBusy = await fixture.scheduler.runNow({ state: { current: 'idle' }, now: fixture.now })
-  assert.equal(forcedBusy.status, 'deferred-owner-busy')
-  assert.equal(fixture.runCalls.length, 0)
-})
-
 // Addendum scheduling: Micro Reflection and Deep Dream have independent
-// gates. Deep Dream needs a 15-minute sleep episode and either nighttime or a
-// 45-minute daytime availability streak; Reflection has its own 30-minute
+// gates. Deep Dream needs a 15-minute sleep episode and, during daytime, a
+// 45-minute continuous sleep episode; Reflection has its own 30-minute
 // cooldown and does not advance the Deep Dream gate.
 {
   const fixture = microSchedulerFixture({
@@ -1397,7 +1429,6 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(result.schedulerGate, 'deep-dream')
   assert.equal(result.workflow, 'deep')
   assert.equal(fixture.deepEligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 2)
   assert.deepEqual(fixture.runCalls, [{ force: false }])
 }
 
@@ -1405,31 +1436,29 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   const fixture = microSchedulerFixture({
     kind: 'deep',
     initialNow: DAY_NOW,
-    state: { sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS, gpuAvailableSince: DAY_NOW - DEEP_DREAM_DAYTIME_AVAILABILITY_MS },
+    state: { sleepSince: DAY_NOW - DEEP_DREAM_DAYTIME_SLEEP_MS },
   })
   const result = await fixture.scheduler.maybeRunDeepDream({
-    state: { current: 'sleep', sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+    state: { current: 'sleep', sleepSince: DAY_NOW - DEEP_DREAM_DAYTIME_SLEEP_MS },
     now: fixture.now,
   })
   assert.equal(result.schedulerStatus, 'started')
   assert.equal(result.schedulerGate, 'deep-dream')
-  assert.equal(fixture.availabilityCalls, 2)
 }
 
 {
   const fixture = microSchedulerFixture({
     kind: 'deep',
     initialNow: DAY_NOW,
-    state: { sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS, gpuAvailableSince: DAY_NOW - 10 * 60 * 1000 },
+    state: { sleepSince: DAY_NOW - 20 * 60 * 1000 },
   })
   const result = await fixture.scheduler.maybeRunDeepDream({
-    state: { current: 'sleep', sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+    state: { current: 'sleep', sleepSince: DAY_NOW - 20 * 60 * 1000 },
     now: fixture.now,
   })
   assert.equal(result.status, 'skipped')
-  assert.equal(result.reason, 'daytime-availability-not-met')
+  assert.equal(result.reason, 'daytime-sleep-duration-not-met')
   assert.equal(fixture.deepEligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 1)
   assert.equal(fixture.runCalls.length, 0)
 }
 
@@ -1437,35 +1466,24 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   const fixture = microSchedulerFixture({
     kind: 'deep',
     initialNow: DAY_NOW,
-    state: { sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+    state: {},
   })
   const tick = (offset) => fixture.scheduler.maybeRunDeepDream({
-    state: { current: 'sleep', sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+    state: { current: 'sleep' },
     now: DAY_NOW + offset,
   })
 
   const first = await tick(0)
-  assert.equal(first.reason, 'daytime-availability-not-met')
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(first.reason, 'sleep-duration-not-met')
 
   await tick(10 * 1000)
   await tick(20 * 1000)
-  assert.equal(fixture.availabilityCalls, 1)
 
-  await tick(AVAILABILITY_PROBE_MIN_INTERVAL_MS)
-  assert.equal(fixture.availabilityCalls, 2)
-
-  const started = await tick(DEEP_DREAM_DAYTIME_AVAILABILITY_MS)
+  const started = await tick(DEEP_DREAM_DAYTIME_SLEEP_MS)
   assert.equal(started.schedulerStatus, 'started')
-  assert.equal(fixture.availabilityCalls, 4)
   assert.equal(fixture.runCalls.length, 1)
-  assert.equal(
-    fixture.scheduler.lastAvailabilityProbeAt,
-    DAY_NOW + DEEP_DREAM_DAYTIME_AVAILABILITY_MS,
-  )
 
-  console.log('AUTOMATIC_AVAILABILITY_PROBE_THROTTLED=PASS')
-  console.log('FINAL_INFERENCE_AVAILABILITY_PROBE_FRESH=PASS')
+  console.log('DAYTIME_NAP_TRIGGER=SLEEP_DURATION_45M')
 }
 
 {
@@ -1480,7 +1498,6 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   })
   assert.equal(result.status, 'skipped')
   assert.equal(result.reason, 'sleep-duration-not-met')
-  assert.equal(fixture.availabilityCalls, 0)
   assert.equal(fixture.runCalls.length, 0)
 }
 
@@ -1498,7 +1515,6 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(first.schedulerGate, 'reflection')
   assert.equal(first.workflow, 'reflection')
   assert.equal(fixture.reflectionEligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 2)
 
   fixture.now = DAY_NOW + REFLECTION_MIN_INTERVAL_MS - 1
   const cooled = await fixture.scheduler.maybeRunReflection({
@@ -1537,32 +1553,13 @@ for (const workflow of ['deep', 'reflection']) {
     kind: workflow,
     initialNow: NIGHT_NOW,
     state: { sleepSince: NIGHT_NOW - DEEP_DREAM_MIN_SLEEP_MS },
-    availability: { available: false, reason: `${workflow}-owner-busy` },
   })
   const run = workflow === 'deep'
     ? fixture.scheduler.maybeRunDeepDream({ state: { current: 'sleep', sleepSince: NIGHT_NOW - DEEP_DREAM_MIN_SLEEP_MS }, now: fixture.now })
     : fixture.scheduler.maybeRunReflection({ state: { current: 'idle' }, now: fixture.now })
-  const busy = await run
-  assert.equal(busy.status, 'deferred-owner-busy')
-  assert.equal(busy.nextAttemptAt, NIGHT_NOW + OWNER_BUSY_COOLDOWN_MS)
-  assert.equal(fixture.availabilityCalls, 1)
-
-  fixture.now = NIGHT_NOW + OWNER_BUSY_COOLDOWN_MS - 1
-  fixture.availability = { available: true, reason: 'available' }
-  const early = workflow === 'deep'
-    ? await fixture.scheduler.maybeRunDeepDream({ state: { current: 'sleep', sleepSince: NIGHT_NOW - DEEP_DREAM_MIN_SLEEP_MS }, now: fixture.now })
-    : await fixture.scheduler.maybeRunReflection({ state: { current: 'idle' }, now: fixture.now })
-  assert.equal(early.status, 'skipped')
-  assert.equal(early.reason, 'owner-busy-cooldown')
-  assert.equal(fixture.availabilityCalls, 1)
-
-  fixture.now = NIGHT_NOW + OWNER_BUSY_COOLDOWN_MS
-  const ready = workflow === 'deep'
-    ? await fixture.scheduler.maybeRunDeepDream({ state: { current: 'sleep', sleepSince: NIGHT_NOW - DEEP_DREAM_MIN_SLEEP_MS }, now: fixture.now })
-    : await fixture.scheduler.maybeRunReflection({ state: { current: 'idle' }, now: fixture.now })
+  const ready = await run
   assert.equal(ready.schedulerStatus, 'started')
   assert.equal(ready.workflow, workflow)
-  assert.equal(fixture.availabilityCalls, 3)
   assert.equal(fixture.runCalls.length, 1)
 }
 
@@ -1669,7 +1666,9 @@ assert.equal(DREAM_RELATED_LIMIT, 24)
 assert.equal(DEEP_DREAM_RELATED_MAX, 24)
 assert.equal(DREAM_MIN_NEW_MEMORIES, 8)
 assert.equal(DREAM_OLDEST_SOURCE_AGE_MS, 72 * HOUR)
-assert.equal(DREAM_OWNER_BUSY_COOLDOWN_MS, 15 * 60 * 1000)
+assert.equal(DEEP_DREAM_DAYTIME_SLEEP_MS, 45 * 60 * 1000)
+assert.equal(validateLocalBrainConfig().requestTimeoutMs, 180_000)
+console.log('DEFAULT_REQUEST_TIMEOUT_MS=180000')
 assert.equal(REFLECTION_BATCH_SIZE, 4)
 assert.equal(REFLECTION_RELATED_LIMIT, 4)
 assert.equal(REFLECTION_DERIVED_MAX_PER_BATCH, 1)

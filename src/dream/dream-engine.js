@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { DreamGate, validateDreamCandidate } from './dream-gate.js'
+import { createDreamCandidate, validateDreamCandidateSemantics } from './dream-candidate.js'
 
 export const PET_DREAM_SOURCE_SESSION = 'vc-ai-pet:dream'
 export const PET_RAW_SOURCE_SESSION = 'vc-ai-pet'
@@ -453,6 +454,7 @@ export class DreamEngine {
           availableSourceIds,
           rawSourceIds,
           rawNewSourceIds,
+          sourceRows: [...batch, ...related],
         }
         const messages = buildDreamMessages({
           newMemories: batch,
@@ -477,13 +479,24 @@ export class DreamEngine {
         if (parsed.summary) summaries.push(parsed.summary)
 
         for (const rawCandidate of parsed.memories.slice(0, this.maxDerivedPerBatch)) {
-          if (validateDreamCandidate(rawCandidate, context)) {
-            // Keep the raw shape until the commit phase. This ensures the
-            // DreamGate remains the only component that writes candidates.
-            proposals.push({ rawCandidate, context })
-          } else {
+          const candidate = createDreamCandidate(rawCandidate)
+          if (!candidate || !validateDreamCandidate(candidate, context)) {
             invalidCandidateCount++
+            continue
           }
+
+          const semanticallyChecked = validateDreamCandidateSemantics(candidate, {
+            sourceRows: context.sourceRows,
+            protectedTerms: context.protectedTerms,
+          })
+          if (!semanticallyChecked.candidate) {
+            invalidCandidateCount++
+            continue
+          }
+
+          // Keep the candidate wrapper until the commit phase. This ensures
+          // DreamGate remains the only component that writes derived memory.
+          proposals.push({ rawCandidate: semanticallyChecked.candidate, context })
         }
       }
 
@@ -495,6 +508,7 @@ export class DreamEngine {
             id: result.row?.id ?? null,
             level: result.row?.level ?? rawCandidate.level,
             sourceIds: result.sourceIds ?? [],
+            provenance: result.provenance ?? rawCandidate.provenance,
           })
         } else if (result.status === 'duplicate') {
           duplicates.push(result.existingId ?? null)

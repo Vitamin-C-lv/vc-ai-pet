@@ -113,7 +113,6 @@ export class PetRuntime {
     })
     this.dreamScheduler = new DreamScheduler({
       memory: this.memory,
-      brain: this.brain,
       engine: this.dreamEngine,
       reflectionEngine: this.reflectionEngine,
       eligibility: (options) => dreamEligibility(this.memory, options),
@@ -153,7 +152,6 @@ export class PetRuntime {
     }
 
     const deepStarted = deepResult?.schedulerStatus === 'started'
-      || deepResult?.status === 'deferred-owner-busy'
       || ['chat-in-flight', 'dream-in-flight', 'reflection-in-flight'].includes(deepResult?.reason)
 
     if (!deepStarted && typeof this.dreamScheduler?.maybeRunReflection === 'function') {

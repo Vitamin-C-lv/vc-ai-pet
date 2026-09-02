@@ -78,3 +78,82 @@ PRODUCTION_DREAM_DUPLICATE_COUNT=1
 
 The production `dream_log` entry is additive and records
 `changes.kind=dream`; no raw chat transcript or source-row rewrite occurred.
+
+## v0.3-C Historical Recall
+
+The feature branch `feat/v0.3-historical-recall` adds an on-demand historical
+read path above the sealed v0.3-B Dream/Reflection layers. Normal chat keeps
+`memory.recall(userText, 5)` and does not scan all history or read `dream_log`.
+Historical questions use deterministic intent routing, meow-memory BM25
+retrieval over `soul/user/project/fact/lesson/topic`, temporal ordering, and a
+bounded read-only provenance expansion from the existing `dream_log`.
+
+```text
+VERSION=0.3.0-alpha.3
+HISTORICAL_RECALL_MODE=ON_DEMAND_ONLY
+HISTORICAL_SEARCH_MAX=12
+HISTORICAL_LINEAGE_MAX_DEPTH=3
+HISTORICAL_LINEAGE_MAX_NODES=18
+HISTORICAL_CONTEXT_MAX=16
+DREAM_PROVENANCE=EXISTING_DREAM_LOG
+PROVENANCE_DB_WRITE=NO
+NEW_PROVENANCE_DB=NO
+RAW_SOURCE_PRIORITY=PASS
+CONTRADICTION_HANDLING=TEMPORAL_READ_ONLY
+FULL_MEMORY_CONTEXT_INJECTION=NO
+NORMAL_CHAT_HISTORICAL_SCAN=0
+NORMAL_CHAT_DREAM_LOG_READS=0
+RAW_CHAT_HISTORY_PERSISTED=NO
+MODEL_INFERENCES_PER_CHAT=1
+PET_DEEPSEEK_REQUESTS=0
+```
+
+Historical Recall is read-only: it does not create derived memory, mutate
+source rows, update status, touch Dream/Reflection checkpoints, or append
+`dream_log`. The prompt exposes short source labels and readable timestamps;
+it does not claim compressed memory content is a persisted raw transcript.
+
+## v0.3-C Pet-side Busy Gate Removal
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_C_UI_PENDING
+PET_API_CALL_POLICY=DIRECT
+PET_API_DIRECT_CALL=PASS
+CHAT_GPU_BUSY_GATE=REMOVED
+REFLECTION_GPU_BUSY_GATE=REMOVED
+DREAM_GPU_BUSY_GATE=REMOVED
+DAYTIME_NAP_TRIGGER=SLEEP_DURATION_45M
+LOCAL_BRAIN_REQUEST_TIMEOUT_MS=180000
+QUEUE_FULL_RETRY=250/500/1000ms
+QUEUE_FULL_RETRY_BOUNDED=PASS
+OWNER_BUSY_CANNED_REPLY=REMOVED_FROM_PRODUCTION
+HISTORICAL_RECALL_AUTO_TESTS=PASS
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+```
+
+The Pet layer now sends Chat, Reflection, and Dream requests directly to the
+loopback Local Brain API. GPU utilization, VRAM, and owner-busy state no longer
+produce a Pet-side admission decision; the API queue owns that scheduling.
+
+## v0.3-D Phase 1 Memory Consolidation Foundation
+
+v0.3-D Phase 1 is complete. The foundation adds Memory Provenance metadata,
+Semantic Stability validation for derived memories, and an explicit Dream
+Candidate layer before derived-memory approval. Existing `source_session`
+values remain readable, and Assistant Response provenance cannot become a
+confirmed memory.
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_D_PHASE1
+MEMORY_PROVENANCE=PASS
+SEMANTIC_STABILITY=PASS
+DREAM_CANDIDATE_LAYER=PASS
+LEGACY_MEMORY_COMPATIBILITY=PASS
+PRODUCTION_DB_MODIFIED=NO
+DREAM_RERUN=NO
+```
+
+Deferred to v0.3-D Phase 2: Reflection Engine, Personality Emergence, and
+Contradiction Detection. These require accumulated real long-term interaction
+data before the next consolidation layer is developed.

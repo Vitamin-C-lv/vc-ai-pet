@@ -144,3 +144,97 @@ checkpoint; the independent Reflection window was not advanced.
 Deferred to v0.3-C: Historical Recall, contradiction understanding,
 source-backed why/when recall, Dream UI, Vision, TTS/ASR, host-idle detection,
 physical-context control, and a personality-value model.
+
+## VC_AI_PET_V0_3_C Historical Recall
+
+```text
+VERSION=0.3.0-alpha.3
+HISTORICAL_RECALL=IMPLEMENTED
+HISTORICAL_RECALL_MODE=ON_DEMAND_ONLY
+HISTORICAL_SEARCH_MAX=12
+HISTORICAL_LINEAGE_MAX_DEPTH=3
+HISTORICAL_LINEAGE_MAX_NODES=18
+
+WHY_RECALL=IMPLEMENTED
+FIRST_RECALL=IMPLEMENTED
+WHEN_RECALL=IMPLEMENTED
+PAST_SELF_RECALL=IMPLEMENTED
+EXACT_RECALL=IMPLEMENTED
+
+DREAM_PROVENANCE=EXISTING_DREAM_LOG
+RAW_SOURCE_PRIORITY=IMPLEMENTED
+CONTRADICTION_HANDLING=TEMPORAL_READ_ONLY
+
+FULL_MEMORY_CONTEXT_INJECTION=NO
+NORMAL_CHAT_HISTORICAL_SCAN=0
+NORMAL_CHAT_DREAM_LOG_READS=0
+RAW_CHAT_HISTORY_PERSISTED=NO
+RAW_MEMORY_HISTORY_PRESERVED=PASS
+
+MODEL_INFERENCES_PER_CHAT=1
+PET_DEEPSEEK_REQUESTS=0
+PROVENANCE_STORAGE=EXISTING_DREAM_LOG
+PROVENANCE_DB_WRITE=NO
+NEW_PROVENANCE_DB=NO
+```
+
+Historical Recall is a deterministic, on-demand read path. Normal chat keeps
+the existing five-result recall and never scans historical rows or dream_log.
+Historical mode retrieves at most 12 semantic candidates, expands only
+source-backed Dream/Reflection lineage within bounded limits, and formats at
+most 16 records for the existing single Local Brain inference. The provenance
+adapter opens the existing pet database read-only and performs only SELECTs;
+Historical Recall does not write memory, checkpoints, windows, or dream logs.
+
+## VC_AI_PET_V0_3_C Pet-side Busy Gate Removal
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_C_UI_PENDING
+PET_API_CALL_POLICY=DIRECT
+PET_API_DIRECT_CALL=PASS
+CHAT_GPU_BUSY_GATE=REMOVED
+REFLECTION_GPU_BUSY_GATE=REMOVED
+DREAM_GPU_BUSY_GATE=REMOVED
+DAYTIME_NAP_TRIGGER=SLEEP_DURATION_45M
+LOCAL_BRAIN_REQUEST_TIMEOUT_MS=180000
+QUEUE_FULL_RETRY=250/500/1000ms
+QUEUE_FULL_RETRY_BOUNDED=PASS
+OWNER_BUSY_CANNED_REPLY=REMOVED_FROM_PRODUCTION
+HISTORICAL_RECALL_AUTO_TESTS=PASS
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+```
+
+Pet no longer performs a GPU/resource pre-flight before Chat, Reflection, or
+Dream. Local Brain API v1 owns admission and scheduling; Pet retains only
+chat/dream/reflection local in-flight idempotency guards. Daytime Deep Dream
+eligibility is continuous sleep of 45 minutes, while the existing 15-minute
+night sleep threshold and 30-minute success cooldown remain unchanged.
+
+## VC_AI_PET_V0_3_D Phase 1 Memory Consolidation Foundation
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_D_PHASE1
+MEMORY_PROVENANCE=PASS
+SEMANTIC_STABILITY=PASS
+DREAM_CANDIDATE_LAYER=PASS
+LEGACY_MEMORY_COMPATIBILITY=PASS
+```
+
+Completed foundation:
+
+- Memory Provenance
+- Semantic Stability
+- Dream Candidate Layer
+- Legacy Memory Compatibility
+
+## VC_AI_PET_V0_3_D Phase 2 Deferred
+
+The following work is deferred:
+
+- Reflection Engine
+- Personality Emergence
+- Contradiction Detection
+
+Reason: real long-term interaction data must accumulate before these features
+can be designed and evaluated safely.

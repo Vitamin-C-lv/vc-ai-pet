@@ -1,7 +1,34 @@
 import { resolve, relative, sep, join } from 'node:path'
 import { MemoryDb, search as rankMemories } from 'meow-memory'
+import {
+  HISTORICAL_CANDIDATE_LIMIT,
+  HISTORICAL_LINEAGE_MAX_DEPTH,
+  HISTORICAL_LINEAGE_MAX_NODES,
+  HISTORICAL_RECALL_LEVELS,
+  HISTORICAL_SEARCH_MAX,
+  candidateMatchesTopic,
+  extractTopicAnchorTokens,
+  historicalTimestamp,
+  keepRelevantCluster,
+  matchesHistoricalTopic,
+  matchesHistoricalTopicInContent,
+  memorySourceKind,
+  rankHistoricalRows,
+  sortHistoricalCandidates,
+  sortHistoricalRows,
+} from './historical-recall.js'
+import {
+  createDreamProvenanceReader,
+  provenanceForDerived as readProvenanceForDerived,
+  resolveMemoryLineage as resolveMemoryLineageGraph,
+} from './dream-provenance.js'
+import {
+  MemoryProvenanceStore,
+  normalizeProvenance,
+} from './memory-provenance.js'
 
 const PET_SOURCE_SESSION = 'vc-ai-pet'
+export const PET_RAW_SOURCE_SESSION = PET_SOURCE_SESSION
 export const PET_DREAM_SOURCE_SESSION = 'vc-ai-pet:dream'
 export const PET_DREAM_WINDOW = 'vc-ai-pet:dream-window'
 export const PET_REFLECTION_SOURCE_SESSION = 'vc-ai-pet:reflection'
@@ -16,6 +43,9 @@ const DREAM_DERIVED_LEVELS = new Set(['soul', 'user', 'fact', 'lesson', 'topic']
 const REFLECTION_DERIVED_LEVELS = new Set(['user', 'fact', 'lesson', 'topic'])
 const DREAM_DEDUPE_LEVELS = ['soul', ...MEMORY_WRITE_LEVELS]
 const CURRENT_SELF_QUERY = '李花花 自己 性格 习惯 喜欢 相处 主人 自我'
+export const HISTORICAL_RECALL_CONTEXT_MAX = 16
+
+export { memorySourceKind }
 
 function inside(root, target) {
   const r = resolve(root), t = resolve(target), rel = relative(r, t)
@@ -50,11 +80,69 @@ function equivalentText(a, b) {
   return ratio >= 0.85 && longer.includes(shorter)
 }
 
+function selectRelatedHistoricalRows(rows, topicTokens) {
+  if (!Array.isArray(rows) || rows.length === 0) return []
+
+  const cluster = keepRelevantCluster(rows, { max: HISTORICAL_CANDIDATE_LIMIT })
+  return cluster.filter((row) => candidateMatchesTopic(row, topicTokens))
+}
+
+function historicalSource(row) {
+  return row?.source ?? memorySourceKind(row)
+}
+
+function evolutionSourceKind(row) {
+  return row?.level === 'soul' ? 'soul' : historicalSource(row)
+}
+
+function uniqueRowsInOrder(rows) {
+  const unique = []
+  const seen = new Set()
+  for (const row of rows) {
+    if (!row || row.id === null || row.id === undefined) continue
+    const id = String(row.id)
+    if (seen.has(id)) continue
+    seen.add(id)
+    unique.push(row)
+  }
+  return unique
+}
+
+function selectEvolutionCandidates(rows, topicTokens) {
+  const topicRows = rows.filter((row) => candidateMatchesTopic(row, topicTokens))
+  const rawRows = sortHistoricalRows(topicRows.filter((row) => evolutionSourceKind(row) === 'raw'))
+  const explicitRawRows = rawRows.filter((row) => matchesHistoricalTopicInContent(row, topicTokens))
+  const preferredRawRows = explicitRawRows.length > 0 ? explicitRawRows : rawRows
+  const preferredIds = new Set(preferredRawRows.map((row) => String(row.id)))
+  const earlyRaw = [
+    ...preferredRawRows,
+    ...rawRows.filter((row) => !preferredIds.has(String(row.id))),
+  ].slice(0, 3)
+  const earliestRaw = preferredRawRows[0] ?? null
+  const earliestTime = historicalTimestamp(earliestRaw)
+  const laterDerived = sortHistoricalRows(topicRows.filter((row) => {
+    const source = evolutionSourceKind(row)
+    if (source !== 'dream' && source !== 'reflection' && source !== 'soul') return false
+    if (earliestTime === null) return false
+    const createdAt = historicalTimestamp(row)
+    return createdAt !== null && createdAt >= earliestTime
+  })).slice(0, 5)
+
+  return {
+    earliestRaw,
+    earlyRaw,
+    laterDerived,
+    rows: [...earlyRaw, ...laterDerived],
+  }
+}
+
 export class PetMemory {
-  constructor(root) {
+  constructor(root, { provenanceReader = null } = {}) {
     this.sandboxRoot = resolve(root)
     this.dbPath = inside(this.sandboxRoot, join(this.sandboxRoot, 'memory', 'pet-memory.db'))
     this.db = new MemoryDb(this.dbPath)
+    this.provenanceStore = new MemoryProvenanceStore(this.db.db)
+    this.provenanceReader = provenanceReader
   }
 
   seedIfFresh(now = Date.now()) {
@@ -103,7 +191,9 @@ export class PetMemory {
 
   remember(level, content, importance = 1, extra = {}) {
     if (!ALLOWED_LEVELS.has(level)) throw new Error(`PET_MEMORY_LEVEL_DENIED: ${level}`)
-    const row = this.db.insert({ level, content, importance, source_session: PET_SOURCE_SESSION, ...extra })
+    const fields = extra && typeof extra === 'object' ? extra : {}
+    const { provenance = null, ...dbFields } = fields
+    const row = this.db.insert({ level, content, importance, source_session: PET_SOURCE_SESSION, ...dbFields })
     if (
       DREAM_SOURCE_LEVELS.includes(row.level) &&
       Number(row.importance) >= 2 &&
@@ -112,7 +202,11 @@ export class PetMemory {
       this.db.touchWindow(PET_DREAM_WINDOW, this.sandboxRoot, row.created_at)
       this.db.touchWindow(PET_REFLECTION_WINDOW, this.sandboxRoot, row.created_at)
     }
-    return row
+    const rowProvenance = this.provenanceStore.set(row.id, provenance ?? {
+      source: 'SYSTEM_EVENT',
+      evidence: 'confirmed',
+    })
+    return { ...row, provenance: rowProvenance }
   }
 
   rememberInteraction(kind, count) {
@@ -134,6 +228,10 @@ export class PetMemory {
     }
     return this.remember(candidate.level, candidate.content, candidate.importance, {
       keywords: candidate.keywords,
+      provenance: candidate.provenance ?? {
+        source: 'MEMORY_GATE_ACCEPTED',
+        evidence: 'confirmed',
+      },
     })
   }
 
@@ -153,7 +251,7 @@ export class PetMemory {
 
     const hits = rankMemories(query, rows, { k })
     const byId = new Map(rows.map((row) => [row.id, row]))
-    return hits.map((hit) => byId.get(hit.id) ?? hit)
+    return hits.map((hit) => this.provenanceStore.decorate(byId.get(hit.id) ?? hit))
   }
 
   relatedForReflection(query, { k = 4, excludeIds = [] } = {}) {
@@ -208,8 +306,19 @@ export class PetMemory {
     )) {
       throw new Error('PET_DREAM_SOUL_CANDIDATE_DENIED')
     }
+    const requestedProvenance = candidate.provenance ?? {
+      source: 'DREAM_DERIVED',
+      evidence: 'inferred',
+    }
+    const provenance = normalizeProvenance({
+      ...requestedProvenance,
+      sourceIds,
+    })
+    if (provenance.source !== 'DREAM_DERIVED' || provenance.evidence !== 'inferred') {
+      throw new Error('PET_DREAM_PROVENANCE_DENIED')
+    }
     const title = `dream:${sourceIds.map((id) => String(id).slice(0, 8)).join(',')}`
-    return this.db.insert({
+    const row = this.db.insert({
       level: candidate.level,
       title,
       content: candidate.content,
@@ -217,6 +326,7 @@ export class PetMemory {
       keywords: candidate.keywords,
       source_session: PET_DREAM_SOURCE_SESSION,
     })
+    return { ...row, provenance: this.provenanceStore.set(row.id, provenance) }
   }
 
   rememberReflectionCandidate(candidate) {
@@ -226,8 +336,19 @@ export class PetMemory {
 
     const sourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds : []
     if (sourceIds.length === 0) throw new Error('PET_REFLECTION_SOURCE_IDS_REQUIRED')
+    const requestedProvenance = candidate.provenance ?? {
+      source: 'REFLECTION_DERIVED',
+      evidence: 'inferred',
+    }
+    const provenance = normalizeProvenance({
+      ...requestedProvenance,
+      sourceIds,
+    })
+    if (provenance.source !== 'REFLECTION_DERIVED' || provenance.evidence !== 'inferred') {
+      throw new Error('PET_REFLECTION_PROVENANCE_DENIED')
+    }
     const title = `reflection:${sourceIds.map((id) => String(id).slice(0, 8)).join(',')}`
-    return this.db.insert({
+    const row = this.db.insert({
       level: candidate.level,
       title,
       content: candidate.content,
@@ -235,15 +356,50 @@ export class PetMemory {
       keywords: candidate.keywords,
       source_session: PET_REFLECTION_SOURCE_SESSION,
     })
+    return { ...row, provenance: this.provenanceStore.set(row.id, provenance) }
   }
 
-  recall(query, k = 5) {
+  recall(query, k = 5, { bumpHits = true } = {}) {
     const docs = RECALL_LEVELS.flatMap((level) => this.db.listSearchable(level))
     const hits = rankMemories(query, docs, { k })
-    for (const hit of hits) {
-      try { this.db.bumpHit(hit.level, hit.id) } catch {}
+    const byKey = new Map(docs.map((row) => [`${row.level}:${row.id}`, row]))
+    const enrichedHits = hits.map((hit) => {
+      const source = byKey.get(`${hit.level}:${hit.id}`)
+      return source ? { ...source, ...hit } : hit
+    })
+    if (bumpHits) {
+      for (const hit of hits) {
+        try { this.db.bumpHit(hit.level, hit.id) } catch {}
+      }
     }
-    return hits
+    return enrichedHits.map((row) => this.provenanceStore.decorate(row))
+  }
+
+  historicalSearch(
+    query,
+    {
+      k = HISTORICAL_SEARCH_MAX,
+      includeDerived = true,
+      allStatuses = true,
+    } = {},
+  ) {
+    const requested = Number(k)
+    const limit = Number.isFinite(requested)
+      ? Math.min(HISTORICAL_SEARCH_MAX, Math.max(0, Math.floor(requested)))
+      : HISTORICAL_SEARCH_MAX
+    if (limit === 0) return []
+
+    const listOptions = allStatuses ? {} : { status: 'active' }
+    const rows = HISTORICAL_RECALL_LEVELS
+      .flatMap((level) => this.db.list(level, listOptions))
+      .filter((row) => includeDerived || !['dream', 'reflection'].includes(memorySourceKind(row)))
+
+    return rankHistoricalRows(query, rows, {
+      k: limit,
+      candidateLimit: HISTORICAL_CANDIDATE_LIMIT,
+      mode: 'none',
+      now: null,
+    })
   }
 
   stableIdentityContext() {
@@ -265,6 +421,187 @@ export class PetMemory {
     const hits = rankMemories(CURRENT_SELF_QUERY, rows, { k: limit })
     const byId = new Map(rows.map((row) => [row.id, row]))
     return hits.map((hit) => byId.get(hit.id) ?? hit)
+  }
+
+  buildHistoricalRecallContext(
+    query,
+    {
+      intent = null,
+      currentSelf = null,
+      currentSelfContext = null,
+      related = [],
+      memories = null,
+      maxEntries = HISTORICAL_RECALL_CONTEXT_MAX,
+      maxDepth = HISTORICAL_LINEAGE_MAX_DEPTH,
+      maxNodes = HISTORICAL_LINEAGE_MAX_NODES,
+    } = {},
+  ) {
+    const mode = typeof intent === 'string' ? intent : intent?.mode ?? 'none'
+    const semanticRows = this.historicalSearch(query, {
+      k: HISTORICAL_SEARCH_MAX,
+      includeDerived: true,
+      allStatuses: true,
+    })
+    const suppliedRelatedRows = Array.isArray(memories)
+      ? memories
+      : Array.isArray(related)
+        ? related
+        : []
+    const topicTokens = extractTopicAnchorTokens(query)
+    const relatedRows = selectRelatedHistoricalRows(suppliedRelatedRows, topicTokens)
+    const selfRows = Array.isArray(currentSelf)
+      ? currentSelf
+      : Array.isArray(currentSelfContext)
+        ? currentSelfContext
+        : []
+    const eligible = (row) => (
+      row &&
+      typeof row === 'object' &&
+      HISTORICAL_RECALL_LEVELS.includes(row.level)
+    )
+    const rowsById = new Map()
+    for (const row of [...semanticRows, ...relatedRows, ...(mode === 'past' ? selfRows : [])]) {
+      if (!eligible(row)) continue
+      const id = row.id === null || row.id === undefined ? null : String(row.id)
+      if (id !== null && !rowsById.has(id)) rowsById.set(id, row)
+    }
+
+    const orderedCandidates = sortHistoricalCandidates([...rowsById.values()], {
+      mode,
+      k: HISTORICAL_SEARCH_MAX,
+      query,
+    })
+    const evolution = mode === 'evolution'
+      ? selectEvolutionCandidates(orderedCandidates, topicTokens)
+      : null
+    const selectedCandidates = evolution?.rows ?? orderedCandidates
+    const lineageRows = []
+    const lineageIds = new Set()
+    const provenanceUnavailableIds = []
+    let provenanceUnavailable = false
+
+    const lineageTargets = new Map()
+    const lineageSeedRows = mode === 'evolution'
+      ? selectedCandidates
+      : [...orderedCandidates, ...relatedRows]
+    for (const row of lineageSeedRows) {
+      if (row?.id !== null && row?.id !== undefined && !lineageTargets.has(String(row.id))) {
+        lineageTargets.set(String(row.id), row)
+      }
+    }
+    for (const row of lineageTargets.values()) {
+      const sourceKind = historicalSource(row)
+      if (sourceKind !== 'dream' && sourceKind !== 'reflection') continue
+
+      const lineage = this.resolveMemoryLineage(row.id, { maxDepth, maxNodes })
+      if (lineage?.provenanceUnavailable || lineage?.provenanceAvailable === false || lineage?.missingIds?.length > 0) {
+        provenanceUnavailable = true
+        provenanceUnavailableIds.push(String(row.id))
+      }
+      for (const node of Array.isArray(lineage?.nodes) ? lineage.nodes : []) {
+        if (!node?.row || node.row.id === null || node.row.id === undefined) continue
+        if (node.id !== row.id && !matchesHistoricalTopic(node.row, query)) continue
+        const id = String(node.row.id)
+        if (lineageIds.has(id)) continue
+        lineageIds.add(id)
+        lineageRows.push({
+          ...node.row,
+          source: node.kind ?? memorySourceKind(node.row),
+        })
+      }
+    }
+
+    const combined = [...lineageRows, ...selectedCandidates]
+    const uniqueRows = uniqueRowsInOrder(combined)
+
+    const sourcePriority = { raw: 0, reflection: 1, dream: 2, historical: 3 }
+    const sectionById = new Map()
+    if (evolution) {
+      for (const row of evolution.earlyRaw) sectionById.set(String(row.id), 'earliest-raw')
+      for (const row of evolution.laterDerived) sectionById.set(String(row.id), 'later-understanding')
+      for (const row of lineageRows) {
+        const id = String(row.id)
+        if (!sectionById.has(id)) sectionById.set(id, 'source-evidence')
+      }
+    }
+    const orderedRows = mode === 'evolution'
+      ? [
+          ...(evolution?.earlyRaw ?? []),
+          ...(evolution?.laterDerived ?? []),
+          ...lineageRows.filter((row) => !sectionById.has(String(row.id)) || sectionById.get(String(row.id)) === 'source-evidence'),
+        ]
+      : mode === 'first'
+        ? uniqueRowsInOrder([...orderedCandidates, ...lineageRows])
+      : (mode === 'when' || mode === 'past')
+        ? sortHistoricalRows(uniqueRows)
+      : mode === 'why' || mode === 'exact'
+        ? uniqueRows
+          .map((row, index) => ({ row, index }))
+          .sort((left, right) => (
+            (sourcePriority[left.row.source ?? memorySourceKind(left.row)] ?? 3) -
+            (sourcePriority[right.row.source ?? memorySourceKind(right.row)] ?? 3) ||
+            left.index - right.index
+          ))
+          .map(({ row }) => row)
+        : uniqueRows
+    const requestedMax = Number(maxEntries)
+    const entryLimit = Number.isFinite(requestedMax)
+      ? Math.min(HISTORICAL_RECALL_CONTEXT_MAX, Math.max(0, Math.floor(requestedMax)))
+      : HISTORICAL_RECALL_CONTEXT_MAX
+    const entries = orderedRows.slice(0, entryLimit).map((row) => ({
+      id: String(row.id),
+      level: row.level,
+      content: row.content,
+      importance: row.importance,
+      status: row.status,
+      source_session: row.source_session ?? null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      source: row.source ?? memorySourceKind(row),
+      section: sectionById.get(String(row.id)) ?? null,
+    }))
+
+    return {
+      mode,
+      topicTokens: [...(topicTokens ?? [])],
+      entries,
+      provenanceUnavailable,
+      provenanceUnavailableIds: [...new Set(provenanceUnavailableIds)],
+      lineageMaxDepth: maxDepth,
+      lineageMaxNodes: maxNodes,
+    }
+  }
+
+  findById(id) {
+    const found = this.#findMemoryById(id)
+    return found?.row
+      ? { ...found, row: this.provenanceStore.decorate(found.row) }
+      : found
+  }
+
+  provenanceForMemory(id) {
+    const found = this.#findMemoryById(id)
+    return found?.row ? this.provenanceStore.resolve(found.row) : null
+  }
+
+  provenanceForDerived(derivedId) {
+    const reader = this.#getProvenanceReader()
+    if (typeof reader?.provenanceForDerived === 'function') {
+      return reader.provenanceForDerived(derivedId)
+    }
+    return readProvenanceForDerived(derivedId, { dbPath: this.dbPath })
+  }
+
+  resolveMemoryLineage(derivedId, options = {}) {
+    const reader = this.#getProvenanceReader()
+    if (typeof reader?.resolveMemoryLineage === 'function') {
+      return reader.resolveMemoryLineage(derivedId, options)
+    }
+    return resolveMemoryLineageGraph(derivedId, {
+      ...options,
+      findById: (id) => this.#findMemoryById(id),
+      provenanceForDerived: (id) => this.provenanceForDerived(id),
+    })
   }
 
   #latestRawCreatedAt() {
@@ -297,9 +634,35 @@ export class PetMemory {
         Number(row.created_at) <= upper,
       )
       .sort((a, b) => Number(a.created_at) - Number(b.created_at) || String(a.id).localeCompare(String(b.id)))
+      .map((row) => this.provenanceStore.decorate(row))
   }
 
   close() {
+    try { this.provenanceReader?.close?.() } catch {}
     this.db.close()
+  }
+
+  #getProvenanceReader() {
+    if (!this.provenanceReader) {
+      this.provenanceReader = createDreamProvenanceReader(this.dbPath, {
+        findById: (id) => this.#findMemoryById(id),
+      })
+    }
+    return this.provenanceReader
+  }
+
+  #findMemoryById(id) {
+    const normalized = String(id ?? '')
+    if (!normalized) return undefined
+
+    if (typeof this.db.findById === 'function') {
+      return this.db.findById(normalized)
+    }
+
+    for (const level of [...HISTORICAL_RECALL_LEVELS, 'rules']) {
+      const row = this.db.list(level, {}).find((candidate) => String(candidate.id) === normalized)
+      if (row) return { row, level }
+    }
+    return undefined
   }
 }

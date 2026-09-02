@@ -33,7 +33,7 @@ export class LocalBrainClient {
   constructor({
     baseUrl = 'http://127.0.0.1:17862',
     healthTimeoutMs = 1_500,
-    requestTimeoutMs = 60_000,
+    requestTimeoutMs = 180_000,
     fetchImpl = globalThis.fetch,
   } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('PET_LOCAL_BRAIN_FETCH_UNAVAILABLE')

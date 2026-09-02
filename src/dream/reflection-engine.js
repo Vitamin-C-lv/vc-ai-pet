@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
+import { normalizeProvenance } from '../memory/memory-provenance.js'
+import { validateDerivedMemorySemantics } from '../memory/semantic-stability.js'
+
 const REFLECTION_LEVELS = new Set(['user', 'fact', 'lesson', 'topic'])
 const RAW_SOURCE_SESSION = 'vc-ai-pet'
 
@@ -132,11 +135,32 @@ export class ReflectionGate {
     const candidate = validateReflectionCandidate(raw, context)
     if (!candidate) return { status: 'skipped', reason: 'invalid-candidate' }
 
+    const semantic = validateDerivedMemorySemantics(raw, {
+      sourceRows: context?.sourceRows,
+      protectedTerms: context?.protectedTerms,
+    })
+    if (!semantic.approved) {
+      return {
+        status: 'skipped',
+        reason: 'semantic-drift',
+        semantic,
+      }
+    }
+
+    const provenance = normalizeProvenance(raw?.provenance ?? {
+      source: 'REFLECTION_DERIVED',
+      evidence: 'inferred',
+      sourceIds: candidate.sourceIds,
+    })
+    if (provenance.source !== 'REFLECTION_DERIVED' || provenance.evidence !== 'inferred') {
+      return { status: 'skipped', reason: 'invalid-provenance' }
+    }
+
     const existing = this.memory.findEquivalentMemory(candidate.content)
     if (existing) return { status: 'duplicate', existingId: existing.id }
 
-    const row = this.memory.rememberReflectionCandidate(candidate)
-    return { status: 'written', row, sourceIds: candidate.sourceIds }
+    const row = this.memory.rememberReflectionCandidate({ ...candidate, provenance })
+    return { status: 'written', row, sourceIds: candidate.sourceIds, provenance, semantic }
   }
 }
 
@@ -364,6 +388,7 @@ export class ReflectionEngine {
           rawNewSourceIds: batchIds,
           rawSourceIds,
           availableSourceIds,
+          sourceRows: [...batch, ...related],
         }
         const completion = await this.brain.reflectionCompletion({
           messages: buildReflectionMessages({ newMemories: batch, relatedMemories: related }),
@@ -385,7 +410,12 @@ export class ReflectionEngine {
       for (const { rawCandidate, context } of proposals) {
         const result = this.gate.consider(rawCandidate, context)
         if (result.status === 'written') {
-          written.push({ id: result.row?.id ?? null, level: result.row?.level ?? rawCandidate.level, sourceIds: result.sourceIds ?? [] })
+          written.push({
+            id: result.row?.id ?? null,
+            level: result.row?.level ?? rawCandidate.level,
+            sourceIds: result.sourceIds ?? [],
+            provenance: result.provenance ?? rawCandidate.provenance,
+          })
         } else if (result.status === 'duplicate') {
           duplicates.push(result.existingId ?? null)
         } else {

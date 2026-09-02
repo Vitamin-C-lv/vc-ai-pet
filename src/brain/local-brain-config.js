@@ -7,12 +7,10 @@ export const DEFAULT_LOCAL_BRAIN_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:17862',
   reasoningEffort: 'off',
   healthTimeoutMs: 1_500,
-  requestTimeoutMs: 60_000,
+  requestTimeoutMs: 180_000,
 
-  // Pet may still decide not to ASK the shared brain while the owner is busy.
-  // It must never start/stop/reconfigure the shared Local Brain service.
-  // VRAM free-space is intentionally disabled as a Pet-side gate because the
-  // shared Local Brain service itself owns the loaded model allocation.
+  // Legacy compatibility only. Pet production inference no longer uses a GPU
+  // busy gate; Local Brain API owns request admission and scheduling.
   resourceGate: {
     ...DEFAULT_RESOURCE_POLICY,
     minFreeVramMiB: 0,

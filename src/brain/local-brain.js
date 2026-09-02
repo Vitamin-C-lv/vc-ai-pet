@@ -2,15 +2,34 @@ import { validateLocalBrainConfig } from './local-brain-config.js'
 import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { buildPetMessages } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
-import { evaluateLocalBrainAvailability, busyPetLine } from './resource-gate.js'
-import { BrainAvailabilityTracker } from './brain-availability.js'
+import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
+
+export const LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS = Object.freeze([250, 500, 1000])
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function canRetryQueueFull(error) {
+  return error?.code === 'LOCAL_BRAIN_QUEUE_FULL' && error?.retryable === true
+}
+
+async function chatWithBoundedQueueRetry(client, request) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client.chat(request)
+    } catch (error) {
+      const delay = LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS[attempt]
+      if (!canRetryQueueFull(error) || delay === undefined) throw error
+      await wait(delay)
+    }
+  }
+}
 
 export class LocalBrain {
-  constructor({ config = {}, memory, sandbox = null, client = null }) {
+  constructor({ config = {}, memory, client = null }) {
     this.config = validateLocalBrainConfig(config)
     this.memory = memory
-    this.sandbox = sandbox
-    this.availability = sandbox ? new BrainAvailabilityTracker({ sandbox }) : null
     this.client = client ?? new LocalBrainClient({
       baseUrl: this.config.baseUrl,
       healthTimeoutMs: this.config.healthTimeoutMs,
@@ -22,30 +41,11 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async checkAvailability() {
-    const result = await evaluateLocalBrainAvailability(this.config.resourceGate)
-    if (this.availability) await this.availability.record(result)
-
-    return {
-      ...result,
-      petLine: result.available ? null : busyPetLine(result.reason),
-    }
-  }
-
   async reply({ identity, state, userText, recentMessages = [] }) {
-    const availability = await this.checkAvailability()
-
-    if (!availability.available) {
-      return {
-        ok: false,
-        unavailable: true,
-        reason: availability.reason,
-        petLine: availability.petLine,
-        sample: availability.sample,
-      }
-    }
-
-    const related = this.memory?.recall?.(userText, 5) ?? []
+    const historicalIntent = detectHistoricalRecallIntent(userText)
+    const related = this.memory?.recall?.(userText, 5, {
+      bumpHits: !historicalIntent.deep,
+    }) ?? []
     const stableRules = (this.memory?.stableRulesContext?.()
       ?? this.memory?.stableIdentityContext?.()
       ?? []).filter((item) => item?.level === 'rules')
@@ -65,13 +65,21 @@ export class LocalBrain {
     const relevant = unique(related).filter((item) =>
       item?.level !== 'soul' || relatedSoulCount++ < Math.max(0, 3 - self.length),
     )
+    const historicalRecallContext = historicalIntent.deep
+      ? this.memory?.buildHistoricalRecallContext?.(userText, {
+        intent: historicalIntent,
+        currentSelf: self,
+        related: relevant,
+      }) ?? null
+      : null
 
     const messages = buildPetMessages({
       identity,
       state,
       stableRules: rules,
-      currentSelfContext: self,
-      memories: relevant.slice(0, 8),
+      currentSelfContext: historicalIntent.deep && historicalIntent.mode !== 'past' ? [] : self,
+      memories: historicalIntent.deep ? [] : relevant.slice(0, 8),
+      historicalRecallContext,
       recentMessages,
       userText,
     })
@@ -84,7 +92,7 @@ export class LocalBrain {
     }
 
     try {
-      const { payload } = await this.client.chat({
+      const { payload } = await chatWithBoundedQueueRetry(this.client, {
         messages,
         reasoningEffort: this.config.reasoningEffort,
         temperature: 0.72,
@@ -117,12 +125,12 @@ export class LocalBrain {
     } catch (error) {
       // Retryable Local Brain failures are an availability condition for the
       // pet UI, not a reason for Pet to manage/restart the shared model.
-      if (error instanceof LocalBrainApiError && error.retryable) {
+      if (error?.retryable === true) {
         return {
           ok: false,
           unavailable: true,
           reason: 'local-brain-unavailable',
-          petLine: busyPetLine('local-brain-unavailable'),
+          petLine: '花花脑袋刚刚卡了一下……',
           sample: null,
         }
       }
@@ -132,7 +140,7 @@ export class LocalBrain {
 
   async dreamCompletion({ messages, responseFormat }) {
     try {
-      const { payload, requestId } = await this.client.chat({
+      const { payload, requestId } = await chatWithBoundedQueueRetry(this.client, {
         messages,
         reasoningEffort: 'medium',
         temperature: 0.35,
@@ -157,7 +165,7 @@ export class LocalBrain {
         requestId,
       }
     } catch (error) {
-      if (error instanceof LocalBrainApiError && error.retryable) {
+      if (error?.retryable === true) {
         return {
           ok: false,
           unavailable: true,
@@ -171,7 +179,7 @@ export class LocalBrain {
 
   async reflectionCompletion({ messages, responseFormat }) {
     try {
-      const { payload, requestId } = await this.client.chat({
+      const { payload, requestId } = await chatWithBoundedQueueRetry(this.client, {
         messages,
         reasoningEffort: 'low',
         temperature: 0.45,
@@ -191,7 +199,7 @@ export class LocalBrain {
 
       return { ok: true, rawText, requestId }
     } catch (error) {
-      if (error instanceof LocalBrainApiError && error.retryable) {
+      if (error?.retryable === true) {
         return {
           ok: false,
           unavailable: true,

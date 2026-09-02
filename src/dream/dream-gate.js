@@ -1,3 +1,6 @@
+import { normalizeProvenance } from '../memory/memory-provenance.js'
+import { validateDerivedMemorySemantics } from '../memory/semantic-stability.js'
+
 const DREAM_DERIVED_LEVELS = new Set(['soul', 'user', 'fact', 'lesson', 'topic'])
 
 function cleanString(value, max) {
@@ -120,6 +123,30 @@ export class DreamGate {
       }
     }
 
+    const semantic = validateDerivedMemorySemantics(raw, {
+      sourceRows: context?.sourceRows,
+      protectedTerms: context?.protectedTerms,
+    })
+    if (!semantic.approved) {
+      return {
+        status: 'skipped',
+        reason: 'semantic-drift',
+        semantic,
+      }
+    }
+
+    const provenance = normalizeProvenance(raw?.provenance ?? {
+      source: 'DREAM_DERIVED',
+      evidence: 'inferred',
+      sourceIds: candidate.sourceIds,
+    })
+    if (provenance.source !== 'DREAM_DERIVED' || provenance.evidence !== 'inferred') {
+      return {
+        status: 'skipped',
+        reason: 'invalid-provenance',
+      }
+    }
+
     const existing = this.memory.findEquivalentMemory(candidate.content)
 
     if (existing) {
@@ -129,12 +156,14 @@ export class DreamGate {
       }
     }
 
-    const row = this.memory.rememberDreamCandidate(candidate)
+    const row = this.memory.rememberDreamCandidate({ ...candidate, provenance })
 
     return {
       status: 'written',
       row,
       sourceIds: candidate.sourceIds,
+      provenance,
+      semantic,
     }
   }
 }
