@@ -8,9 +8,11 @@ Runtime assets deliberately remain flat under `assets/runtime/`: the package
 asset route serves a strict filename allowlist there. The visual state mapping
 lives in `src/client/pet-sprite-map.js`, where idle uses idle/blink frames,
 thinking uses curious/surprised, happy/excited use playbow/jump, sleep and
-dreaming use the two sleep frames, and walk uses all six walk-right frames.
-Moon, Zzz, question, heart, and sparkle are CSS overlay marks, not replacement
-character artwork.
+dreaming use the two sleep frames, relaxed uses rest frames, waiting uses sit,
+curious/confused use curious/surprised, and walk uses all six walk-right
+frames. Moon, Zzz, dream bubble/stars, question, heart, and sparkle are CSS
+overlay marks, not replacement character artwork. Weighted idle actions may
+briefly select blink, stretch, sleepy, 3q, or sit sprites from this same set.
 
 The five supplied source sheets are preserved as:
 

@@ -4,6 +4,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import { advanceState, createInitialState, interact } from '../src/core/pet-state-engine.js'
+import {
+  advanceEmotion,
+  applyInteractionEmotion,
+  chooseIdleAction,
+  createEmotionState,
+  setDreaming,
+  syncAttachment,
+  visualFeedbackForInteraction,
+} from '../src/client/emotion-state.js'
 import { frameDelayForVisualState, nextVisualFrame, spriteForAnimation } from '../src/client/pet-animation.js'
 import { createPetEnvironment } from '../src/client/pet-environment.js'
 import { DEFAULT_PET_VISUAL_CONFIG, normalizePetVisualConfig, resolvePetVisualState } from '../src/client/pet-visual-state.js'
@@ -76,6 +85,13 @@ function createOverlayHarness(bridge) {
     advanceState,
     createInitialState,
     interact,
+    advanceEmotion,
+    applyInteractionEmotion,
+    chooseIdleAction,
+    createEmotionState,
+    setDreaming,
+    syncAttachment,
+    visualFeedbackForInteraction,
     createPetEnvironment,
     frameDelayForVisualState,
     nextVisualFrame,
@@ -162,6 +178,23 @@ function chatToggle(tree) {
   const harness = createOverlayHarness({ interact: async (kind) => { calls.push(kind); return null } })
   let tree = harness.render()
   const hitbox = petHitbox(tree)
+  hitbox.props.onPointerDown({ clientX: 100, clientY: 100, currentTarget: { setPointerCapture() {} } })
+  harness.runTimers(700)
+  await flushAsyncWork()
+  tree = harness.render()
+  assert.deepEqual(calls, [])
+  assert.equal(tree.props['data-pet-visual-state'], 'relaxed')
+  hitbox.props.onPointerUp({})
+  harness.runTimers(220)
+  await flushAsyncWork()
+  assert.deepEqual(calls, [])
+}
+
+{
+  const calls = []
+  const harness = createOverlayHarness({ interact: async (kind) => { calls.push(kind); return null } })
+  let tree = harness.render()
+  const hitbox = petHitbox(tree)
   hitbox.props.onPointerDown({ clientX: 40, clientY: 50, currentTarget: { setPointerCapture() {} } })
   hitbox.props.onPointerMove({ clientX: 63, clientY: 79 })
   hitbox.props.onPointerUp({})
@@ -199,5 +232,10 @@ function chatToggle(tree) {
 
 assert.match(css, /\.vc-pet-chat-toggle\s*\{[^}]*z-index:\s*5/s)
 assert.match(css, /\.vc-pet-chat-bubble\s*\{[^}]*z-index:\s*5/s)
+assert.match(css, /\.vc-pet-visual-relaxed\s+\.vc-pet-sprite/)
+assert.match(css, /\.vc-pet-visual-waiting\s+\.vc-pet-sprite/)
+assert.match(css, /\.vc-pet-confused-mark\s*\{/)
+assert.match(css, /\.vc-pet-dream-bubble\s*\{/)
+assert.match(css, /\.vc-pet-dream-star\s*\{/)
 
 console.log('VC_AI_PET_V0_3_UI_OVERLAY_INTERACTIONS=PASS')

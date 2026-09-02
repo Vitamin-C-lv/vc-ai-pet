@@ -274,3 +274,46 @@ All UI art remains the supplied Pixel Bernese runtime set. Dream uses the
 existing sleep frames plus CSS-only moon/Zzz decoration; walk cycles through
 the existing six cropped frames and shifts only 11px inside its own wrapper,
 so drag coordinates remain independent.
+
+## VC_AI_PET_V0_3_E Phase 2 — Emotion & Living Interaction Layer
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE2_PASS
+VERSION=0.3.0-alpha.4
+BRANCH=feat/v0.3-ui-presence
+EMOTION_RUNTIME=PASS
+EMOTION_STORAGE=RAM_ONLY
+EMOTION_SOURCES=owner-interaction+time+Dream-flag+existing-attachment
+MODEL_RESPONSE_EMOTION_WRITE=NO
+MEMORY_SCHEMA_CHANGED=NO
+LOCAL_BRAIN_API_CHANGED=NO
+CLICK_FEEDBACK=PASS
+DOUBLE_CLICK_FEEDBACK=PASS
+LONG_PRESS_FEEDBACK=PASS
+INTERACTION_BURST=PASS
+WAITING_STATE=PASS
+IDLE_RANDOM_ACTION=PASS
+DREAM_VISUAL_ENHANCEMENT=PASS
+VISUAL_PRIORITY=dreaming>thinking>excited>happy>relaxed>waiting>confused>curious>sleep>walk>idle
+VISUAL_IDLE=PASS
+VISUAL_HAPPY=PASS
+VISUAL_EXCITED=PASS
+VISUAL_RELAXED=PASS
+VISUAL_WAITING=PASS
+VISUAL_CURIOUS=PASS
+VISUAL_CONFUSED=PASS
+CHAT_BUBBLE_REGRESSION=PASS
+CLICK_REGRESSION=PASS
+DOUBLE_CLICK_REGRESSION=PASS
+DRAG_REGRESSION=PASS
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+PRODUCTION_DB_MODIFIED=NO
+```
+
+Phase 2 keeps emotion values and the bounded 30-second interaction burst in
+browser memory. A long press produces relaxed feedback without adding a host
+interaction write. Waiting is a silent closed-chat state after recent owner
+interaction. Idle actions use one weighted 20–60 second timeout and the
+existing sprites/CSS only; Dream adds a moon, bubble, stars, and Zzz without
+showing concrete dream content.

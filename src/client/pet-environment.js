@@ -30,23 +30,29 @@ export function createPetEnvironment({
   petState = null,
   chatPending = false,
   dreamRunning = false,
+  chatOpen = false,
   visibilityState = defaultVisibility(),
   config = {},
   now = Date.now(),
 } = {}) {
   const visualConfig = normalizePetVisualConfig(config)
-  const lastInteractionAt = timestamp(petState?.lastInteractionAt)
+  const lastInteractionTimestamp = timestamp(petState?.lastInteractionAt)
+  const lastInteractionAt = lastInteractionTimestamp
     ?? timestamp(petState?.bornAt)
     ?? now
   const inactiveForMs = Math.max(0, now - lastInteractionAt)
   const longTimeNoInteraction = inactiveForMs >= visualConfig.inactivitySleepMinutes * 60_000
   const nightTime = isNightTime(now, visualConfig)
+  const recentInteraction = lastInteractionTimestamp !== null
+    && inactiveForMs < visualConfig.waitingAfterInteractionMinutes * 60_000
 
   return {
     nightTime,
     longTimeNoInteraction,
     chatPending: Boolean(chatPending),
     dreamRunning: Boolean(dreamRunning),
+    chatOpen: Boolean(chatOpen),
+    recentInteraction,
     ownerWorking: Boolean(!nightTime && longTimeNoInteraction && visibilityState === 'visible'),
   }
 }

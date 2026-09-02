@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE1_PASS
+Status: FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE2_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -201,3 +201,45 @@ clipboard, files, or any other user data, and it cannot affect Local Brain or
 Dream decisions. `readPresence` is an additive package-private RPC for the
 browser overlay; it exposes only boolean `chatPending` and `dreamRunning`
 flags plus the UI-only visual configuration.
+
+## v0.3-E Phase 2 — Emotion & Living Interaction Layer
+
+The browser overlay now keeps a momentary emotion runtime in React memory. It
+uses only owner interactions, elapsed time, the read-only Dream in-flight flag,
+and the existing attachment value as an initial/refresh hint. The runtime is
+never written to `pet-memory.db`, `state.json`, localStorage, the Local Brain,
+or conversation/memory paths.
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE2_PASS
+EMOTION_RUNTIME=PASS
+CLICK_FEEDBACK=PASS
+DOUBLE_CLICK_FEEDBACK=PASS
+LONG_PRESS_FEEDBACK=PASS
+INTERACTION_BURST=PASS
+WAITING_STATE=PASS
+IDLE_RANDOM_ACTION=PASS
+DREAM_VISUAL_ENHANCEMENT=PASS
+VISUAL_IDLE=PASS
+VISUAL_HAPPY=PASS
+VISUAL_EXCITED=PASS
+VISUAL_RELAXED=PASS
+VISUAL_WAITING=PASS
+VISUAL_CONFUSED=PASS
+CHAT_BUBBLE_REGRESSION=PASS
+CLICK_REGRESSION=PASS
+DOUBLE_CLICK_REGRESSION=PASS
+DRAG_REGRESSION=PASS
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+PRODUCTION_DB_MODIFIED=NO
+MEMORY_SCHEMA_CHANGED=NO
+LOCAL_BRAIN_API_CHANGED=NO
+```
+
+The 30-second burst detector is bounded to happy (1–5), excited (6–15), and
+curious/confused (>15) feedback; it never emits a negative owner judgement.
+Long press is a relaxed visual-only interaction and does not create an extra
+host persistence event. Waiting is silent and appears only when chat is closed
+after a recent interaction. Idle actions are weighted and scheduled by one
+low-frequency timeout in the browser.

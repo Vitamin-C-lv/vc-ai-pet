@@ -49,6 +49,8 @@ assert.deepEqual(inactiveDayEnvironment, {
   longTimeNoInteraction: true,
   chatPending: false,
   dreamRunning: false,
+  chatOpen: false,
+  recentInteraction: false,
   ownerWorking: true,
 })
 
@@ -61,6 +63,21 @@ const inactiveNightEnvironment = createPetEnvironment({
 assert.equal(inactiveNightEnvironment.nightTime, true)
 assert.equal(inactiveNightEnvironment.longTimeNoInteraction, true)
 assert.equal(inactiveNightEnvironment.ownerWorking, false)
+
+const recentClosedEnvironment = createPetEnvironment({
+  petState: { lastInteractionAt: day - 5 * 60_000 },
+  chatOpen: false,
+  visibilityState: 'visible',
+  config,
+  now: day,
+})
+assert.equal(recentClosedEnvironment.recentInteraction, true)
+assert.equal(resolvePetVisualState({
+  petState: { current: 'idle', lastInteractionAt: day - 5 * 60_000 },
+  environment: recentClosedEnvironment,
+  config,
+  now: day,
+}), 'waiting')
 
 const baseState = { current: 'walk', lastInteractionAt: day }
 assert.equal(resolvePetVisualState({
@@ -115,6 +132,24 @@ assert.equal(resolvePetVisualState({
   config,
   now: day + config.happyDurationMs + 1,
 }), 'idle')
+assert.equal(resolvePetVisualState({
+  petState: { current: 'relaxed', lastInteractionAt: day },
+  environment: { nightTime: false, longTimeNoInteraction: false, ownerWorking: false, chatOpen: true },
+  config,
+  now: day,
+}), 'relaxed')
+assert.equal(resolvePetVisualState({
+  petState: { current: 'confused', lastInteractionAt: day },
+  environment: { nightTime: false, longTimeNoInteraction: false, ownerWorking: false, chatOpen: true },
+  config,
+  now: day,
+}), 'confused')
+assert.equal(resolvePetVisualState({
+  petState: { current: 'curious', lastInteractionAt: day },
+  environment: { nightTime: false, longTimeNoInteraction: false, ownerWorking: false, chatOpen: true },
+  config,
+  now: day,
+}), 'curious')
 
 assert.deepEqual(Object.keys(PET_SPRITE_MAP).sort(), [...PET_VISUAL_STATES].sort())
 for (const visualState of PET_VISUAL_STATES) {
@@ -131,6 +166,7 @@ assert.equal(spriteForAnimation('thinking', 1), PET_SPRITE_MAP.thinking[1])
 assert.equal(nextVisualFrame(59), 0)
 assert.equal(frameDelayForVisualState('walk', config), config.walkFrameMs)
 assert.equal(frameDelayForVisualState('thinking', config), config.thinkingPulseMs)
+assert.equal(frameDelayForVisualState('relaxed', config), 900)
 
 const runtime = new PetRuntime({ sandboxRoot: join(root, '.ui-presence-test-unused') })
 runtime.chatInFlight = 1

@@ -4,11 +4,12 @@ import { dirname, join } from 'node:path'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const read = (path) => readFile(join(root, path), 'utf8')
-const [engine, sprites, visualState, environment, spriteMap, animation, overlay, adapter, css, pkg] = await Promise.all([
+const [engine, sprites, visualState, environment, emotionState, spriteMap, animation, overlay, adapter, css, pkg] = await Promise.all([
   read('src/core/pet-state-engine.js'),
   read('src/client/sprite-catalog.js'),
   read('src/client/pet-visual-state.js'),
   read('src/client/pet-environment.js'),
+  read('src/client/emotion-state.js'),
   read('src/client/pet-sprite-map.js'),
   read('src/client/pet-animation.js'),
   read('src/client/pet-overlay.js'),
@@ -24,6 +25,7 @@ const spriteBody = sprites.replace('export const SPRITES', 'const SPRITES')
 const stripImports = (source) => source.replace(/^import[^\n]*\n/gm, '')
 const visualStateBody = stripImports(visualState).replaceAll('export ', '')
 const environmentBody = stripImports(environment).replaceAll('export ', '')
+const emotionStateBody = stripImports(emotionState).replaceAll('export ', '')
 const spriteMapBody = stripImports(spriteMap).replaceAll('export ', '')
 const animationBody = stripImports(animation).replaceAll('export ', '')
 const overlayBody = stripImports(overlay).replace('export function createPetOverlay', 'function createPetOverlay')
@@ -43,6 +45,7 @@ const bundle = [
   indent(spriteBody),
   indent(visualStateBody),
   indent(environmentBody),
+  indent(emotionStateBody),
   indent(spriteMapBody),
   indent(animationBody),
   indent(overlayBody),

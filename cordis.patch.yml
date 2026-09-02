@@ -13,7 +13,15 @@
           inactivitySleepMinutes: 30
           happyDurationMs: 2500
           excitedDurationMs: 1700
+          relaxedDurationMs: 3200
+          confusedDurationMs: 2000
           thinkingPulseMs: 700
           walkFrameMs: 150
+          longPressMs: 700
+          interactionBurstWindowMs: 30000
+          waitingAfterInteractionMinutes: 30
+          idleActionMinMs: 20000
+          idleActionMaxMs: 60000
+          idleActionDurationMs: 1800
           zzzEnabled: true
           ambientMoveEnabled: true

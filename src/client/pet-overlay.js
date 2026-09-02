@@ -1,5 +1,6 @@
 import React from 'react'
 import { advanceState, createInitialState, interact } from '../core/pet-state-engine.js'
+import { advanceEmotion, applyInteractionEmotion, chooseIdleAction, createEmotionState, setDreaming, syncAttachment, visualFeedbackForInteraction } from './emotion-state.js'
 import { createPetEnvironment } from './pet-environment.js'
 import { frameDelayForVisualState, nextVisualFrame, spriteForAnimation } from './pet-animation.js'
 import { DEFAULT_PET_VISUAL_CONFIG, normalizePetVisualConfig, resolvePetVisualState } from './pet-visual-state.js'
@@ -48,33 +49,58 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     const [hostPresence, setHostPresence] = React.useState(emptyPresence)
     const [visualConfig, setVisualConfig] = React.useState(() => normalizePetVisualConfig(DEFAULT_PET_VISUAL_CONFIG))
     const [feedback, setFeedback] = React.useState(null)
+    const [emotion, setEmotion] = React.useState(() => createEmotionState({ attachment: state.attachment }))
+    const [idleAction, setIdleAction] = React.useState(null)
     const [frame, setFrame] = React.useState(0)
     const stateRef = React.useRef(state)
+    const emotionRef = React.useRef(emotion)
     const clickTimer = React.useRef(null)
     const feedbackTimer = React.useRef(null)
+    const longPressTimer = React.useRef(null)
+    const idleActionTimer = React.useRef(null)
+    const idleActionClearTimer = React.useRef(null)
     const presenceInFlight = React.useRef(false)
     const drag = React.useRef(null)
     const now = Date.now()
 
-    const environment = createPetEnvironment({
+    const baseEnvironment = createPetEnvironment({
       petState: state,
       chatPending: chatPending || hostPresence.chatPending,
       dreamRunning: hostPresence.dreamRunning,
+      chatOpen,
       config: visualConfig,
       now,
     })
+    const emotionInteractionAt = Number(emotion.lastInteractionAt)
+    const emotionRecentInteraction = Number.isFinite(emotionInteractionAt)
+      && now >= emotionInteractionAt
+      && now - emotionInteractionAt < visualConfig.waitingAfterInteractionMinutes * 60_000
+    const environment = {
+      ...baseEnvironment,
+      recentInteraction: baseEnvironment.recentInteraction || emotionRecentInteraction,
+    }
     const visual = resolvePetVisualState({
       petState: state,
       environment,
       feedback,
+      emotion,
       config: visualConfig,
       now,
     })
-    const image = `${assetBaseUrl}/${spriteForAnimation(visual, frame)}`
+    const idleActionVisible = idleAction
+      && idleAction.until > now
+      && ['idle', 'waiting', 'curious', 'confused', 'relaxed'].includes(visual)
+      ? idleAction
+      : null
+    const image = `${assetBaseUrl}/${spriteForAnimation(visual, frame, idleActionVisible?.kind)}`
 
     React.useEffect(() => {
       stateRef.current = state
     }, [state])
+
+    React.useEffect(() => {
+      emotionRef.current = emotion
+    }, [emotion])
 
     React.useEffect(() => {
       let alive = true
@@ -86,6 +112,12 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
           stateRef.current = remote
           setState(remote)
           save(remote)
+          if (Number.isFinite(Number(remote.attachment))
+            && Math.abs(Number(emotionRef.current.attachment) - Number(remote.attachment)) > 0.000001) {
+            const nextEmotion = syncAttachment(emotionRef.current, remote.attachment)
+            emotionRef.current = nextEmotion
+            setEmotion(nextEmotion)
+          }
         } catch {
           // The local state remains usable if the host is temporarily absent.
         }
@@ -102,6 +134,11 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
             dreamRunning: presence.dreamRunning === true,
           }
           setHostPresence((current) => samePresence(current, nextPresence) ? current : nextPresence)
+          if (emotionRef.current.dreaming !== nextPresence.dreamRunning) {
+            const nextEmotion = setDreaming(emotionRef.current, nextPresence.dreamRunning)
+            emotionRef.current = nextEmotion
+            setEmotion(nextEmotion)
+          }
           if (presence.visualConfig) {
             const nextConfig = normalizePetVisualConfig(presence.visualConfig)
             setVisualConfig((current) => sameVisualConfig(current, nextConfig) ? current : nextConfig)
@@ -130,11 +167,48 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
         stateRef.current = next
         setState(next)
         save(next)
+        const nextEmotion = advanceEmotion(emotionRef.current, Date.now(), {
+          windowMs: visualConfig.interactionBurstWindowMs,
+        })
+        emotionRef.current = nextEmotion
+        setEmotion(nextEmotion)
         const write = bridge?.writeState?.(next)
         write?.catch?.(() => {})
       }, 10_000)
       return () => globalThis.clearInterval?.(id)
-    }, [bridge])
+    }, [bridge, visualConfig.interactionBurstWindowMs])
+
+    React.useEffect(() => {
+      let alive = true
+
+      function schedule() {
+        if (!alive || typeof globalThis.setTimeout !== 'function') return
+        const minimum = Math.min(visualConfig.idleActionMinMs, visualConfig.idleActionMaxMs)
+        const maximum = Math.max(visualConfig.idleActionMinMs, visualConfig.idleActionMaxMs)
+        const delay = minimum + Math.random() * (maximum - minimum)
+        idleActionTimer.current = globalThis.setTimeout?.(() => {
+          if (!alive) return
+          const kind = chooseIdleAction(Math.random())
+          const until = Date.now() + visualConfig.idleActionDurationMs
+          setIdleAction({ kind, until })
+          if (idleActionClearTimer.current !== null) globalThis.clearTimeout?.(idleActionClearTimer.current)
+          idleActionClearTimer.current = globalThis.setTimeout?.(() => {
+            setIdleAction((current) => current?.until === until ? null : current)
+            idleActionClearTimer.current = null
+          }, visualConfig.idleActionDurationMs) ?? null
+          schedule()
+        }, delay) ?? null
+      }
+
+      schedule()
+      return () => {
+        alive = false
+        if (idleActionTimer.current !== null) globalThis.clearTimeout?.(idleActionTimer.current)
+        if (idleActionClearTimer.current !== null) globalThis.clearTimeout?.(idleActionClearTimer.current)
+        idleActionTimer.current = null
+        idleActionClearTimer.current = null
+      }
+    }, [visualConfig.idleActionMinMs, visualConfig.idleActionMaxMs, visualConfig.idleActionDurationMs])
 
     React.useEffect(() => {
       setFrame(0)
@@ -148,12 +222,17 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     React.useEffect(() => () => {
       if (clickTimer.current !== null) globalThis.clearTimeout?.(clickTimer.current)
       if (feedbackTimer.current !== null) globalThis.clearTimeout?.(feedbackTimer.current)
+      if (longPressTimer.current !== null) globalThis.clearTimeout?.(longPressTimer.current)
     }, [])
 
     function showFeedback(kind) {
       const duration = kind === 'excited'
         ? visualConfig.excitedDurationMs
-        : visualConfig.happyDurationMs
+        : kind === 'relaxed'
+          ? visualConfig.relaxedDurationMs
+          : kind === 'confused' || kind === 'curious'
+            ? visualConfig.confusedDurationMs
+            : visualConfig.happyDurationMs
       const until = Date.now() + duration
       setFeedback({ kind, until })
 
@@ -164,13 +243,30 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       }, duration) ?? null
     }
 
+    function updateEmotion(kind, now = Date.now()) {
+      const next = applyInteractionEmotion(emotionRef.current, kind, {
+        now,
+        windowMs: visualConfig.interactionBurstWindowMs,
+      })
+      emotionRef.current = next
+      setEmotion(next)
+      return next
+    }
+
     async function act(kind = 'pet') {
       const current = stateRef.current
       const next = interact(current, kind)
       stateRef.current = next
       setState(next)
       save(next)
-      showFeedback(kind === 'play' ? 'excited' : 'happy')
+      const emotionKind = kind === 'play' ? 'play' : 'pet'
+      const nextEmotion = updateEmotion(emotionKind)
+      showFeedback(visualFeedbackForInteraction(
+        nextEmotion,
+        emotionKind,
+        Date.now(),
+        visualConfig.interactionBurstWindowMs,
+      ))
 
       try {
         const remote = await bridge?.interact?.(kind)
@@ -183,6 +279,23 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       }
     }
 
+    function clearLongPressTimer() {
+      if (longPressTimer.current !== null) globalThis.clearTimeout?.(longPressTimer.current)
+      longPressTimer.current = null
+    }
+
+    function longPress() {
+      if (!drag.current || drag.current.moved || drag.current.longPressed) return
+      drag.current.longPressed = true
+      const nextEmotion = updateEmotion('long-press')
+      showFeedback(visualFeedbackForInteraction(
+        nextEmotion,
+        'long-press',
+        Date.now(),
+        visualConfig.interactionBurstWindowMs,
+      ))
+    }
+
     function scheduleSingleClick() {
       if (clickTimer.current !== null) globalThis.clearTimeout?.(clickTimer.current)
       clickTimer.current = globalThis.setTimeout?.(() => {
@@ -193,10 +306,12 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     }
 
     function doubleClick() {
+      clearLongPressTimer()
       if (clickTimer.current !== null) {
         globalThis.clearTimeout?.(clickTimer.current)
         clickTimer.current = null
       }
+      if (drag.current) drag.current.longPressed = true
       void act('play')
     }
 
@@ -211,12 +326,15 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       setChatInput('')
       appendChat('user', text)
       setChatPending(true)
+      // This feedback is caused by the owner's send action. It is deliberately
+      // scheduled before the host/model request so an assistant response can
+      // never write emotion state.
+      showFeedback('happy')
 
       try {
         const result = await bridge?.chat?.(text)
         if (result?.ok) {
           appendChat('pet', result.text)
-          showFeedback('happy')
         } else if (result?.unavailable) appendChat('pet', result.petLine || '花花先在旁边等主人。')
         else appendChat('pet', '花花脑袋刚刚卡了一下……')
       } catch {
@@ -227,36 +345,54 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
     }
 
     function down(event) {
+      clearLongPressTimer()
+      if (clickTimer.current !== null) {
+        globalThis.clearTimeout?.(clickTimer.current)
+        clickTimer.current = null
+      }
       drag.current = {
         px: event.clientX,
         py: event.clientY,
         startX: pos.x ?? 0,
         startY: pos.y ?? 0,
         moved: false,
+        longPressed: false,
       }
       event.currentTarget.setPointerCapture?.(event.pointerId)
+      longPressTimer.current = globalThis.setTimeout?.(longPress, visualConfig.longPressMs) ?? null
     }
 
     function move(event) {
       if (!drag.current) return
       const dx = event.clientX - drag.current.px
       const dy = event.clientY - drag.current.py
-      if (Math.abs(dx) + Math.abs(dy) > 5) drag.current.moved = true
+      if (Math.abs(dx) + Math.abs(dy) > 5) {
+        drag.current.moved = true
+        clearLongPressTimer()
+      }
       if (drag.current.moved) {
         setPos({ x: drag.current.startX + dx, y: drag.current.startY + dy })
       }
     }
 
     function up() {
+      clearLongPressTimer()
       const moved = drag.current?.moved
+      const longPressed = drag.current?.longPressed
       drag.current = null
-      if (!moved) scheduleSingleClick()
+      if (!moved && !longPressed) scheduleSingleClick()
+    }
+
+    function cancelPress() {
+      clearLongPressTimer()
+      drag.current = null
     }
 
     const stageClassName = [
       'vc-pet-stage',
       `vc-pet-visual-${visual}`,
       visual === 'walk' && visualConfig.ambientMoveEnabled ? 'vc-pet-ambient-move' : '',
+      idleActionVisible ? `vc-pet-action-${idleActionVisible.kind.replaceAll('_', '-')}` : '',
     ].filter(Boolean).join(' ')
 
     return React.createElement(
@@ -265,6 +401,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
         className: 'vc-pet-overlay-root',
         'data-pet-state': state.current,
         'data-pet-visual-state': visual,
+        'data-pet-idle-action': idleActionVisible?.kind ?? '',
         'data-owner-working': environment.ownerWorking ? 'true' : 'false',
         style: pos.x == null ? undefined : { transform: `translate(${pos.x}px,${pos.y}px)` },
       },
@@ -311,14 +448,18 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
         visual === 'thinking' && React.createElement('span', { className: 'vc-pet-thought-mark', 'aria-hidden': true }, '?'),
         visual === 'happy' && React.createElement('span', { className: 'vc-pet-happy-mark', 'aria-hidden': true }, '♥'),
         visual === 'excited' && React.createElement('span', { className: 'vc-pet-excited-mark', 'aria-hidden': true }, '✦'),
+        visual === 'confused' && React.createElement('span', { className: 'vc-pet-confused-mark', 'aria-hidden': true }, '?'),
         visual === 'sleep' && visualConfig.zzzEnabled && React.createElement('span', { className: 'vc-pet-sleep-z', 'aria-hidden': true }, 'z'),
-        visual === 'dreaming' && visualConfig.zzzEnabled && React.createElement(
+        visual === 'dreaming' && React.createElement(
           'div',
           { className: 'vc-pet-dream-mark', 'aria-hidden': true },
           React.createElement('span', { className: 'vc-pet-dream-moon' }, '☾'),
-          React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-one' }, 'z'),
-          React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-two' }, 'z'),
-          React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-three' }, 'Z'),
+          React.createElement('span', { className: 'vc-pet-dream-bubble' }, '· ·'),
+          React.createElement('span', { className: 'vc-pet-dream-star vc-pet-dream-star-one' }, '✦'),
+          React.createElement('span', { className: 'vc-pet-dream-star vc-pet-dream-star-two' }, '✧'),
+          visualConfig.zzzEnabled && React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-one' }, 'z'),
+          visualConfig.zzzEnabled && React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-two' }, 'z'),
+          visualConfig.zzzEnabled && React.createElement('span', { className: 'vc-pet-dream-z vc-pet-dream-z-three' }, 'Z'),
         ),
         React.createElement(
           'button',
@@ -329,6 +470,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
             onPointerDown: down,
             onPointerMove: move,
             onPointerUp: up,
+            onPointerCancel: cancelPress,
             onDoubleClick: doubleClick,
             'aria-label': '李花花 AI pet',
           },

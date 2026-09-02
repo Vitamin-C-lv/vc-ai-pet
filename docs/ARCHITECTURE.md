@@ -15,3 +15,14 @@ the DSH page visibility state, local chat-pending state, and the additive
 package-private `readPresence` boolean flags. The host reports actual
 `DreamEngine.isInFlight()` without changing Dream scheduling, memory, or the
 Local Brain API. No browser-side environmental label reaches the brain.
+
+## v0.3-E Phase 2 emotion seam
+
+`src/client/emotion-state.js` is a browser-only, momentary telemetry layer.
+Its values are held by the overlay and are never passed to host RPCs, Local
+Brain prompts, Dream/Reflection scheduling, `state.json`, localStorage, or
+`pet-memory.db`. Owner pointer interactions update bounded deltas; elapsed
+time applies only a small decay; Dream presence toggles a presentation flag;
+and the existing attachment is read as a refresh hint. The visual resolver
+remains the single authority for `dreaming > thinking > excited > happy >
+relaxed > waiting > confused > curious > sleep > walk > idle`.
