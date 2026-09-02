@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>李花花 UI Presence Preview</title>
+  <link rel="stylesheet" href="../src/client/pet.css">
+  <style>
+    body { margin: 0; min-height: 100vh; background: #f1f5f9; color: #1e293b; font: 14px/1.45 system-ui, sans-serif; }
+    main { max-width: 920px; margin: auto; padding: 28px 20px 48px; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .intro { margin: 0 0 20px; color: #475569; }
+    .preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 14px; }
+    article { min-height: 188px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 14px; background: #fff; box-shadow: 0 3px 10px rgba(15, 23, 42, .05); }
+    h2 { margin: 0; font-size: 14px; }
+    .caption { min-height: 38px; margin: 4px 0 2px; color: #64748b; font-size: 12px; }
+    .preview .vc-pet-overlay-root { position: relative; right: auto; bottom: auto; display: inline-block; pointer-events: auto; }
+    .preview .vc-pet-hitbox { cursor: default; }
+    .preview .vc-pet-chat-toggle { display: none; }
+    .fake-composer { margin-top: 24px; padding: 13px 16px; border-radius: 12px; background: #fff; color: #94a3b8; box-shadow: 0 2px 8px rgba(15, 23, 42, .08); }
+  </style>
+  <main>
+    <h1>李花花 · UI Presence</h1>
+    <p class="intro">静态预览使用生产 runtime sprites；Dream 的月亮和 Zzz、思考和互动浮标由轻量 CSS 叠加。</p>
+    <section class="preview-grid">
+      <article><h2>idle</h2><p class="caption">低频呼吸</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="idle"><div class="vc-pet-stage vc-pet-visual-idle"><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-idle" src="../assets/runtime/idle-front.png" alt=""></button></div></div></div></article>
+      <article><h2>thinking</h2><p class="caption">等待聊天回复</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="thinking"><div class="vc-pet-stage vc-pet-visual-thinking"><span class="vc-pet-thought-mark" aria-hidden="true">?</span><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-thinking" src="../assets/runtime/curious.png" alt=""></button></div></div></div></article>
+      <article><h2>happy</h2><p class="caption">轻触/回复后</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="happy"><div class="vc-pet-stage vc-pet-visual-happy"><span class="vc-pet-happy-mark" aria-hidden="true">♥</span><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-happy" src="../assets/runtime/playbow.png" alt=""></button></div></div></div></article>
+      <article><h2>excited</h2><p class="caption">双击 play</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="excited"><div class="vc-pet-stage vc-pet-visual-excited"><span class="vc-pet-excited-mark" aria-hidden="true">✦</span><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-excited" src="../assets/runtime/jump.png" alt=""></button></div></div></div></article>
+      <article><h2>sleep</h2><p class="caption">夜间 + 无互动</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="sleep"><div class="vc-pet-stage vc-pet-visual-sleep"><span class="vc-pet-sleep-z" aria-hidden="true">z</span><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-sleep" src="../assets/runtime/sleep-curled.png" alt=""></button></div></div></div></article>
+      <article><h2>dreaming</h2><p class="caption">真实 Dream 运行中</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="dreaming"><div class="vc-pet-stage vc-pet-visual-dreaming"><div class="vc-pet-dream-mark" aria-hidden="true"><span class="vc-pet-dream-moon">☾</span><span class="vc-pet-dream-z vc-pet-dream-z-one">z</span><span class="vc-pet-dream-z vc-pet-dream-z-two">z</span><span class="vc-pet-dream-z vc-pet-dream-z-three">Z</span></div><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-dreaming" src="../assets/runtime/sleep-side.png" alt=""></button></div></div></div></article>
+      <article><h2>walk</h2><p class="caption">局部 11px 走动</p><div class="preview"><div class="vc-pet-overlay-root" data-pet-visual-state="walk"><div class="vc-pet-stage vc-pet-visual-walk vc-pet-ambient-move"><button class="vc-pet-hitbox"><img class="vc-pet-sprite vc-pet-sprite-walk" src="../assets/runtime/walk-right-3.png" alt=""></button></div></div></div></article>
+    </section>
+    <div class="fake-composer">聊天输入区域保持在宠物上方，不被走动动画覆盖。</div>
+  </main>
+</html>

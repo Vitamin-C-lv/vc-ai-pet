@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_V0_3_B_PASS
+Status: FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE1_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -25,7 +25,7 @@ MODEL_TOOL_REGISTERED=NO
 LUNA_REGRESSION=PASS
 TOOL_FOLD_REGRESSION=PASS
 MULTI_DSH_BACKEND_CONCURRENT_WRITE=OUT_OF_SCOPE_V0_1
-CURRENT_COMMIT=fd06df7b75c6736e47a500f0128c68800e1044fa
+CURRENT_COMMIT=UI_RELEASE_COMMIT_RECORDED_IN_GIT
 ```
 
 Interaction acceptance recorded:
@@ -157,3 +157,47 @@ DREAM_RERUN=NO
 Deferred to v0.3-D Phase 2: Reflection Engine, Personality Emergence, and
 Contradiction Detection. These require accumulated real long-term interaction
 data before the next consolidation layer is developed.
+
+## v0.3-E Phase 1 UI / Visual Presence
+
+The overlay now owns a small, presentation-only visual state layer. It keeps
+the existing persistent pet state unchanged and chooses exactly one state in
+this order: `dreaming`, `thinking`, `excited`, `happy`, `sleep`, `walk`, then
+`idle`. Dream status is a read-only report of the actual `DreamEngine`
+in-flight flag; it is never inferred from clock time or written to storage.
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE1_PASS
+VERSION=0.3.0-alpha.4
+VISUAL_STATE_PRIORITY=CENTRALIZED
+VISUAL_IDLE=PASS
+VISUAL_THINKING=PASS
+VISUAL_SLEEP=PASS
+VISUAL_DREAMING=PASS
+VISUAL_HAPPY=PASS
+VISUAL_EXCITED=PASS
+VISUAL_WALK=PASS
+ENV_NIGHT_TIME=PASS
+ENV_LONG_NO_INTERACTION=PASS
+ENV_CHAT_PENDING=PASS
+ENV_DREAM_RUNNING=PASS
+ENV_OWNER_WORKING=PASS
+ENVIRONMENT_CONTENT_READS=NONE
+OVERLAY_INTERACTION_TEST=PASS
+CLIENT_BUNDLE_VERIFY=PASS
+CHAT_BUBBLE_REGRESSION=PASS
+CLICK_REGRESSION=PASS
+DOUBLE_CLICK_REGRESSION=PASS
+DRAG_REGRESSION=PASS
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+```
+
+`ownerWorking` is deliberately only a weak UI label: long pet inactivity,
+daytime, and a visible DSH page. It does not inspect titles, content,
+clipboard, files, or any other user data, and it cannot affect Local Brain or
+Dream decisions. `readPresence` is an additive package-private RPC for the
+browser overlay; it exposes only boolean `chatPending` and `dreamRunning`
+flags plus the UI-only visual configuration.

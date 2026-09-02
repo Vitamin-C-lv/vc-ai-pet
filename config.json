@@ -42,5 +42,16 @@
       "longTermMemoryPerPoll": false,
       "cannedPetLine": "主人好像在忙……为什么不陪花花玩呀？"
     }
+  },
+  "petVisual": {
+    "nightStartHour": 23,
+    "nightEndHour": 6,
+    "inactivitySleepMinutes": 30,
+    "happyDurationMs": 2500,
+    "excitedDurationMs": 1700,
+    "thinkingPulseMs": 700,
+    "walkFrameMs": 150,
+    "zzzEnabled": true,
+    "ambientMoveEnabled": true
   }
 }

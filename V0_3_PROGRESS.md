@@ -238,3 +238,39 @@ The following work is deferred:
 
 Reason: real long-term interaction data must accumulate before these features
 can be designed and evaluated safely.
+
+## VC_AI_PET_V0_3_E Phase 1 — UI / Visual Presence
+
+```text
+FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE1_PASS
+VERSION=0.3.0-alpha.4
+BRANCH=feat/v0.3-ui-presence
+VISUAL_PRIORITY=dreaming>thinking>excited>happy>sleep>walk>idle
+VISUAL_CONFIG=night/inactivity/feedback/thinking/walk/zzz/ambientMove
+READ_ONLY_ENVIRONMENT=system-time+pet-interaction-time+page-visibility+in-memory-request-flags
+USER_CONTENT_READS=0
+DREAM_STATUS=DreamEngine.isInFlight() only
+SCHEDULER_GATE_INFERENCE=NO
+OVERLAY_EVENT_REGRESSION=PASS
+CLIENT_BUNDLE_VERIFY=PASS
+CHAT_BUBBLE_REGRESSION=PASS
+CLICK_REGRESSION=PASS
+DOUBLE_CLICK_REGRESSION=PASS
+DRAG_REGRESSION=PASS
+LUNA_REGRESSION=PASS
+TOOL_FOLD_REGRESSION=PASS
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+```
+
+The browser client adds no new persistent pet fields. It polls a small
+package-private `readPresence` response for the two RAM-only status bits it
+cannot know locally: active pet chat and active Deep Dream. Night and
+inactivity are computed locally from time and the public pet interaction
+timestamp. A visible, inactive daytime DSH page can only make the pet stay
+visually quiet; it is not a work-content detector.
+
+All UI art remains the supplied Pixel Bernese runtime set. Dream uses the
+existing sleep frames plus CSS-only moon/Zzz decoration; walk cycles through
+the existing six cropped frames and shifts only 11px inside its own wrapper,
+so drag coordinates remain independent.

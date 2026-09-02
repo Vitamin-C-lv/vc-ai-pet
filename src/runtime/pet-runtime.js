@@ -127,6 +127,15 @@ export class PetRuntime {
     return JSON.parse(JSON.stringify(this.state))
   }
 
+  // This is intentionally RAM-only presentation telemetry. It does not alter
+  // state, memory, Dream scheduling, or Local Brain requests.
+  presenceSnapshot() {
+    return {
+      chatPending: this.chatInFlight > 0,
+      dreamRunning: this.dreamEngine?.isInFlight?.() === true,
+    }
+  }
+
   identitySnapshot() {
     return JSON.parse(JSON.stringify(this.identity))
   }

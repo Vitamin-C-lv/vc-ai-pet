@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { PetRuntime } from '../runtime/pet-runtime.js';
+import { normalizePetVisualConfig } from '../client/pet-visual-state.js';
 
 export const name = 'vc-ai-pet';
 export const inject = ['connection'];
@@ -23,6 +24,7 @@ export function apply(ctx, rawConfig = {}) {
   const sandboxRoot = resolve(rawConfig.sandboxRoot || DEFAULT_SANDBOX);
   const assetRoot = resolve(rawConfig.assetRoot || DEFAULT_ASSETS);
   const tickMs = Number.isFinite(rawConfig.tickMs) ? Math.max(1_000, rawConfig.tickMs) : 10_000;
+  const visualConfig = normalizePetVisualConfig(rawConfig?.petVisual);
   const runtime = new PetRuntime({ sandboxRoot });
   const ready = runtime.initialize();
   const tick = setInterval(() => {
@@ -33,7 +35,7 @@ export function apply(ctx, rawConfig = {}) {
   ctx.inject(['connection'], (connectionCtx) => {
     connectionCtx.connection.rpc.handle(
       '/vc-ai-pet',
-      async (endpoint, payload) => invoke(runtime, ready, endpoint, payload, ctx.logger),
+      async (endpoint, payload) => invoke(runtime, ready, endpoint, payload, ctx.logger, visualConfig),
       { authority: 'trusted-host' }
     );
   });
@@ -46,11 +48,14 @@ export function apply(ctx, rawConfig = {}) {
   ctx.logger.info(`vc-ai-pet: active (sandbox=${sandboxRoot}, model=on-demand)`);
 }
 
-async function invoke(runtime, ready, method, payload, logger) {
+async function invoke(runtime, ready, method, payload, logger, visualConfig) {
   await ready;
   const args = payload?.args;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return failure('invalid request');
   if (method === 'readState' && Object.keys(args).length === 0) return success(runtime.snapshot());
+  if (method === 'readPresence' && Object.keys(args).length === 0) {
+    return success({ ...runtime.presenceSnapshot(), visualConfig });
+  }
   if (method === 'interact' && Object.keys(args).length === 1 && typeof args.kind === 'string' && ['pet', 'play', 'wake'].includes(args.kind)) {
     return success(await runtime.interact(args.kind));
   }

@@ -21,6 +21,7 @@ function createBridge(connection) {
   };
   return {
     readState: () => call('readState', {}),
+    readPresence: () => call('readPresence', {}),
     interact: (kind) => call('interact', { kind }),
     chat: (userText) => call('chat', { userText })
   };

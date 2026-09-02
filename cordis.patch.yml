@@ -7,3 +7,13 @@
         sandboxRoot: /home/vitamin_c/.local/share/vc-ai-pet/sandbox
         assetRoot: /home/vitamin_c/projects/personal/vc-ai-pet/assets/runtime
         tickMs: 10000
+        petVisual:
+          nightStartHour: 23
+          nightEndHour: 6
+          inactivitySleepMinutes: 30
+          happyDurationMs: 2500
+          excitedDurationMs: 1700
+          thinkingPulseMs: 700
+          walkFrameMs: 150
+          zzzEnabled: true
+          ambientMoveEnabled: true
