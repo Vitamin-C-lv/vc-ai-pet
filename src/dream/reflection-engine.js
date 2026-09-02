@@ -170,9 +170,12 @@ function dedupeRows(rows, excludedIds = new Set()) {
 }
 
 function formatMemoryRow(row) {
+  const sourceSession = row?.source_session ?? 'unknown'
+
   return [
     `[${rowId(row) ?? ''}]`,
     `[${cleanString(row?.level, 16)}]`,
+    `[source_session=${sourceSession}]`,
     `[${row?.created_at ?? row?.updated_at ?? ''}]`,
     `[${row?.importance ?? ''}]`,
     String(row?.content ?? '').trim(),

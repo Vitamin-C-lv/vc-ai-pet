@@ -27,6 +27,7 @@ export const DEEP_DREAM_NIGHT_END_MINUTES = 8 * 60
 export const DEEP_DREAM_DAYTIME_AVAILABILITY_MS = 45 * 60 * 1000
 export const DEEP_DREAM_MIN_BRAIN_AVAILABILITY_MS = DEEP_DREAM_DAYTIME_AVAILABILITY_MS
 export const DEEP_DREAM_SUCCESS_COOLDOWN_MS = 30 * 60 * 1000
+export const AVAILABILITY_PROBE_MIN_INTERVAL_MS = 30 * 1000
 
 export const MICRO_REFLECTION_MIN_INTERVAL_MS = REFLECTION_MIN_INTERVAL_MS
 export const MICRO_REFLECTION_MIN_NEW_RAW_MEMORIES = REFLECTION_MIN_NEW_RAW_MEMORIES
@@ -90,6 +91,8 @@ function isChatBusy(value) {
 }
 
 function parseTimestamp(value) {
+  if (value === null || value === undefined) return null
+
   if (value instanceof Date) {
     const timestamp = value.getTime()
     return Number.isFinite(timestamp) ? timestamp : null
@@ -360,6 +363,7 @@ export class DreamScheduler {
     reflectionIntervalMs = null,
     deepDreamSuccessCooldownMs = null,
     deepDreamCooldownMs = null,
+    availabilityProbeMinIntervalMs = null,
     availableSince = null,
     sleepSince = null,
     lastReflectionAt = null,
@@ -396,6 +400,10 @@ export class DreamScheduler {
       ? Math.max(DEEP_DREAM_SUCCESS_COOLDOWN_MS, Number(requestedDeepCooldown))
       : DEEP_DREAM_SUCCESS_COOLDOWN_MS
 
+    this.availabilityProbeMinIntervalMs = Number.isFinite(Number(availabilityProbeMinIntervalMs))
+      ? Math.max(AVAILABILITY_PROBE_MIN_INTERVAL_MS, Number(availabilityProbeMinIntervalMs))
+      : AVAILABILITY_PROBE_MIN_INTERVAL_MS
+
     // These fields are intentionally not persisted.  PetRuntime owns the
     // durable state; scheduler cooldown is only a local anti-probe debounce.
     this.inFlight = false
@@ -406,6 +414,8 @@ export class DreamScheduler {
     this.availableSince = parseTimestamp(availableSince)
     this.sleepSince = parseTimestamp(sleepSince)
     this.lastObservedState = null
+    this.lastAvailabilityProbeAt = null
+    this.lastAvailabilityResult = null
   }
 
   get dreamInFlight() {
@@ -530,6 +540,22 @@ export class DreamScheduler {
           reason: availability.reason ?? 'owner-busy',
           nextAttemptAt: this.nextAttemptAt,
           ...compactAvailability(availability),
+        }
+      }
+
+      const freshAvailability = await this.#checkAvailability(timestamp, { fresh: true })
+      if (!freshAvailability.available) {
+        const busyAt = now === undefined
+          ? normalizeTime(undefined, this.clock)
+          : timestamp
+        this.nextAttemptAt = Math.max(timestamp, busyAt) + this.ownerBusyCooldownMs
+        return {
+          status: 'deferred-owner-busy',
+          schedulerStatus: 'deferred-owner-busy',
+          due: false,
+          reason: freshAvailability.reason ?? 'owner-busy',
+          nextAttemptAt: this.nextAttemptAt,
+          ...compactAvailability(freshAvailability),
         }
       }
 
@@ -687,6 +713,11 @@ export class DreamScheduler {
         }
       }
 
+      const freshAvailability = await this.#checkAvailability(timestamp, { fresh: true })
+      if (!freshAvailability.available) {
+        return this.#deferOwnerBusy('deep-dream', timestamp, now, freshAvailability)
+      }
+
       this.nextAttemptAt = null
       const runner = resolveRunner(this.run, this.engine)
       if (!runner) throw new Error('PET_DREAM_SCHEDULER_RUN_CONTRACT_MISSING')
@@ -791,6 +822,11 @@ export class DreamScheduler {
         return this.#deferOwnerBusy('reflection', timestamp, now, availability)
       }
 
+      const freshAvailability = await this.#checkAvailability(timestamp, { fresh: true })
+      if (!freshAvailability.available) {
+        return this.#deferOwnerBusy('reflection', timestamp, now, freshAvailability)
+      }
+
       this.nextAttemptAt = null
       const runner = resolveContract(
         this.reflectionRun,
@@ -819,7 +855,24 @@ export class DreamScheduler {
     return this.runReflectionNow(options)
   }
 
-  async #checkAvailability(timestamp) {
+  async #checkAvailability(timestamp, { fresh = false } = {}) {
+    const cachedAt = this.lastAvailabilityProbeAt
+    const cacheIsFresh = !fresh &&
+      cachedAt !== null &&
+      this.lastAvailabilityResult !== null &&
+      timestamp >= cachedAt &&
+      timestamp - cachedAt < this.availabilityProbeMinIntervalMs
+
+    if (cacheIsFresh) {
+      const availability = this.lastAvailabilityResult
+      if (!availability.available) {
+        this.availableSince = null
+      } else if (this.availableSince === null || cachedAt < this.availableSince) {
+        this.availableSince = cachedAt
+      }
+      return availability
+    }
+
     if (!this.brain || typeof this.brain.checkAvailability !== 'function') {
       this.availableSince = null
       return { available: false, reason: 'brain-availability-contract-missing' }
@@ -839,6 +892,9 @@ export class DreamScheduler {
               }
             : { available: false, reason: 'owner-busy' }
 
+      this.lastAvailabilityProbeAt = timestamp
+      this.lastAvailabilityResult = availability
+
       if (!availability.available) {
         // This is the only transition that clears the daytime nap streak.
         this.availableSince = null
@@ -851,9 +907,10 @@ export class DreamScheduler {
       // Availability is a fail-closed resource gate.  Do not start Dream if
       // the shared Local Brain cannot prove that it is available.
       this.availableSince = null
+      this.lastAvailabilityProbeAt = timestamp
+      this.lastAvailabilityResult = { available: false, reason: 'owner-busy' }
+      return this.lastAvailabilityResult
     }
-
-    return { available: false, reason: 'owner-busy' }
   }
 
   #deferOwnerBusy(gate, timestamp, suppliedNow, availability) {

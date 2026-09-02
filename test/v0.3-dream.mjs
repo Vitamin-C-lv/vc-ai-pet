@@ -21,6 +21,7 @@ import {
   DREAM_DERIVED_MAX_PER_BATCH,
   DREAM_RESPONSE_FORMAT,
   DREAM_RELATED_LIMIT,
+  buildDreamMessages,
   DreamEngine,
 } from '../src/dream/dream-engine.js'
 import { DreamGate, validateDreamCandidate } from '../src/dream/dream-gate.js'
@@ -29,11 +30,13 @@ import {
   REFLECTION_DERIVED_MAX_PER_BATCH,
   REFLECTION_RELATED_LIMIT,
   REFLECTION_RESPONSE_FORMAT,
+  buildReflectionMessages,
   ReflectionEngine,
   ReflectionGate,
   validateReflectionCandidate,
 } from '../src/dream/reflection-engine.js'
 import {
+  AVAILABILITY_PROBE_MIN_INTERVAL_MS,
   DREAM_MIN_NEW_MEMORIES,
   DREAM_OLDEST_SOURCE_AGE_MS,
   DREAM_OWNER_BUSY_COOLDOWN_MS,
@@ -58,6 +61,63 @@ const OWNER_BUSY_COOLDOWN_MS = 15 * 60 * 1000
 const NIGHT_NOW = Date.parse('2033-05-18T23:00:00+08:00')
 const DAY_NOW = Date.parse('2033-05-18T12:00:00+08:00')
 const LEVELS = ['soul', 'user', 'project', 'fact', 'lesson', 'topic', 'rules']
+
+{
+  const rawRow = {
+    id: 'prompt-raw',
+    level: 'fact',
+    source_session: 'vc-ai-pet',
+    created_at: NOW,
+    importance: 2,
+    content: 'prompt raw content',
+  }
+  const reflectionRow = {
+    id: 'prompt-reflection',
+    level: 'fact',
+    source_session: 'vc-ai-pet:reflection',
+    created_at: NOW + 1,
+    importance: 2,
+    content: 'prompt reflection content',
+  }
+  const dreamRow = {
+    id: 'prompt-dream',
+    level: 'soul',
+    source_session: 'vc-ai-pet:dream',
+    created_at: NOW + 2,
+    importance: 3,
+    content: 'prompt dream content',
+  }
+  const unknownRow = {
+    id: 'prompt-unknown',
+    level: 'fact',
+    source_session: null,
+    created_at: NOW + 3,
+    importance: 1,
+    content: 'prompt unknown content',
+  }
+
+  const dreamPrompt = buildDreamMessages({
+    newMemories: [rawRow],
+    relatedMemories: [reflectionRow, dreamRow, unknownRow],
+  }).map((message) => message.content).join('\n')
+  const reflectionPrompt = buildReflectionMessages({
+    newMemories: [rawRow],
+    relatedMemories: [reflectionRow, dreamRow, unknownRow],
+  }).map((message) => message.content).join('\n')
+
+  for (const prompt of [dreamPrompt, reflectionPrompt]) {
+    assert.match(prompt, /\[source_session=vc-ai-pet\]/)
+    assert.match(prompt, /\[source_session=vc-ai-pet:reflection\]/)
+    assert.match(prompt, /\[source_session=vc-ai-pet:dream\]/)
+    assert.match(prompt, /\[source_session=unknown\]/)
+    assert.match(prompt, /prompt raw content/)
+    assert.match(prompt, /prompt reflection content/)
+    assert.match(prompt, /prompt dream content/)
+  }
+
+  console.log('SOURCE_SESSION_VISIBLE_TO_DREAM_MODEL=PASS')
+  console.log('SOURCE_SESSION_VISIBLE_TO_REFLECTION_MODEL=PASS')
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -1201,7 +1261,7 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   assert.equal(due.force, false)
   assert.deepEqual(runCalls, [{ force: false }])
   assert.equal(fixture.eligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(fixture.availabilityCalls, 2)
 
   const idle = await scheduler.maybeRun({ state: { current: 'idle' }, now: fixture.now })
   assert.equal(idle.status, 'skipped')
@@ -1291,7 +1351,7 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
   fixture.availability = { available: true, reason: 'available' }
   const retry = await scheduler.maybeRun({ state: { current: 'sleep' }, now: fixture.now })
   assert.equal(retry.schedulerStatus, 'started')
-  assert.equal(fixture.availabilityCalls, 2)
+  assert.equal(fixture.availabilityCalls, 3)
   assert.equal(runCalls.length, 1)
   assert.equal(scheduler.getNextAttemptAt(), null)
 })
@@ -1304,7 +1364,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(forced.schedulerStatus, 'started')
   assert.equal(forced.force, true)
   assert.equal(fixture.eligibilityCalls, 0)
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(fixture.availabilityCalls, 2)
   assert.deepEqual(runCalls, [{ force: true }])
 
   const chatBusy = await scheduler.runNow({ state: { current: 'idle' }, chatInFlight: 1, now: fixture.now })
@@ -1337,7 +1397,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(result.schedulerGate, 'deep-dream')
   assert.equal(result.workflow, 'deep')
   assert.equal(fixture.deepEligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(fixture.availabilityCalls, 2)
   assert.deepEqual(fixture.runCalls, [{ force: false }])
 }
 
@@ -1353,7 +1413,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   })
   assert.equal(result.schedulerStatus, 'started')
   assert.equal(result.schedulerGate, 'deep-dream')
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(fixture.availabilityCalls, 2)
 }
 
 {
@@ -1371,6 +1431,41 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(fixture.deepEligibilityCalls, 1)
   assert.equal(fixture.availabilityCalls, 1)
   assert.equal(fixture.runCalls.length, 0)
+}
+
+{
+  const fixture = microSchedulerFixture({
+    kind: 'deep',
+    initialNow: DAY_NOW,
+    state: { sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+  })
+  const tick = (offset) => fixture.scheduler.maybeRunDeepDream({
+    state: { current: 'sleep', sleepSince: DAY_NOW - DEEP_DREAM_MIN_SLEEP_MS },
+    now: DAY_NOW + offset,
+  })
+
+  const first = await tick(0)
+  assert.equal(first.reason, 'daytime-availability-not-met')
+  assert.equal(fixture.availabilityCalls, 1)
+
+  await tick(10 * 1000)
+  await tick(20 * 1000)
+  assert.equal(fixture.availabilityCalls, 1)
+
+  await tick(AVAILABILITY_PROBE_MIN_INTERVAL_MS)
+  assert.equal(fixture.availabilityCalls, 2)
+
+  const started = await tick(DEEP_DREAM_DAYTIME_AVAILABILITY_MS)
+  assert.equal(started.schedulerStatus, 'started')
+  assert.equal(fixture.availabilityCalls, 4)
+  assert.equal(fixture.runCalls.length, 1)
+  assert.equal(
+    fixture.scheduler.lastAvailabilityProbeAt,
+    DAY_NOW + DEEP_DREAM_DAYTIME_AVAILABILITY_MS,
+  )
+
+  console.log('AUTOMATIC_AVAILABILITY_PROBE_THROTTLED=PASS')
+  console.log('FINAL_INFERENCE_AVAILABILITY_PROBE_FRESH=PASS')
 }
 
 {
@@ -1403,7 +1498,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(first.schedulerGate, 'reflection')
   assert.equal(first.workflow, 'reflection')
   assert.equal(fixture.reflectionEligibilityCalls, 1)
-  assert.equal(fixture.availabilityCalls, 1)
+  assert.equal(fixture.availabilityCalls, 2)
 
   fixture.now = DAY_NOW + REFLECTION_MIN_INTERVAL_MS - 1
   const cooled = await fixture.scheduler.maybeRunReflection({
@@ -1467,7 +1562,7 @@ for (const workflow of ['deep', 'reflection']) {
     : await fixture.scheduler.maybeRunReflection({ state: { current: 'idle' }, now: fixture.now })
   assert.equal(ready.schedulerStatus, 'started')
   assert.equal(ready.workflow, workflow)
-  assert.equal(fixture.availabilityCalls, 2)
+  assert.equal(fixture.availabilityCalls, 3)
   assert.equal(fixture.runCalls.length, 1)
 }
 

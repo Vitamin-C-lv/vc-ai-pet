@@ -205,6 +205,7 @@ function dedupeRows(rows, excludedIds = new Set()) {
 function formatMemoryRow(row) {
   const id = rowId(row) ?? ''
   const level = cleanString(row?.level, 16)
+  const sourceSession = row?.source_session ?? 'unknown'
   const createdAt = row?.created_at ?? row?.updated_at ?? ''
   const importance = row?.importance ?? ''
   const content = String(row?.content ?? '').trim()
@@ -212,6 +213,7 @@ function formatMemoryRow(row) {
   return [
     `[${id}]`,
     `[${level}]`,
+    `[source_session=${sourceSession}]`,
     `[${createdAt}]`,
     `[${importance}]`,
     content,
