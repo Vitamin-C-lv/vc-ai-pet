@@ -1147,7 +1147,13 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   })
   assert.equal(dreamResult.ok, true)
   assert.equal(dreamResult.requestId, 'dream-request')
-  assert.equal(calls.length, 2)
+  const reflectionResult = await brain.reflectionCompletion({
+    messages: [{ role: 'user', content: '只给 reflection JSON' }],
+    responseFormat: REFLECTION_RESPONSE_FORMAT,
+  })
+  assert.equal(reflectionResult.ok, true)
+  assert.equal(reflectionResult.requestId, 'chat-request')
+  assert.equal(calls.length, 3)
   assert.equal(LI_HUAHUA_IDENTITY.schemaVersion, 1)
   assert.equal(LI_HUAHUA_IDENTITY.name, '李花花')
   assert.equal(LI_HUAHUA_IDENTITY.species, 'dog')
@@ -1169,6 +1175,10 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   assert.equal(calls[1].topP, .85)
   assert.equal(calls[1].maxTokens, 1600)
   assert.equal(calls[1].omitMaxTokens, true)
+  assert.equal(calls[2].reasoningEffort, 'off')
+  assert.equal(calls[2].temperature, .45)
+  assert.equal(calls[2].topP, .85)
+  assert.equal(calls[2].maxTokens, 500)
   for (const call of calls) {
     assert.equal(Object.hasOwn(call, 'model'), false)
     assert.equal(Object.hasOwn(call, 'n_ctx'), false)

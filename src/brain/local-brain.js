@@ -186,7 +186,10 @@ export class LocalBrain {
     try {
       const { payload, requestId } = await chatWithBoundedQueueRetry(this.client, {
         messages,
-        reasoningEffort: 'low',
+        // Reflection is a small structured JSON pass. Keep thinking disabled
+        // so the 500-token response budget is reserved for the JSON itself;
+        // the normal Chat and Deep Dream contracts remain unchanged.
+        reasoningEffort: 'off',
         temperature: 0.45,
         topP: 0.85,
         maxTokens: 500,

@@ -275,6 +275,28 @@ local network. It rejects every client except localhost and private IPv4
 (`10/8`, `172.16/12`, `192.168/16`). The mobile page polls every 1.5 seconds;
 it calls the same runtime interaction and chat methods as the desktop overlay.
 
+## Current DSH background Reflection loop hotfix
+
+The DSH-hosted Pet Reflection request was exhausting its 500-token completion
+budget with the Relay's low-thinking profile (`finish_reason=length`), leaving
+the reflection checkpoint unchanged and causing the 10-second host tick to
+retry. Reflection now uses the existing `off` profile so the bounded budget is
+reserved for its structured JSON; normal Chat remains `off`, and Deep Dream
+remains `medium`. Both idle DSH Web instances were reloaded from the working
+tree without restarting llama or Relay. The LAN/state surfaces remained
+available and no Relay activity was observed during the post-reload window.
+
+```text
+REFLECTION_THINKING=OFF
+NORMAL_CHAT_CONTRACT=UNCHANGED
+DEEP_DREAM_CONTRACT=UNCHANGED
+DSH_3082_RELOADED=PASS
+DSH_3080_RELOADED=PASS
+LOCAL_BRAIN_RELAY_RESTARTED=NO
+LLAMA_RESTARTED=NO
+POST_RELOAD_PERIODIC_REQUESTS=0_OBSERVED
+```
+
 ## v0.3-E Current Time Context Hotfix
 
 The Local Brain now receives one ephemeral snapshot of the real local system
