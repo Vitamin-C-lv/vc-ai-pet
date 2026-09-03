@@ -274,3 +274,20 @@ The host-owned LAN listener uses `0.0.0.0:17870` only to accept devices on the
 local network. It rejects every client except localhost and private IPv4
 (`10/8`, `172.16/12`, `192.168/16`). The mobile page polls every 1.5 seconds;
 it calls the same runtime interaction and chat methods as the desktop overlay.
+
+## v0.3-E Current Time Context Hotfix
+
+The Local Brain now receives one ephemeral snapshot of the real local system
+clock on every chat reply. The snapshot contains `currentDate`, `currentTime`,
+`weekday`, `dayPeriod`, and `season`; it is system environment context rather
+than memory or user-provided content. The same provider is reused by the
+presentation layer's night-time check. It is not written to `pet-memory.db`
+and is not passed into Dream or Historical Recall input builders.
+
+```text
+FINAL_STATUS=VC_AI_PET_TIME_CONTEXT_PASS
+TIME_PROVIDER=PASS
+LOCAL_BRAIN_TIME_CONTEXT=PASS
+MEMORY_SCHEMA_CHANGED=NO
+DREAM_CHANGED=NO
+```

@@ -1,4 +1,5 @@
 import { formatHistoricalTime } from '../memory/historical-recall.js'
+import { getCurrentTimeContext } from '../core/time-context.js'
 
 function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : 0 }
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
@@ -7,7 +8,6 @@ function memoryLines(memories = [], limit = 6) {
     `- [${memory.level}] ${String(memory.content).slice(0, 220)} [source=${classifyMemorySource(memory)}] [evidence=${classifyMemoryEvidence(memory)}]`
   )).join('\n')
 }
-function localDateKey(now) { return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
 export { formatHistoricalTime }
 
 export function historicalQuestionAllowsIdentityEvidence(userText) {
@@ -358,19 +358,40 @@ ${provenanceNote}
 
 ${rows || '- 暂无足够相关的历史记录；请诚实表达不确定。'}`
 }
-export function petAgeContext(birthday, now = new Date()) {
+function petAgeContextFromTimeContext(birthday, timeContext) {
   const [birthYear, birthMonth, birthDay] = String(birthday).split('-').map(Number)
-  const currentYear = now.getFullYear(), currentMonth = now.getMonth() + 1, currentDay = now.getDate()
+  const [currentYear, currentMonth, currentDay] = String(timeContext.currentDate).split('-').map(Number)
   const beforeBirthday = currentMonth < birthMonth || (currentMonth === birthMonth && currentDay < birthDay)
   return {
-    today: localDateKey(now),
+    today: timeContext.currentDate,
     age: Math.max(0, currentYear - birthYear - (beforeBirthday ? 1 : 0)),
     isBirthday: currentMonth === birthMonth && currentDay === birthDay,
   }
 }
-export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, now }) {
+
+export function petAgeContext(birthday, now = new Date()) {
+  return petAgeContextFromTimeContext(birthday, getCurrentTimeContext(now))
+}
+
+export function formatTimeContext(timeContext) {
+  return `系统环境时间（TIME_CONTEXT，仅用于当前 Local Brain 回复）：
+当前时间来自系统环境，不是记忆，也不是用户描述。
+不要自行猜测或推算当前时间；回答当前时间问题时只使用下面的系统时间值。
+TIME_CONTEXT_SCOPE=LOCAL_BRAIN_CHAT_ONLY
+TIME_CONTEXT_PERSISTED=NO
+TIME_CONTEXT_DREAM_INPUT=NO
+TIME_CONTEXT_HISTORICAL_RECALL_INPUT=NO
+currentDate: ${timeContext.currentDate}
+currentTime: ${timeContext.currentTime}
+weekday: ${timeContext.weekday}
+dayPeriod: ${timeContext.dayPeriod}
+season: ${timeContext.season}`
+}
+
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, now, timeContext = null }) {
   const birthday = identity?.birthday ?? '2026-08-31'
-  const age = petAgeContext(birthday, now)
+  const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
+  const age = petAgeContextFromTimeContext(birthday, currentTimeContext)
   const system = `你是李花花。
 
 你是一只伯恩山犬，是主人的小宠物。
@@ -393,6 +414,8 @@ export function buildPetMessages({ identity, state, stableRules = [], currentSel
 当前日期：${age.today}
 当前年龄：${age.age}岁
 今天是否生日：${age.isBirthday ? '是' : '否'}
+
+${formatTimeContext(currentTimeContext)}
 
 当前状态：
 ${stateSentence(state)}

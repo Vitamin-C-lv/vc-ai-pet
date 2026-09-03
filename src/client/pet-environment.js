@@ -1,4 +1,5 @@
 import { normalizePetVisualConfig } from './pet-visual-state.js'
+import { getCurrentTimeContext } from '../core/time-context.js'
 
 function timestamp(value) {
   if (value === null || value === undefined || value === '') return null
@@ -12,7 +13,7 @@ function defaultVisibility() {
 
 export function isNightTime(now = Date.now(), config = {}) {
   const visualConfig = normalizePetVisualConfig(config)
-  const hour = new Date(now).getHours()
+  const hour = Number(getCurrentTimeContext(now).currentTime.slice(0, 2))
   const { nightStartHour: start, nightEndHour: end } = visualConfig
 
   if (start === end) return false

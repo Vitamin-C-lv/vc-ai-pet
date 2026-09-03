@@ -3,6 +3,7 @@ import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { buildPetMessages } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
 import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
+import { getCurrentTimeContext } from '../core/time-context.js'
 
 export const LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS = Object.freeze([250, 500, 1000])
 
@@ -27,9 +28,10 @@ async function chatWithBoundedQueueRetry(client, request) {
 }
 
 export class LocalBrain {
-  constructor({ config = {}, memory, client = null }) {
+  constructor({ config = {}, memory, client = null, timeProvider = getCurrentTimeContext }) {
     this.config = validateLocalBrainConfig(config)
     this.memory = memory
+    this.timeProvider = typeof timeProvider === 'function' ? timeProvider : getCurrentTimeContext
     this.client = client ?? new LocalBrainClient({
       baseUrl: this.config.baseUrl,
       healthTimeoutMs: this.config.healthTimeoutMs,
@@ -41,7 +43,8 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async reply({ identity, state, userText, recentMessages = [] }) {
+  async reply({ identity, state, userText, recentMessages = [], now = Date.now() }) {
+    const timeContext = this.timeProvider(now)
     const historicalIntent = detectHistoricalRecallIntent(userText)
     const related = this.memory?.recall?.(userText, 5, {
       bumpHits: !historicalIntent.deep,
@@ -82,6 +85,8 @@ export class LocalBrain {
       historicalRecallContext,
       recentMessages,
       userText,
+      now,
+      timeContext,
     })
 
     // Keep one inference per turn. The same structured response contains the
