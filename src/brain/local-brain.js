@@ -4,6 +4,7 @@ import { buildPetMessages } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
 import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
+import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 
 export const LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS = Object.freeze([250, 500, 1000])
 
@@ -43,12 +44,15 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async reply({ identity, state, userText, recentMessages = [], now = Date.now() }) {
+  async reply({ identity, state, userText, image = null, recentMessages = [], now = Date.now() }) {
+    const ownerText = String(userText ?? '')
+    const visionImage = normalizeVisionImage(image)
+    const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     const timeContext = this.timeProvider(now)
-    const historicalIntent = detectHistoricalRecallIntent(userText)
-    const related = this.memory?.recall?.(userText, 5, {
+    const historicalIntent = detectHistoricalRecallIntent(ownerText)
+    const related = ownerText.trim() ? this.memory?.recall?.(ownerText, 5, {
       bumpHits: !historicalIntent.deep,
-    }) ?? []
+    }) ?? [] : []
     const stableRules = (this.memory?.stableRulesContext?.()
       ?? this.memory?.stableIdentityContext?.()
       ?? []).filter((item) => item?.level === 'rules')
@@ -84,7 +88,8 @@ export class LocalBrain {
       memories: historicalIntent.deep ? [] : relevant.slice(0, 8),
       historicalRecallContext,
       recentMessages,
-      userText,
+      userText: promptText,
+      image: visionImage,
       now,
       timeContext,
     })
@@ -117,7 +122,7 @@ export class LocalBrain {
         })
       }
 
-      const parsed = parseStructuredChatResponse(rawText, userText)
+      const parsed = parseStructuredChatResponse(rawText, promptText)
 
       return {
         ok: true,

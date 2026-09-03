@@ -3,9 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import { basename, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { normalizeVisionImage } from '../brain/vision-input.js'
 
 const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
 const DEFAULT_PORT = 17870
+const DEFAULT_BODY_LIMIT_BYTES = 16 * 1024
+const CHAT_BODY_LIMIT_BYTES = 8 * 1024 * 1024
 const CONTENT_TYPES = Object.freeze({
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -57,17 +60,24 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {} 
         return sendJson(res, 200, presentation)
       }
       if (req.method === 'POST' && url.pathname === '/api/pet/action') {
-        const body = await readJsonBody(req)
+        const body = await readJsonBody(req, DEFAULT_BODY_LIMIT_BYTES)
         const kind = actionToInteractionKind(body?.action, runtime.snapshot())
         if (!kind) return sendJson(res, 400, { error: 'invalid-action' })
         const state = await runtime.interact(kind)
         return sendJson(res, 200, { ok: true, state, ...runtime.presentationSnapshot(visualConfig) })
       }
       if (req.method === 'POST' && url.pathname === '/api/pet/chat') {
-        const body = await readJsonBody(req)
+        const body = await readJsonBody(req, CHAT_BODY_LIMIT_BYTES)
         const message = typeof body?.message === 'string' ? body.message.trim() : ''
-        if (message.length < 1 || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
-        return sendJson(res, 200, await runtime.chat(message))
+        if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
+        let image = null
+        try {
+          image = normalizeVisionImage(body?.image)
+        } catch {
+          return sendJson(res, 400, { error: 'invalid-image' })
+        }
+        if ((message.length < 1 && !image) || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
+        return sendJson(res, 200, await runtime.chat(message, image))
       }
       if (req.method === 'GET') return await serveStatic(url.pathname, assets, res)
       return sendJson(res, 404, { error: 'not-found' })
@@ -119,27 +129,40 @@ async function serveStatic(pathname, assetRoot, res) {
   }
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = DEFAULT_BODY_LIMIT_BYTES) {
   return new Promise((resolveBody, rejectBody) => {
     let body = ''
+    let bodyBytes = 0
+    let settled = false
     req.setEncoding('utf8')
     req.on('data', (chunk) => {
+      if (settled) return
       body += chunk
-      if (body.length > 16_384) {
+      bodyBytes += Buffer.byteLength(chunk, 'utf8')
+      if (bodyBytes > maxBytes) {
         const error = new Error('body too large')
         error.code = 'body-too-large'
+        settled = true
         rejectBody(error)
-        req.destroy()
+        // Stop buffering but drain the request so the caller can still receive
+        // a normal 400 response instead of a connection reset.
+        req.resume()
       }
     })
     req.on('end', () => {
+      if (settled) return
+      settled = true
       try { resolveBody(JSON.parse(body || '{}')) } catch {
         const error = new Error('invalid json')
         error.code = 'invalid-json'
         rejectBody(error)
       }
     })
-    req.on('error', rejectBody)
+    req.on('error', (error) => {
+      if (settled) return
+      settled = true
+      rejectBody(error)
+    })
   })
 }
 

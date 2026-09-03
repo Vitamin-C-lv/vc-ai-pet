@@ -313,3 +313,43 @@ LOCAL_BRAIN_TIME_CONTEXT=PASS
 MEMORY_SCHEMA_CHANGED=NO
 DREAM_CHANGED=NO
 ```
+
+## Vision Input v0.1 — LAN owner-triggered image chat
+
+The LAN companion chat now accepts one owner-selected JPEG, PNG, or WebP per
+turn. The browser downsizes images to a maximum 1920px long edge and exports
+WebP (or JPEG fallback) before sending the additive `image.dataUrl` field to
+the existing `/api/pet/chat` route. The server accepts only approved base64
+image data URLs, keeps the larger body limit scoped to Chat, and never exposes
+filesystem paths or remote URLs.
+
+Vision turns use the existing Local Brain API v1 multimodal message contract
+and exactly one inference. The image is request-only: Recent Conversation
+stores only `[主人发送了一张图片]` plus any actual owner text, and the
+MemoryGate is skipped for vision turns so neither image bytes nor visual
+inferences become Pet memory.
+
+```text
+FINAL_STATUS=VC_AI_PET_VISION_INPUT_V0_1_AUTOMATED_PASS
+LAN_IMAGE_PICKER=PASS
+IMAGE_PREVIEW=PASS
+IMAGE_REMOVE=PASS
+IMAGE_ONLY_CHAT=PASS
+IMAGE_PLUS_TEXT_CHAT=PASS
+LOCAL_BRAIN_VISION=PASS
+MODEL_INFERENCES_PER_CHAT=1
+SUPPORTED_IMAGE_TYPES=JPEG,PNG,WEBP
+MAX_IMAGES_PER_TURN=1
+IMAGE_LONG_EDGE_MAX=1920
+RAW_IMAGE_PERSISTED=NO
+IMAGE_BASE64_IN_RECENT_CONVERSATION=NO
+IMAGE_BASE64_IN_PET_MEMORY=NO
+VISION_DERIVED_MEMORY_WRITE=NO
+TEXT_CHAT_REGRESSION=PASS
+DREAM_REGRESSION=PASS
+HISTORICAL_RECALL_REGRESSION=PASS
+UI_PRESENCE_REGRESSION=PASS
+EMOTION_REGRESSION=PASS
+LAN_COMPANION_REGRESSION=PASS
+MANUAL_REAL_PHOTO_ACCEPTANCE=PENDING
+```

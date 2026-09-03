@@ -22,7 +22,17 @@
       </section>
       <section class="chat" aria-label="和李花花聊天">
         <div id="messages" class="messages"><p class="pet-line">李花花：汪，在呀。</p></div>
-        <form id="chat-form"><input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容"><button type="submit">发送</button></form>
+        <div id="image-preview" class="image-preview" hidden>
+          <img id="image-thumbnail" alt="待发送图片预览">
+          <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
+        </div>
+        <p id="image-status" class="image-status" role="status" aria-live="polite"></p>
+        <form id="chat-form">
+          <button id="image-button" class="image-button" type="button" aria-label="选择图片" title="给花花看一张图片">▧</button>
+          <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+          <input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容">
+          <button id="send-button" type="submit">发送</button>
+        </form>
       </section>
     </main>
     <script src="/mobile.js"></script>

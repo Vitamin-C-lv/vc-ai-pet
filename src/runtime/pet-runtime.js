@@ -14,6 +14,7 @@ import { advanceEmotion, applyInteractionEmotion, createEmotionState, syncAttach
 import { createPetEnvironment } from '../client/pet-environment.js'
 import { normalizePetVisualConfig, resolvePetVisualState } from '../client/pet-visual-state.js'
 import { spriteForAnimation } from '../client/pet-animation.js'
+import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input.js'
 
 const DREAM_MIN_NEW_MEMORIES = 8
 const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
@@ -246,22 +247,33 @@ export class PetRuntime {
     return { kind: feedback.kind, until: Number(feedback.at) + duration }
   }
 
-  async chat(userText) {
+  async chat(userText, image = null) {
+    const ownerText = String(userText ?? '')
+    const visionImage = normalizeVisionImage(image)
+    const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     this.chatInFlight += 1
 
     try {
       const result = await this.brain.reply({
         identity: this.identitySnapshot(),
         state: this.snapshot(),
-        userText,
+        userText: promptText,
+        image: visionImage,
         recentMessages: this.conversation.messages(),
       })
 
       if (!result?.ok) return result
 
-      const gate = this.memoryGate.consider(userText, result.rawMemoryCandidate ?? result.memoryCandidate)
+      const gate = visionImage
+        ? { status: 'skipped', reason: 'vision-input' }
+        : ownerText.trim()
+          ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate)
+          : { status: 'skipped', reason: 'empty-message' }
 
-      this.conversation.append(userText, result.text)
+      const recentUserText = visionImage
+        ? `[主人发送了一张图片]${ownerText.trim() ? ` ${ownerText.trim()}` : ''}`
+        : ownerText
+      this.conversation.append(recentUserText, result.text)
 
       // Never expose the candidate/evidence or internal gate details to the
       // browser. UI receives the same public reply shape as v0.2-C.

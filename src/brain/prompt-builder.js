@@ -1,5 +1,6 @@
 import { formatHistoricalTime } from '../memory/historical-recall.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
+import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 
 function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : 0 }
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
@@ -388,7 +389,8 @@ dayPeriod: ${timeContext.dayPeriod}
 season: ${timeContext.season}`
 }
 
-export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, now, timeContext = null }) {
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, now, timeContext = null }) {
+  const visionImage = normalizeVisionImage(image)
   const birthday = identity?.birthday ?? '2026-08-31'
   const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
   const age = petAgeContextFromTimeContext(birthday, currentTimeContext)
@@ -442,12 +444,20 @@ ${formatConversationEvidenceBoundary(recentMessages)}
 主人当前这一句话始终是 messages 中最后一个 user message。
 
 只根据这些信息自然回应主人。`
+  const text = String(userText ?? '').slice(0, 1200)
+  const userContent = visionImage
+    ? [
+      { type: 'text', text: text || VISION_ONLY_MESSAGE },
+      { type: 'image_url', image_url: { url: visionImage.dataUrl } },
+    ]
+    : text
+
   return [
     { role: 'system', content: system },
     ...recentConversationMessages(recentMessages),
     {
       role: 'user',
-      content: String(userText ?? '').slice(0, 1200),
+      content: userContent,
     },
   ]
 }

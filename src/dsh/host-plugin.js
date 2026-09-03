@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { PetRuntime } from '../runtime/pet-runtime.js';
 import { normalizePetVisualConfig } from '../client/pet-visual-state.js';
 import { startLanServer } from '../remote/lan-server.js';
+import { normalizeVisionImage } from '../brain/vision-input.js';
 
 export const name = 'vc-ai-pet';
 export const inject = ['connection'];
@@ -67,11 +68,17 @@ async function invoke(runtime, ready, method, payload, logger, visualConfig) {
   if (method === 'interact' && Object.keys(args).length === 1 && typeof args.kind === 'string' && ['pet', 'play', 'wake', 'long-press'].includes(args.kind)) {
     return success(await runtime.interact(args.kind));
   }
-  if (method === 'chat' && Object.keys(args).length === 1 && typeof args.userText === 'string') {
+  if (method === 'chat' && typeof args.userText === 'string' && Object.keys(args).every((key) => ['userText', 'image'].includes(key))) {
     const text = args.userText.trim();
-    if (text.length < 1 || text.length > 500) return failure('invalid request');
+    let image = null;
     try {
-      return success(await runtime.chat(text));
+      image = normalizeVisionImage(args.image);
+    } catch {
+      return failure('invalid request');
+    }
+    if ((text.length < 1 && !image) || text.length > 500) return failure('invalid request');
+    try {
+      return success(await runtime.chat(text, image));
     } catch {
       logger?.warn?.('vc-ai-pet: local brain request failed');
       return success({ ok: false, unavailable: false, reason: 'local-brain-error', petLine: '花花脑袋刚刚卡了一下……' });
