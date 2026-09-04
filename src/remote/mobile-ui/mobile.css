@@ -1,14 +1,520 @@
-:root { color-scheme: light; font-family: ui-rounded, "PingFang SC", system-ui, sans-serif; color: #4a392e; background: #f5eee3; }
-* { box-sizing: border-box; }
-body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 50% 0, #fffdf8, #f5eee3 58%); }
-.pet-page { width: min(100%, 540px); min-height: 100vh; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom)); }
-header { display: flex; align-items: center; justify-content: center; gap: 9px; margin-bottom: 18px; }
-h1 { margin: 0; font-size: 24px; letter-spacing: .08em; } .paw { font-size: 22px; } #connection { color: #b9b0a7; font-size: 13px; } #connection.online { color: #71a773; }
-.pet-card { text-align: center; padding: 22px 16px 18px; border: 1px solid #eadccd; border-radius: 26px; background: rgba(255,255,255,.66); box-shadow: 0 10px 30px rgba(88,63,41,.08); }
-.sprite-wrap { display: grid; min-height: 230px; place-items: center; } #pet-sprite { width: min(72vw, 270px); image-rendering: pixelated; object-fit: contain; transition: transform .2s ease; } #pet-sprite.active { transform: scale(1.04); }
-#state-label { margin: 4px 0 12px; font-weight: 700; } .emotion { display: flex; justify-content: center; gap: 20px; font-size: 14px; color: #806b5d; } .emotion b { color: #5e4434; }
-.interaction { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; } button { min-height: 45px; border: 0; border-radius: 14px; background: #b77b54; color: white; font: inherit; font-weight: 700; cursor: pointer; } button:active { transform: translateY(1px); background: #9d6240; } button:disabled { opacity: .55; }
-.chat { overflow: hidden; border: 1px solid #eadccd; border-radius: 20px; background: #fffdf9; } .messages { min-height: 105px; max-height: 220px; padding: 12px 14px; overflow-y: auto; } .messages p { margin: 0 0 8px; line-height: 1.45; } .messages .user-line { color: #876046; text-align: right; } .messages .pet-line { color: #4a392e; }
-.image-preview { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; } .image-preview[hidden] { display: none; } .image-preview img { width: 58px; height: 58px; border: 1px solid #dfcdbd; border-radius: 10px; object-fit: cover; } .remove-image { min-width: 30px; min-height: 30px; padding: 0; border-radius: 50%; background: #806b5d; font-size: 20px; line-height: 1; } .image-status { min-height: 18px; margin: 4px 12px 0; color: #806b5d; font-size: 12px; }
-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #f0e6db; } input { min-width: 0; flex: 1; border: 1px solid #dfcdbd; border-radius: 12px; padding: 10px 12px; font: inherit; } form button { min-width: 62px; min-height: 40px; } form .image-button { min-width: 42px; width: 42px; padding: 0; font-size: 22px; background: #d0a27f; } form .image-button:active { background: #b77b54; } form .image-button:disabled { opacity: .55; } form #send-button { min-width: 62px; }
-.message { margin: 0 0 10px; line-height: 1.45; } .message:last-child { margin-bottom: 0; } .message-label { margin-bottom: 3px; font-size: 12px; font-weight: 700; opacity: .72; } .message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; } .user-line { margin-left: auto; text-align: right; } .pet-line { text-align: left; } .image-card { display: inline-flex; max-width: min(256px, 72vw); margin-top: 5px; padding: 3px; border: 1px solid #dfcdbd; border-radius: 13px; background: #fff; box-shadow: 0 3px 10px rgba(88,63,41,.08); } .image-card img { display: block; width: auto; max-width: 256px; max-height: 256px; border-radius: 10px; object-fit: cover; } .user-line .image-card { margin-left: auto; } .messages:empty { display: none; }
+:root {
+  color-scheme: light;
+  font-family: ui-rounded, "PingFang SC", system-ui, sans-serif;
+  color: #4a392e;
+  background: #f5eee3;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  width: 100%;
+  height: 100dvh;
+  min-height: 100svh;
+  margin: 0;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 0, #fffdf8, #f5eee3 58%);
+}
+
+/* Full-screen app shell. The legacy class remains supported while the
+   shell-specific .pet-app class is adopted by the split-view DOM. */
+.pet-app,
+.pet-page {
+  width: min(100%, 540px);
+  height: 100dvh;
+  min-height: 100svh;
+  margin: 0 auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-header,
+header {
+  display: flex;
+  flex: 0 0 54px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 54px;
+  min-height: 54px;
+  margin: 0;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.paw {
+  flex: 0 0 auto;
+  font-size: 22px;
+  line-height: 1;
+}
+
+#connection {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #b9b0a7;
+  font-size: 13px;
+  line-height: 1;
+}
+
+#connection.online {
+  color: #71a773;
+}
+
+.view-host {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.app-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.app-view[hidden] {
+  display: none;
+}
+
+/* Play owns the available height but does not scroll on a normal phone. */
+#play-view,
+.play-view {
+  gap: 12px;
+  padding: 12px 14px 10px;
+  overflow: hidden;
+}
+
+.play-view .pet-card,
+#play-view .pet-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px 10px;
+  text-align: center;
+  border: 1px solid #eadccd;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, .66);
+  box-shadow: 0 10px 30px rgba(88, 63, 41, .08);
+}
+
+.pet-card {
+  text-align: center;
+  border: 1px solid #eadccd;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, .66);
+  box-shadow: 0 10px 30px rgba(88, 63, 41, .08);
+}
+
+.sprite-wrap {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  place-items: center;
+}
+
+#pet-sprite {
+  width: auto;
+  height: auto;
+  max-width: min(78vw, 340px);
+  max-height: 100%;
+  image-rendering: pixelated;
+  object-fit: contain;
+  transition: transform .2s ease;
+}
+
+#pet-sprite.active {
+  transform: scale(1.04);
+}
+
+#state-label {
+  flex: 0 0 auto;
+  margin: 2px 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.emotion {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  gap: 20px;
+  min-height: 18px;
+  color: #806b5d;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.emotion b {
+  color: #5e4434;
+}
+
+.play-view .interaction,
+#play-view .interaction {
+  display: grid;
+  flex: 0 0 56px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  height: 56px;
+  min-height: 56px;
+  margin: 0;
+}
+
+button {
+  min-height: 45px;
+  border: 0;
+  border-radius: 14px;
+  background: #b77b54;
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:active {
+  transform: translateY(1px);
+  background: #9d6240;
+}
+
+button:disabled {
+  opacity: .55;
+}
+
+.interaction button {
+  height: 56px;
+  min-height: 56px;
+  border-radius: 16px;
+  font-size: 16px;
+}
+
+/* Chat is a flex column; its message list is the only regular scroll owner. */
+#chat-view,
+.chat-view {
+  gap: 0;
+  padding: 6px 12px 8px;
+  overflow: hidden;
+}
+
+.chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #eadccd;
+  border-radius: 22px;
+  background: #fffdf9;
+}
+
+.messages {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  padding: 14px 14px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.messages p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.messages > p {
+  max-width: 88%;
+  margin-bottom: 12px;
+}
+
+.message {
+  max-width: 88%;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.message:last-child {
+  margin-bottom: 0;
+}
+
+.message-label {
+  margin-bottom: 3px;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  opacity: .72;
+}
+
+.message-text {
+  margin: 0;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.user-line,
+.messages .user-line {
+  margin-left: auto;
+  text-align: right;
+  color: #876046;
+}
+
+.message.pet-line,
+.messages .pet-line {
+  margin-right: auto;
+  text-align: left;
+  color: #4a392e;
+}
+
+.image-card {
+  display: inline-flex;
+  max-width: min(280px, 78vw);
+  margin-top: 5px;
+  padding: 3px;
+  border: 1px solid #dfcdbd;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(88, 63, 41, .08);
+}
+
+.image-card img {
+  display: block;
+  width: auto;
+  max-width: 280px;
+  max-height: 280px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.user-line .image-card {
+  margin-left: auto;
+}
+
+.messages:empty {
+  display: none;
+}
+
+/* The tray is a compact flex item above the composer and vanishes when empty. */
+.image-preview {
+  display: flex;
+  flex: 0 0 72px;
+  align-items: center;
+  gap: 8px;
+  height: 72px;
+  min-height: 72px;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.image-preview[hidden] {
+  display: none;
+}
+
+.image-preview img,
+#image-thumbnail {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  border: 1px solid #dfcdbd;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.remove-image,
+#remove-image {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: #806b5d;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.image-status,
+#image-status {
+  display: none;
+  flex: 0 0 18px;
+  min-height: 18px;
+  margin: 0 12px;
+  color: #806b5d;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.image-status:not(:empty),
+#image-status:not(:empty) {
+  display: block;
+}
+
+#chat-form {
+  display: flex;
+  flex: 0 0 64px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 64px;
+  min-height: 64px;
+  padding: 9px 10px;
+  border-top: 1px solid #f0e6db;
+}
+
+#image-input[hidden] {
+  display: none;
+}
+
+#chat-input {
+  flex: 1;
+  min-width: 0;
+  height: 46px;
+  min-height: 46px;
+  border: 1px solid #dfcdbd;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+#image-button,
+#chat-form .image-button {
+  flex: 0 0 46px;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  border-radius: 14px;
+  background: #d0a27f;
+  font-size: 22px;
+}
+
+#image-button:active,
+#chat-form .image-button:active {
+  background: #b77b54;
+}
+
+#send-button {
+  flex: 0 0 64px;
+  width: 64px;
+  min-width: 64px;
+  height: 46px;
+  min-height: 46px;
+}
+
+/* The nav is outside both views, so it cannot cover the composer. */
+#bottom-nav,
+.bottom-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  height: calc(58px + env(safe-area-inset-bottom));
+  min-height: calc(58px + env(safe-area-inset-bottom));
+  padding: 0 8px env(safe-area-inset-bottom);
+  overflow: hidden;
+  border-top: 1px solid #eadccd;
+  background: #fffdf9;
+  box-shadow: 0 -3px 12px rgba(88, 63, 41, .04);
+}
+
+.nav-item {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 48px;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: 14px;
+  background: transparent;
+  color: #806b5d;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.nav-item.active,
+.nav-item[aria-selected="true"] {
+  background: rgba(183, 123, 84, .12);
+  color: #8f5838;
+  font-weight: 700;
+}
+
+.nav-item:active {
+  background: rgba(183, 123, 84, .18);
+}
+
+.nav-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.nav-label {
+  line-height: 1.2;
+}
+
+@media (max-height: 620px) {
+  .play-view .pet-card,
+  #play-view .pet-card {
+    padding: 8px 10px;
+  }
+
+  .play-view .interaction,
+  #play-view .interaction {
+    flex-basis: 50px;
+    height: 50px;
+    min-height: 50px;
+  }
+
+  .play-view .interaction button,
+  #play-view .interaction button {
+    height: 50px;
+    min-height: 50px;
+  }
+
+  #pet-sprite {
+    max-width: min(70vw, 300px);
+  }
+}

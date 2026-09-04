@@ -1,29 +1,75 @@
-const stateLabel = document.querySelector('#state-label')
-const sprite = document.querySelector('#pet-sprite')
-const happiness = document.querySelector('#happiness')
-const energy = document.querySelector('#energy')
-const connection = document.querySelector('#connection')
-const messages = document.querySelector('#messages')
-const form = document.querySelector('#chat-form')
-const input = document.querySelector('#chat-input')
-const sendButton = document.querySelector('#send-button')
-const imageButton = document.querySelector('#image-button')
-const imageInput = document.querySelector('#image-input')
-const imagePreview = document.querySelector('#image-preview')
-const imageThumbnail = document.querySelector('#image-thumbnail')
-const removeImage = document.querySelector('#remove-image')
-const imageStatus = document.querySelector('#image-status')
+let stateLabel
+let sprite
+let happiness
+let energy
+let connection
+let messages
+let form
+let input
+let sendButton
+let imageButton
+let imageInput
+let imagePreview
+let imageThumbnail
+let removeImage
+let imageStatus
+let playView
+let chatView
+let tabButtons = []
 
 const MAX_LONG_EDGE = 1920
 const THUMBNAIL_MAX_EDGE = 256
 const IMAGE_QUALITY = 0.9
 const MAX_IMAGE_DATA_URL_BYTES = 7 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const ACTIVE_TAB_STORAGE_KEY = 'vc-ai-pet-mobile-active-tab-v1'
+const DEFAULT_ACTIVE_TAB = 'play'
+const VALID_TABS = new Set(['play', 'chat'])
 let selectedImage = null
 let imageProcessing = false
+let pressTimer = null
+let clickTimer = null
 
 function setOnline(online) { connection.classList.toggle('online', online); connection.setAttribute('aria-label', online ? '已同步' : '同步中') }
 function number(value) { return `${Math.round(Number(value || 0) * 100)}%` }
+
+function readStoredTab() {
+  try {
+    const storedTab = globalThis.localStorage?.getItem(ACTIVE_TAB_STORAGE_KEY)
+    return VALID_TABS.has(storedTab) ? storedTab : DEFAULT_ACTIVE_TAB
+  } catch {
+    return DEFAULT_ACTIVE_TAB
+  }
+}
+
+function persistActiveTab(tab) {
+  try { globalThis.localStorage?.setItem(ACTIVE_TAB_STORAGE_KEY, tab) } catch {
+    // Private browsing and disabled storage must not prevent the app from starting.
+  }
+}
+
+function setActiveTab(tab, { persist = true } = {}) {
+  const activeTab = VALID_TABS.has(tab) ? tab : DEFAULT_ACTIVE_TAB
+  if (playView) playView.hidden = activeTab !== 'play'
+  if (chatView) chatView.hidden = activeTab !== 'chat'
+  tabButtons.forEach((button) => {
+    const isActive = button.dataset.tab === activeTab
+    button.classList.toggle('active', isActive)
+    button.setAttribute('aria-selected', String(isActive))
+  })
+  if (persist) persistActiveTab(activeTab)
+  return activeTab
+}
+
+function restoreActiveTab() {
+  return setActiveTab(readStoredTab(), { persist: false })
+}
+
+function scrollMessagesToBottom() {
+  if (!messages) return
+  messages.scrollTop = messages.scrollHeight
+}
+
 function renderMessage({ role, text = '', attachment = null } = {}) {
   const node = document.createElement('article')
   node.className = `message ${role === 'user' ? 'user-line' : 'pet-line'}`
@@ -55,7 +101,6 @@ function renderMessage({ role, text = '', attachment = null } = {}) {
   }
 
   messages.append(node)
-  messages.scrollTop = messages.scrollHeight
   return node
 }
 
@@ -206,6 +251,10 @@ async function loadHistory() {
     const history = Array.isArray(payload) ? payload : payload?.messages
     if (!Array.isArray(history)) throw new Error('invalid history')
     renderHistory(history)
+    const chatWasHidden = chatView?.hidden
+    if (chatWasHidden) chatView.hidden = false
+    scrollMessagesToBottom()
+    if (chatWasHidden) chatView.hidden = true
     setOnline(true)
   } catch { setOnline(false) }
 }
@@ -237,59 +286,96 @@ async function action(action) {
   } catch { setOnline(false) }
 }
 
-document.querySelector('#pet-button').addEventListener('click', () => action('click'))
-document.querySelector('#play-button').addEventListener('click', () => action('double_click'))
-document.querySelector('#long-button').addEventListener('click', () => action('long_press'))
-imageButton.addEventListener('click', () => imageInput.click())
-imageInput.addEventListener('change', () => { void chooseImage() })
-removeImage.addEventListener('click', () => clearImageSelection())
-input.addEventListener('input', updateSendButton)
+function bindDom() {
+  stateLabel = document.querySelector('#state-label')
+  sprite = document.querySelector('#pet-sprite')
+  happiness = document.querySelector('#happiness')
+  energy = document.querySelector('#energy')
+  connection = document.querySelector('#connection')
+  messages = document.querySelector('#messages')
+  form = document.querySelector('#chat-form')
+  input = document.querySelector('#chat-input')
+  sendButton = document.querySelector('#send-button')
+  imageButton = document.querySelector('#image-button')
+  imageInput = document.querySelector('#image-input')
+  imagePreview = document.querySelector('#image-preview')
+  imageThumbnail = document.querySelector('#image-thumbnail')
+  removeImage = document.querySelector('#remove-image')
+  imageStatus = document.querySelector('#image-status')
+  playView = document.querySelector('#play-view')
+  chatView = document.querySelector('#chat-view')
+  tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
 
-let pressTimer = null
-let clickTimer = null
-sprite.addEventListener('pointerdown', () => { pressTimer = setTimeout(() => { pressTimer = null; action('long_press') }, 700) })
-sprite.addEventListener('pointerup', () => {
-  if (!pressTimer) return
-  clearTimeout(pressTimer); pressTimer = null
-  if (clickTimer) clearTimeout(clickTimer)
-  clickTimer = setTimeout(() => { clickTimer = null; action('click') }, 220)
-})
-sprite.addEventListener('pointercancel', () => { if (pressTimer) clearTimeout(pressTimer); pressTimer = null })
-sprite.addEventListener('dblclick', () => {
-  if (pressTimer) clearTimeout(pressTimer); pressTimer = null
-  if (clickTimer) clearTimeout(clickTimer); clickTimer = null
-  action('double_click')
-})
+  tabButtons.forEach((button) => {
+    button.addEventListener('click', () => setActiveTab(button.dataset.tab))
+  })
 
-form.addEventListener('submit', async (event) => {
-  event.preventDefault()
-  if (imageProcessing) return
-  const message = input.value.trim()
-  const pendingImage = selectedImage
-  if (!message && !pendingImage) return
+  document.querySelector('#pet-button').addEventListener('click', () => action('click'))
+  document.querySelector('#play-button').addEventListener('click', () => action('double_click'))
+  document.querySelector('#long-button').addEventListener('click', () => action('long_press'))
+  imageButton.addEventListener('click', () => imageInput.click())
+  imageInput.addEventListener('change', () => { void chooseImage() })
+  removeImage.addEventListener('click', () => clearImageSelection())
+  input.addEventListener('input', updateSendButton)
 
-  input.value = ''
-  input.disabled = true
-  imageButton.disabled = true
-  sendButton.disabled = true
-  try {
-    const attachment = pendingImage ? await uploadImage(pendingImage) : null
-    line('user', message, attachment)
-    const body = { message }
-    if (attachment) body.attachmentId = attachment.id
-    const response = await fetch('/api/pet/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-    const result = await response.json()
-    if (!response.ok) throw new Error(result?.error || 'chat unavailable')
-    line('pet', result?.ok ? result.text : (result?.petLine || '花花脑袋刚刚卡了一下……'))
-  } catch { line('pet', '花花脑袋刚刚卡了一下……'); setOnline(false) } finally {
-    input.disabled = false
-    imageButton.disabled = false
-    clearImageSelection()
-    input.focus()
-    updateSendButton()
-    refresh()
-  }
-})
+  sprite.addEventListener('pointerdown', () => { pressTimer = setTimeout(() => { pressTimer = null; action('long_press') }, 700) })
+  sprite.addEventListener('pointerup', () => {
+    if (!pressTimer) return
+    clearTimeout(pressTimer); pressTimer = null
+    if (clickTimer) clearTimeout(clickTimer)
+    clickTimer = setTimeout(() => { clickTimer = null; action('click') }, 220)
+  })
+  sprite.addEventListener('pointercancel', () => { if (pressTimer) clearTimeout(pressTimer); pressTimer = null })
+  sprite.addEventListener('dblclick', () => {
+    if (pressTimer) clearTimeout(pressTimer); pressTimer = null
+    if (clickTimer) clearTimeout(clickTimer); clickTimer = null
+    action('double_click')
+  })
 
-updateSendButton()
-refresh(); loadHistory(); setInterval(refresh, 1500)
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    if (imageProcessing) return
+    const message = input.value.trim()
+    const pendingImage = selectedImage
+    if (!message && !pendingImage) return
+
+    input.value = ''
+    input.disabled = true
+    imageButton.disabled = true
+    sendButton.disabled = true
+    try {
+      const attachment = pendingImage ? await uploadImage(pendingImage) : null
+      line('user', message, attachment)
+      scrollMessagesToBottom()
+      const body = { message }
+      if (attachment) body.attachmentId = attachment.id
+      const response = await fetch('/api/pet/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result?.error || 'chat unavailable')
+      line('pet', result?.ok ? result.text : (result?.petLine || '花花脑袋刚刚卡了一下……'))
+      scrollMessagesToBottom()
+    } catch {
+      line('pet', '花花脑袋刚刚卡了一下……')
+      scrollMessagesToBottom()
+      setOnline(false)
+    } finally {
+      input.disabled = false
+      imageButton.disabled = false
+      clearImageSelection()
+      input.focus()
+      updateSendButton()
+      refresh()
+    }
+  })
+}
+
+function startApp() {
+  bindDom()
+  restoreActiveTab()
+  updateSendButton()
+  refresh()
+  loadHistory()
+  setInterval(refresh, 1500)
+}
+
+startApp()

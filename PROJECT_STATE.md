@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_CONVERSATION_PERSISTENCE_PASS
+Status: FINAL_STATUS=VC_AI_PET_MOBILE_APP_SHELL_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -417,6 +417,50 @@ HISTORICAL_RECALL=UNCHANGED
 LOCAL_BRAIN_API=UNCHANGED
 EMOTION_RUNTIME=UNCHANGED
 ```
+
+## v0.3-F — Mobile App Shell / Chat & Play Split
+
+The LAN companion mobile page now uses a full-screen two-view app shell. Play
+and Chat are mutually exclusive views under one global header, with a normal
+content bottom navigation. The selected tab is restored from
+`vc-ai-pet-mobile-active-tab-v1`; missing or invalid values default to Play.
+Tab changes only update DOM visibility and selection state, so chat drafts,
+selected image previews, message scroll position, and pet presentation state
+remain intact. Chat fills the active area and assigns scrolling only to the
+message list; the old 220px message cap is removed.
+
+```text
+FINAL_STATUS=VC_AI_PET_MOBILE_APP_SHELL_PASS
+APP_SHELL=PASS
+PLAY_VIEW=PASS
+CHAT_VIEW=PASS
+BOTTOM_NAV=PASS
+DEFAULT_TAB=PLAY
+TAB_PERSISTENCE=PASS
+TAB_SWITCH_NO_RELOAD=PASS
+BODY_SCROLL=LOCKED
+PLAY_VIEW_NORMAL_SCROLL=NO
+CHAT_VIEW_SCROLL_OWNER=MESSAGES_ONLY
+CHAT_COMPOSER_FIXED_IN_VIEW=PASS
+IMAGE_PREVIEW_PERSISTS_ACROSS_TAB_SWITCH=PASS
+MOBILE_UI_CONTRACT=PASS
+MOBILE_NARROW_VIEWPORT=PASS
+WEB_UI_UPDATE_WITHOUT_APK_REINSTALL=PASS
+ANDROID_NATIVE_CHANGED=NO
+APK_REBUILT=NO
+APK_REINSTALLED=NO
+PET_CORE_CHANGED=NO
+MEMORY_CHANGED=NO
+DREAM_CHANGED=NO
+HISTORICAL_RECALL_CHANGED=NO
+LOCAL_BRAIN_CHANGED=NO
+CONVERSATION_STORE_CHANGED=NO
+LAN_SERVER_CHANGED=NO
+```
+
+Production changes are limited to the three LAN mobile UI files. The
+Conversation Persistence Layer, Memory, Dream, Historical Recall, Local Brain
+API, Emotion Runtime, and Android Companion remain unchanged.
 
 ## v0.1 Android Companion
 

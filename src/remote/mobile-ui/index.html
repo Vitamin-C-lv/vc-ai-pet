@@ -8,32 +8,57 @@
     <link rel="stylesheet" href="/mobile.css">
   </head>
   <body>
-    <main class="pet-page">
-      <header><span class="paw">🐾</span><h1>李花花</h1><span id="connection" aria-label="同步中">●</span></header>
-      <section class="pet-card" aria-live="polite">
-        <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
-        <p id="state-label">当前状态：idle</p>
-        <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
-      </section>
-      <section class="interaction" aria-label="和花花互动">
-        <button id="pet-button" type="button">摸摸头</button>
-        <button id="play-button" type="button">玩耍</button>
-        <button id="long-button" type="button">长按</button>
-      </section>
-      <section class="chat" aria-label="和李花花聊天">
-        <div id="messages" class="messages"><p class="pet-line">李花花：汪，在呀。</p></div>
-        <div id="image-preview" class="image-preview" hidden>
-          <img id="image-thumbnail" alt="待发送图片预览">
-          <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
+    <main class="pet-app">
+      <header class="app-header">
+        <div class="header-brand">
+          <span class="paw">🐾</span>
+          <h1>李花花</h1>
         </div>
-        <p id="image-status" class="image-status" role="status" aria-live="polite"></p>
-        <form id="chat-form">
-          <button id="image-button" class="image-button" type="button" aria-label="选择图片" title="给花花看一张图片">▧</button>
-          <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-          <input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容">
-          <button id="send-button" type="submit">发送</button>
-        </form>
-      </section>
+        <span id="connection" aria-label="同步中">●</span>
+      </header>
+
+      <div class="view-host">
+        <section id="play-view" class="app-view play-view" data-view="play" aria-label="和花花玩耍">
+          <div class="pet-card" aria-live="polite">
+            <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
+            <p id="state-label">当前状态：idle</p>
+            <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
+          </div>
+          <div class="interaction" aria-label="和花花互动">
+            <button id="pet-button" type="button">摸摸头</button>
+            <button id="play-button" type="button">玩耍</button>
+            <button id="long-button" type="button">长按</button>
+          </div>
+        </section>
+
+        <section id="chat-view" class="app-view chat-view" data-view="chat" aria-label="和李花花聊天" hidden>
+          <div class="chat">
+            <div id="messages" class="messages"><p class="pet-line">李花花：汪，在呀。</p></div>
+            <div id="image-preview" class="image-preview" hidden>
+              <img id="image-thumbnail" alt="待发送图片预览">
+              <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
+            </div>
+            <p id="image-status" class="image-status" role="status" aria-live="polite"></p>
+            <form id="chat-form">
+              <button id="image-button" class="image-button" type="button" aria-label="选择图片" title="给花花看一张图片">▧</button>
+              <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+              <input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容">
+              <button id="send-button" type="submit">发送</button>
+            </form>
+          </div>
+        </section>
+      </div>
+
+      <nav id="bottom-nav" class="bottom-nav" aria-label="主要功能">
+        <button class="nav-item active" type="button" data-tab="play" aria-selected="true" aria-controls="play-view">
+          <span class="nav-icon">🐾</span>
+          <span class="nav-label">玩耍</span>
+        </button>
+        <button class="nav-item" type="button" data-tab="chat" aria-selected="false" aria-controls="chat-view">
+          <span class="nav-icon">💬</span>
+          <span class="nav-label">聊天</span>
+        </button>
+      </nav>
     </main>
     <script src="/mobile.js"></script>
   </body>
