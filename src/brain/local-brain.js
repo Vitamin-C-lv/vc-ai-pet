@@ -59,7 +59,7 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async reply({ identity, state, userText, image = null, recentMessages = [], now = Date.now() }) {
+  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], now = Date.now() }) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
     const reasoningEffort = visionImage
@@ -69,7 +69,9 @@ export class LocalBrain {
     const timeContext = this.timeProvider(now)
     const historicalIntent = detectHistoricalRecallIntent(ownerText)
     const related = ownerText.trim() ? this.memory?.recall?.(ownerText, 5, {
-      bumpHits: !historicalIntent.deep,
+      // Visual input is contextual evidence, not a confirmed memory event;
+      // even its relevance lookup must remain read-only for Memory telemetry.
+      bumpHits: !historicalIntent.deep && !visionImage,
     }) ?? [] : []
     const stableRules = (this.memory?.stableRulesContext?.()
       ?? this.memory?.stableIdentityContext?.()
@@ -108,6 +110,7 @@ export class LocalBrain {
       recentMessages,
       userText: promptText,
       image: visionImage,
+      visualContext,
       now,
       timeContext,
     })
@@ -129,7 +132,11 @@ export class LocalBrain {
         reasoningEffort,
         temperature: 0.72,
         topP: 0.9,
-        maxTokens: 256,
+        // The relay's completion allowance includes Qwen thinking tokens and
+        // the structured JSON reply. Keep the visible Pet reply short via the
+        // prompt/parser while leaving enough room for low/medium reasoning to
+        // finish instead of returning an empty content field at length.
+        maxTokens: 768,
         responseFormat: {
           type: 'json_object',
           schema: PET_CHAT_RESPONSE_SCHEMA,

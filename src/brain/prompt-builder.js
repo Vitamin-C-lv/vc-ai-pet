@@ -232,6 +232,11 @@ export const CONVERSATION_TRUTH_INSTRUCTION = `Conversation Evidence Boundary（
 - 这种情况下应诚实回答：“花花之前好像提到过这个，但花花没有确认的记忆。”也可以说“花花不确定，主人可以提醒花花”。
 - 当前对话中的来源映射只标记最近已有消息，不把花花当前正在生成的回答当作证据。`
 
+export const RECENT_VISUAL_RECALL_INSTRUCTION = `RECENT_VISUAL_RECALL:
+这张图片来自主人最近对话中之前发送过的图片，本轮是为了回答主人当前追问而重新提供。
+它不是主人本轮重新上传的新图片。
+只根据实际图像回答，不要编造图片之外的事实。`
+
 export function formatConversationEvidenceBoundary(messages = []) {
   const recent = recentConversationMessages(messages)
   const sourceMap = recent.length > 0
@@ -389,7 +394,7 @@ dayPeriod: ${timeContext.dayPeriod}
 season: ${timeContext.season}`
 }
 
-export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, now, timeContext = null }) {
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, visualContext = null, now, timeContext = null }) {
   const visionImage = normalizeVisionImage(image)
   const birthday = identity?.birthday ?? '2026-08-31'
   const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
@@ -435,6 +440,8 @@ ${historicalRecallContext ? `\n\n${formatHistoricalRecallContext(historicalRecal
 ${formatMemoryTruthInstruction(userText)}
 
 ${formatConversationEvidenceBoundary(recentMessages)}
+
+${visualContext?.source === 'recent-visual-recall' ? RECENT_VISUAL_RECALL_INSTRUCTION : ''}
 
 最近对话说明：
 你还会看到主人和你刚刚进行的几轮对话。

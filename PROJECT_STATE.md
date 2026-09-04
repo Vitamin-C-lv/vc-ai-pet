@@ -598,3 +598,51 @@ COMMIT=RECORDED_IN_GIT
 REMOTE_HEAD=PUSHED_TO_ORIGIN
 WORKTREE=CLEAN_AFTER_COMMIT
 ```
+
+## v0.3-H — Recent Visual Recall + Persistent Thinking Duration
+
+Thinking duration is now sanitized into optional assistant-message metadata in
+the independent Conversation Store. Existing messages without the field remain
+valid, and the mobile history renderer displays `🐾 思考了 X.X 秒` for both live
+and refreshed assistant replies without exposing reasoning effort.
+
+Recent Visual Resolver keeps the latest ten owner messages that carry an
+attachment, resolves only on an explicit visual reference or an immediate weak
+follow-up, and materializes at most one full stored asset. New images take
+priority; recalled images are never attached to the new user message. The
+resolver is persistent across runtime restart, does not put base64 into Recent
+Conversation or the JSON store, and skips MemoryGate for visual context.
+
+```text
+FINAL_STATUS=VC_AI_PET_RECENT_VISUAL_RECALL_PASS
+LIVE_THINKING_DURATION=PASS
+THINKING_DURATION_PERSISTED=YES
+THINKING_DURATION_STORAGE=CONVERSATION_METADATA_ONLY
+THINKING_DURATION_AFTER_REFRESH=PASS
+RECENT_VISUAL_RECALL=PASS
+RECENT_VISUAL_MAX_ATTACHMENTS=10
+RECENT_VISUAL_SOURCE=CONVERSATION_STORE
+RECENT_VISUAL_BASE64_PERSISTED_IN_CONTEXT=NO
+LATEST_IMAGE_FOLLOWUP=PASS
+STRONG_VISUAL_REFERENCE=PASS
+WEAK_IMMEDIATE_REFERENCE=PASS
+UNRELATED_CHAT_NO_VISUAL_RECALL=PASS
+RECENT_VISUAL_RECALL_AFTER_RESTART=PASS
+CURRENT_IMAGE_PRIORITY=PASS
+HISTORICAL_IMAGE_DUPLICATED_IN_CONVERSATION=NO
+MODEL_INFERENCES_PER_CHAT=1
+TEXT_REASONING=low
+VISION_REASONING=medium
+RECALLED_VISION_REASONING=medium
+DREAM_REASONING=high
+REFLECTION_REASONING=off
+VISUAL_RECALL_MEMORY_WRITE=NO
+PET_MEMORY_CHANGED=NO
+DREAM_CHANGED=NO
+LOCAL_BRAIN_API_CHANGED=NO
+ANDROID_NATIVE_CHANGED=NO
+APK_REBUILT=NO
+APK_REINSTALLED=NO
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+```

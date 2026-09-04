@@ -161,13 +161,15 @@ function formatThinkingDuration(durationMs) {
 
 function renderMessage({ role, text = '', attachment = null, reasoning = null } = {}) {
   const node = document.createElement('article')
-  node.className = `message ${role === 'user' ? 'user-line' : 'pet-line'}`
+  const userMessage = role === 'user'
+  const petMessage = role === 'pet' || role === 'assistant'
+  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}`
   const bubble = document.createElement('div')
   bubble.className = 'message-bubble'
 
   const label = document.createElement('div')
   label.className = 'message-label'
-  label.textContent = role === 'user' ? '主人' : '李花花'
+  label.textContent = userMessage ? '主人' : '李花花'
   bubble.append(label)
 
   const cleanText = String(text ?? '').trim()
@@ -184,7 +186,7 @@ function renderMessage({ role, text = '', attachment = null, reasoning = null } 
     card.className = 'image-card'
     const image = document.createElement('img')
     image.src = thumbnailUrl
-    image.alt = role === 'user' ? '主人发送的图片' : '花花回复中的图片'
+    image.alt = userMessage ? '主人发送的图片' : '花花回复中的图片'
     image.loading = 'lazy'
     image.decoding = 'async'
     card.append(image)
@@ -192,7 +194,7 @@ function renderMessage({ role, text = '', attachment = null, reasoning = null } 
   }
 
   node.append(bubble)
-  const durationText = role === 'pet' ? formatThinkingDuration(reasoning?.durationMs) : ''
+  const durationText = petMessage ? formatThinkingDuration(reasoning?.durationMs) : ''
   if (durationText) {
     const meta = document.createElement('div')
     meta.className = 'thinking-meta'

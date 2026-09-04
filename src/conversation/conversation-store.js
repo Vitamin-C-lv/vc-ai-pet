@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
+import { normalizeConversationReasoning } from './reasoning-metadata.js'
 
 export const CONVERSATION_HISTORY_LIMIT = 50
 export const CONVERSATION_MAX_MESSAGES = 500
@@ -247,12 +248,14 @@ function normalizeState(value) {
       if (!id || !role) return null
       const attachment = copyAttachmentMetadata(message.attachment)
       if (attachment) attachmentMap.set(attachment.id, attachment)
+      const reasoning = normalizeConversationReasoning(message.reasoning)
       return {
         id,
         role,
         text: cleanText(message.text),
         timestamp: finiteTimestamp(message.timestamp, 0),
         attachment: attachment ? clone(attachment) : null,
+        ...(reasoning ? { reasoning } : {}),
       }
     }).filter(Boolean)
     : []
@@ -334,6 +337,21 @@ export class ConversationStore {
     return clone(this.state.messages.slice(-count))
   }
 
+  /**
+   * Return the persistent message timeline for the Recent Visual Resolver.
+   * Unlike the UI history endpoint, this is allowed to inspect all retained
+   * messages so ordinary text turns cannot evict older image-bearing turns
+   * from the resolver's ten-image window.
+   */
+  async listForRecentVisualRecall(limit = this.maxMessages) {
+    await this.initialize()
+    const requested = Number(limit)
+    const count = Number.isFinite(requested)
+      ? Math.max(0, Math.min(this.maxMessages, Math.floor(requested)))
+      : this.maxMessages
+    return clone(this.state.messages.slice(-count))
+  }
+
   async history(limit = CONVERSATION_HISTORY_LIMIT) {
     const messages = await this.list(limit)
     return messages.map((message) => ({
@@ -342,6 +360,7 @@ export class ConversationStore {
       text: message.text,
       timestamp: message.timestamp,
       attachment: message.attachment ? this.publicAttachment(message.attachment) : null,
+      ...(message.reasoning ? { reasoning: clone(message.reasoning) } : {}),
     }))
   }
 
@@ -453,13 +472,14 @@ export class ConversationStore {
     }
   }
 
-  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null } = {}) {
+  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null } = {}) {
     return this.#enqueue(async () => {
       await this.initialize()
       if (role !== 'user' && role !== 'assistant') throw storeError('PET_CONVERSATION_ROLE_INVALID')
       const messageId = cleanId(id) ?? this.idFactory()
       const normalizedAttachment = attachment ? copyAttachmentMetadata(attachment) : null
       if (attachment && !normalizedAttachment) throw storeError('PET_CONVERSATION_ATTACHMENT_INVALID')
+      const normalizedReasoning = normalizeConversationReasoning(reasoning)
       if (normalizedAttachment && !this.state.attachments.some((item) => item.id === normalizedAttachment.id)) {
         this.state.attachments.push(normalizedAttachment)
       }
@@ -470,6 +490,7 @@ export class ConversationStore {
         text: cleanText(text),
         timestamp: finiteTimestamp(timestamp, this.now()),
         attachment: normalizedAttachment,
+        ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       }
       this.state.messages.push(message)
       if (this.state.messages.length > this.maxMessages) {

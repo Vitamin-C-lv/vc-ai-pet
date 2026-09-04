@@ -64,16 +64,18 @@ The request uses the centralized Pet reasoning profile: ordinary text chat is
   "reasoning_effort": "low",
   "temperature": 0.72,
   "top_p": 0.9,
-  "max_tokens": 256,
+  "max_tokens": 768,
   "response_format": {...}
 }
 ```
 
-`max_tokens=256` remains a Pet business-level short-response limit, not a
-physical-context setting.
+`max_tokens=768` is a Pet business-level completion allowance for the short
+structured reply plus low/medium reasoning, not a physical-context setting.
 
-Successful interactive chat responses also carry additive, RAM-only UI
-telemetry under `reasoning`:
+Successful interactive chat responses also carry additive UI telemetry under
+`reasoning`. The same sanitized metadata may be stored only on the matching
+assistant message in the independent Conversation Store so the mobile history
+can render it after refresh:
 
 ```json
 {
@@ -86,7 +88,9 @@ telemetry under `reasoning`:
 ```
 
 `durationMs` is measured around the Local Brain request and bounded queue retry;
-it is not conversation content, Memory data, or hidden reasoning text.
+it is not prompt content, Memory data, or hidden reasoning text. Recalled images
+remain within the existing one-image Vision contract; no Local Brain HTTP
+protocol fields are added.
 
 ## Error behavior
 

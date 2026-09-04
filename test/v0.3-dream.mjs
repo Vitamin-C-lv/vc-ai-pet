@@ -1165,7 +1165,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   assert.equal(calls[0].reasoningEffort, 'low')
   assert.equal(calls[0].temperature, .72)
   assert.equal(calls[0].topP, .9)
-  assert.equal(calls[0].maxTokens, 256)
+  assert.equal(calls[0].maxTokens, 768)
   assert.deepEqual(calls[0].messages.slice(1, -1).map(({ role, content }) => ({ role, content })), [
     { role: 'user', content: '上一句' },
     { role: 'assistant', content: '上一答' },

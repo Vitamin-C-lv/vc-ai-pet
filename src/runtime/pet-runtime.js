@@ -7,6 +7,8 @@ import { MemoryGate } from '../memory/memory-gate.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { RecentConversation } from '../conversation/recent-conversation.js'
 import { ConversationStore } from '../conversation/conversation-store.js'
+import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
+import { RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { DreamGate } from '../dream/dream-gate.js'
 import { DreamEngine } from '../dream/dream-engine.js'
 import { DreamScheduler } from '../dream/dream-scheduler.js'
@@ -23,14 +25,7 @@ const REFLECTION_MIN_NEW_MEMORIES = 2
 const REFLECTION_OLDEST_SOURCE_AGE_MS = 60 * 60 * 1000
 
 function publicReasoningMetadata(value) {
-  if (!value || typeof value !== 'object') return null
-  const durationMs = Number(value.durationMs)
-  if (!Number.isFinite(durationMs) || durationMs < 0) return null
-
-  const metadata = {}
-  if (typeof value.effort === 'string') metadata.effort = value.effort
-  metadata.durationMs = Math.round(durationMs)
-  return metadata
+  return normalizeConversationReasoning(value)
 }
 
 function dreamEligibility(memory, { now, minNewMemories = DREAM_MIN_NEW_MEMORIES, oldestSourceAgeMs = DREAM_OLDEST_SOURCE_AGE_MS } = {}) {
@@ -101,6 +96,7 @@ export class PetRuntime {
     this.identity = null
     this.conversation = new RecentConversation({ maxTurns: 12 })
     this.conversationStore = new ConversationStore(this.sandbox.root)
+    this.recentVisualResolver = new RecentVisualResolver()
     this.conversationPersistenceReady = false
     this.dreamEngine = null
     this.reflectionEngine = null
@@ -267,22 +263,47 @@ export class PetRuntime {
 
   async chat(userText, image = null, attachment = null) {
     const ownerText = String(userText ?? '')
-    const visionImage = normalizeVisionImage(image)
-    const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
+    const currentVisionImage = normalizeVisionImage(image)
     this.chatInFlight += 1
 
     try {
       let persistedAttachment = null
-      if (visionImage && this.conversationPersistenceReady) {
+      if (currentVisionImage && this.conversationPersistenceReady) {
         persistedAttachment = attachment
           ? await this.conversationStore.attachment(attachment.id)
-          : await this.conversationStore.saveAttachment({ image: visionImage })
+          : await this.conversationStore.saveAttachment({ image: currentVisionImage })
         if (!persistedAttachment) {
           const error = new Error('conversation attachment not found')
           error.code = 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND'
           throw error
         }
       }
+
+      let recalledVisionImage = null
+      let recalledVisual = null
+      if (!currentVisionImage && this.conversationPersistenceReady) {
+        recalledVisual = await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
+        if (recalledVisual.matched) {
+          try {
+            const stored = await this.conversationStore.readAttachmentDataUrl(recalledVisual.attachmentId)
+            if (stored?.dataUrl) recalledVisionImage = normalizeVisionImage({ dataUrl: stored.dataUrl })
+          } catch (error) {
+            this.logger?.warn?.(
+              `PET_RECENT_VISUAL_RECALL_READ_FAILURE code=${String(error?.code ?? 'UNKNOWN')} `
+              + `attachmentId=${String(recalledVisual.attachmentId)}`,
+            )
+          }
+        }
+      }
+
+      // A newly uploaded image always wins. A recalled image is loaded only
+      // when the current turn has no image, preserving the single-image
+      // Local Brain contract.
+      const effectiveVisionImage = currentVisionImage ?? recalledVisionImage
+      const visualContext = effectiveVisionImage && !currentVisionImage && recalledVisual?.matched
+        ? { source: 'recent-visual-recall' }
+        : null
+      const promptText = ownerText.trim() || (effectiveVisionImage ? VISION_ONLY_MESSAGE : ownerText)
 
       if (this.conversationPersistenceReady) {
         await this.conversationStore.appendMessage({
@@ -297,34 +318,36 @@ export class PetRuntime {
         identity: this.identitySnapshot(),
         state: this.snapshot(),
         userText: promptText,
-        image: visionImage,
+        image: effectiveVisionImage,
+        visualContext,
         recentMessages: this.conversation.messages(),
       })
 
       if (!result?.ok) return result
 
-      const gate = visionImage
-        ? { status: 'skipped', reason: 'vision-input' }
+      const gate = effectiveVisionImage
+        ? { status: 'skipped', reason: 'vision-context' }
         : ownerText.trim()
           ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate)
           : { status: 'skipped', reason: 'empty-message' }
 
-      const recentUserText = visionImage
+      const recentUserText = currentVisionImage
         ? `[主人发送了一张图片]${ownerText.trim() ? ` ${ownerText.trim()}` : ''}`
         : ownerText
       this.conversation.append(recentUserText, result.text)
+      const reasoning = publicReasoningMetadata(result.reasoning)
       if (this.conversationPersistenceReady) {
         await this.conversationStore.appendMessage({
           role: 'assistant',
           text: result.text,
           timestamp: Date.now(),
+          reasoning,
         })
       }
 
       // Never expose the candidate/evidence or internal gate details to the
-      // browser. Reasoning metadata is additive UI telemetry; it is not
-      // conversation content and is intentionally not persisted.
-      const reasoning = publicReasoningMetadata(result.reasoning)
+      // browser. Reasoning metadata is additive UI telemetry persisted only as
+      // optional ConversationStore message metadata.
       return {
         ok: true,
         unavailable: false,

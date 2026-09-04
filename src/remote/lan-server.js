@@ -56,7 +56,7 @@ export function actionToInteractionKind(action, state = {}) {
   return null
 }
 
-export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore } = {}) {
+export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console } = {}) {
   const assets = resolve(assetRoot)
 
   return async (req, res) => {
@@ -140,6 +140,11 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
       if (error?.code === 'invalid-json' || error?.code === 'body-too-large' || String(error?.code ?? '').startsWith('PET_CONVERSATION_')) {
         return sendJson(res, 400, { error: error.code })
       }
+      logger?.warn?.(
+        `vc-ai-pet: LAN request failed code=${String(error?.code ?? 'UNKNOWN')} `
+        + `retryable=${error?.retryable === true ? 'true' : 'false'} `
+        + `requestId=${String(error?.requestId ?? '')}`,
+      )
       return sendJson(res, 500, { error: 'remote-ui-error' })
     }
   }
@@ -148,7 +153,7 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
 export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console } = {}) {
   if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
   if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
-  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore }))
+  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger }))
   await new Promise((resolveStart, rejectStart) => {
     server.once('error', rejectStart)
     server.listen(port, host, () => {

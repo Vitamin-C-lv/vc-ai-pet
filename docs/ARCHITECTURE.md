@@ -44,12 +44,28 @@ conversation store. It writes only `conversation-store.json` and local
 `conversation-assets/YYYY/MM/DD/*.webp` files inside the Pet sandbox; it never
 opens `pet-memory.db` and never participates in Memory, Historical Recall,
 Dream, Reflection, Local Brain, or Emotion Runtime state. Messages retain only
-`id`, `role`, `text`, `timestamp`, and attachment metadata. Image bytes are
-written as local assets, while the mobile UI receives only thumbnail URLs from
-`GET /api/pet/history`.
+`id`, `role`, `text`, `timestamp`, attachment metadata, and optional sanitized
+assistant reasoning metadata. Image bytes are written as local assets, while
+the mobile UI receives only thumbnail URLs from `GET /api/pet/history`.
 
 The LAN companion uploads a resized image and a <=256px thumbnail first, then
 creates the user conversation record before passing a transient local asset
 data URL through the existing Local Brain Vision input. The persisted store
 contains no base64 image data. A fresh mobile page loads the latest 50 records
 and renders user attachments as image cards.
+
+## v0.3-H Recent Visual Recall
+
+`src/conversation/recent-visual-context.js` scans the persistent Conversation
+Store timeline for the latest ten user messages that have attachments. Ordinary
+text turns do not evict those candidates. A strong visual reference, or a weak
+deictic follow-up within the latest one or two owner turns, selects at most one
+attachment ID; `PetRuntime` then reads the original stored asset through
+`readAttachmentDataUrl`. The current turn's new image always wins, and a recall
+turn records no duplicate attachment on the new user message.
+
+The recalled image is the same single-image input used by the existing Local
+Brain API v1 contract, so it selects the existing `medium` Vision profile and
+still performs one inference. The resolver never stores base64 in
+`RecentConversation` or `conversation-store.json`; visual turns skip
+`MemoryGate` with reason `vision-context`.
