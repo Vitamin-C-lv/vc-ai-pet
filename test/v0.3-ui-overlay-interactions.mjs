@@ -223,11 +223,16 @@ function chatToggle(tree) {
   await flushAsyncWork()
   tree = harness.render()
   assert.equal(tree.props['data-pet-visual-state'], 'thinking')
+  const thinking = findElement(tree, (element) => element.props?.className === 'vc-pet-chat-thinking')
+  assert.ok(thinking, 'desktop chat shows a temporary thinking bubble')
+  assert.equal(thinking.props.role, 'status')
 
-  resolveChat({ ok: true, text: '在呀！' })
+  resolveChat({ ok: true, text: '在呀！', reasoning: { effort: 'low', durationMs: 2784 } })
   await flushAsyncWork()
   tree = harness.render()
   assert.equal(tree.props['data-pet-visual-state'], 'happy')
+  const durationMeta = findElement(tree, (element) => element.props?.className === 'vc-pet-chat-thinking-meta')
+  assert.ok(durationMeta, 'desktop chat shows thinking duration metadata')
 }
 
 assert.match(css, /\.vc-pet-chat-toggle\s*\{[^}]*z-index:\s*5/s)

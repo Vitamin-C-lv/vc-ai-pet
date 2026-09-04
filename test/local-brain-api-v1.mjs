@@ -111,7 +111,7 @@ function jsonResponse(status, payload, extraHeaders = {}) {
   const fakeClient = {
     health: async () => true,
     chat: async ({ messages, reasoningEffort }) => {
-      assert.equal(reasoningEffort, 'off')
+      assert.equal(reasoningEffort, 'low')
       assert.equal(Array.isArray(messages), true)
       return {
         requestId: 'lb-pet',

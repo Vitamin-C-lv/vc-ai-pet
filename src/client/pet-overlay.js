@@ -38,6 +38,16 @@ function sameVisualConfig(left, right) {
   return Object.keys(DEFAULT_PET_VISUAL_CONFIG).every((key) => left?.[key] === right?.[key])
 }
 
+function formatThinkingDuration(durationMs) {
+  const milliseconds = Number(durationMs)
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return ''
+  if (milliseconds < 1000) return `思考了 ${(milliseconds / 1000).toFixed(1)} 秒`
+
+  const totalSeconds = Math.floor(milliseconds / 1000)
+  if (totalSeconds < 60) return `思考了 ${(milliseconds / 1000).toFixed(1)} 秒`
+  return `思考了 ${Math.floor(totalSeconds / 60)}分${totalSeconds % 60}秒`
+}
+
 export function createPetOverlay({ assetBaseUrl, bridge = null }) {
   return function PetOverlay() {
     const [state, setState] = React.useState(load)
@@ -335,8 +345,8 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       void act('play')
     }
 
-    function appendChat(role, text) {
-      setChatMessages((previous) => [...previous, { role, text }].slice(-8))
+    function appendChat(role, text, reasoning = null) {
+      setChatMessages((previous) => [...previous, { role, text, reasoning }].slice(-8))
     }
 
     async function sendChat() {
@@ -354,7 +364,7 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
       try {
         const result = await bridge?.chat?.(text)
         if (result?.ok) {
-          appendChat('pet', result.text)
+          appendChat('pet', result.text, result.reasoning)
         } else if (result?.unavailable) appendChat('pet', result.petLine || '花花先在旁边等主人。')
         else appendChat('pet', '花花脑袋刚刚卡了一下……')
       } catch {
@@ -439,12 +449,34 @@ export function createPetOverlay({ assetBaseUrl, bridge = null }) {
           { className: 'vc-pet-chat-messages', 'aria-live': 'polite' },
           chatMessages.length === 0 && React.createElement('p', { className: 'vc-pet-chat-empty' }, '🐶 在呀。'),
           chatMessages.map((message, index) => React.createElement(
-            'p',
+            'div',
             { className: `vc-pet-chat-message vc-pet-chat-message-${message.role}`, key: `${message.role}-${index}` },
-            React.createElement('b', null, message.role === 'user' ? '主人：' : '李花花：'),
-            ' ', message.text,
+            React.createElement(
+              'p',
+              { className: 'vc-pet-chat-message-copy' },
+              React.createElement('b', null, message.role === 'user' ? '主人：' : '李花花：'),
+              ' ', message.text,
+            ),
+            message.role === 'pet' && formatThinkingDuration(message.reasoning?.durationMs)
+              && React.createElement(
+                'span',
+                { className: 'vc-pet-chat-thinking-meta' },
+                `🐾 ${formatThinkingDuration(message.reasoning.durationMs)}`,
+              ),
           )),
-          chatPending && React.createElement('p', { className: 'vc-pet-chat-thinking' }, '花花在想……'),
+          chatPending && React.createElement(
+            'div',
+            { className: 'vc-pet-chat-thinking', role: 'status', 'aria-live': 'polite' },
+            React.createElement('span', { className: 'vc-pet-chat-thinking-mark', 'aria-hidden': true }, '🐾'),
+            React.createElement('span', { className: 'vc-pet-chat-thinking-copy' }, '花花想一想'),
+            React.createElement(
+              'span',
+              { className: 'vc-pet-chat-thinking-dots', 'aria-hidden': true },
+              React.createElement('span', null),
+              React.createElement('span', null),
+              React.createElement('span', null),
+            ),
+          ),
         ),
         React.createElement(
           'form',

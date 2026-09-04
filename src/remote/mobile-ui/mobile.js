@@ -149,7 +149,17 @@ function scrollMessagesToBottom() {
   messages.scrollTop = messages.scrollHeight
 }
 
-function renderMessage({ role, text = '', attachment = null } = {}) {
+function formatThinkingDuration(durationMs) {
+  const milliseconds = Number(durationMs)
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return ''
+  if (milliseconds < 1000) return `思考了 ${(milliseconds / 1000).toFixed(1)} 秒`
+
+  const totalSeconds = Math.floor(milliseconds / 1000)
+  if (totalSeconds < 60) return `思考了 ${(milliseconds / 1000).toFixed(1)} 秒`
+  return `思考了 ${Math.floor(totalSeconds / 60)}分${totalSeconds % 60}秒`
+}
+
+function renderMessage({ role, text = '', attachment = null, reasoning = null } = {}) {
   const node = document.createElement('article')
   node.className = `message ${role === 'user' ? 'user-line' : 'pet-line'}`
   const bubble = document.createElement('div')
@@ -182,12 +192,54 @@ function renderMessage({ role, text = '', attachment = null } = {}) {
   }
 
   node.append(bubble)
+  const durationText = role === 'pet' ? formatThinkingDuration(reasoning?.durationMs) : ''
+  if (durationText) {
+    const meta = document.createElement('div')
+    meta.className = 'thinking-meta'
+    meta.textContent = `🐾 ${durationText}`
+    node.append(meta)
+  }
   messages.append(node)
   return node
 }
 
-function line(role, text, attachment = null) {
-  return renderMessage({ role, text, attachment })
+function line(role, text, attachment = null, reasoning = null) {
+  return renderMessage({ role, text, attachment, reasoning })
+}
+
+function appendThinkingMessage({ vision = false } = {}) {
+  const node = document.createElement('article')
+  node.className = 'message pet-line thinking-message'
+  node.setAttribute('role', 'status')
+  node.setAttribute('aria-live', 'polite')
+
+  const bubble = document.createElement('div')
+  bubble.className = 'message-bubble thinking-bubble'
+
+  const mark = document.createElement('span')
+  mark.className = 'thinking-mark'
+  mark.setAttribute('aria-hidden', 'true')
+  mark.textContent = '🐾'
+
+  const copy = document.createElement('span')
+  copy.className = 'thinking-copy'
+  copy.textContent = vision ? '花花认真看看' : '花花想一想'
+
+  const dots = document.createElement('span')
+  dots.className = 'thinking-dots'
+  dots.setAttribute('aria-hidden', 'true')
+  for (let index = 0; index < 3; index += 1) dots.append(document.createElement('span'))
+
+  bubble.append(mark, copy, dots)
+  node.append(bubble)
+  messages.append(node)
+  return node
+}
+
+function removeThinkingMessage(node) {
+  if (!node) return
+  if (node.parentNode) node.parentNode.removeChild(node)
+  else node.remove?.()
 }
 
 function renderHistory(history) {
@@ -427,18 +479,25 @@ function bindDom() {
     input.readOnly = true
     imageButton.disabled = true
     sendButton.disabled = true
+    const localAttachment = pendingImage
+      ? { thumbnailUrl: pendingImage.thumbnailDataUrl }
+      : null
+    line('user', message, localAttachment)
+    const thinkingMessage = appendThinkingMessage({ vision: Boolean(pendingImage) })
+    scrollMessagesToBottom()
     try {
       const attachment = pendingImage ? await uploadImage(pendingImage) : null
-      line('user', message, attachment)
-      scrollMessagesToBottom()
       const body = { message }
       if (attachment) body.attachmentId = attachment.id
       const response = await fetch('/api/pet/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
       const result = await response.json()
       if (!response.ok) throw new Error(result?.error || 'chat unavailable')
-      line('pet', result?.ok ? result.text : (result?.petLine || '花花脑袋刚刚卡了一下……'))
+      removeThinkingMessage(thinkingMessage)
+      if (result?.ok) line('pet', result.text, null, result.reasoning)
+      else line('pet', result?.petLine || '花花脑袋刚刚卡了一下……')
       scrollMessagesToBottom()
     } catch {
+      removeThinkingMessage(thinkingMessage)
       line('pet', '花花脑袋刚刚卡了一下……')
       scrollMessagesToBottom()
       setOnline(false)

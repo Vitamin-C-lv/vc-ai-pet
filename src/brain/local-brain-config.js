@@ -3,9 +3,21 @@ import { DEFAULT_RESOURCE_POLICY } from './resource-gate.js'
 
 const REASONING_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max'])
 
+// Per-feature reasoning is a Pet product policy, not a model/router decision.
+// Keep the mapping in one place so every inference surface uses the same
+// contract and no caller can silently promote a normal chat turn.
+export const PET_REASONING_PROFILE = Object.freeze({
+  chat: 'low',
+  vision: 'medium',
+  dream: 'high',
+  reflection: 'off',
+})
+
 export const DEFAULT_LOCAL_BRAIN_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:17862',
-  reasoningEffort: 'off',
+  // Legacy config compatibility. LocalBrain selects the per-feature profile
+  // below at each request; this field is not an override/router.
+  reasoningEffort: PET_REASONING_PROFILE.chat,
   healthTimeoutMs: 1_500,
   requestTimeoutMs: 180_000,
 

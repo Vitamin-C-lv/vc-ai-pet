@@ -53,13 +53,15 @@ This is a Pet behavior policy, not Local Brain scheduling.
 ## API request
 
 Pet sends no `model`, `chat_template_kwargs`, n_ctx, path, or lifecycle fields.
-Reasoning-off is expressed only through the public logical contract:
+The request uses the centralized Pet reasoning profile: ordinary text chat is
+`low`, Vision chat is `medium`, Deep Dream is `high`, and Reflection remains
+`off`. The selected value is sent only through the public logical contract:
 
 ```json
 {
   "messages": [...],
   "stream": false,
-  "reasoning_effort": "off",
+  "reasoning_effort": "low",
   "temperature": 0.72,
   "top_p": 0.9,
   "max_tokens": 256,
@@ -69,6 +71,22 @@ Reasoning-off is expressed only through the public logical contract:
 
 `max_tokens=256` remains a Pet business-level short-response limit, not a
 physical-context setting.
+
+Successful interactive chat responses also carry additive, RAM-only UI
+telemetry under `reasoning`:
+
+```json
+{
+  "reply": "...",
+  "reasoning": {
+    "effort": "low",
+    "durationMs": 2784
+  }
+}
+```
+
+`durationMs` is measured around the Local Brain request and bounded queue retry;
+it is not conversation content, Memory data, or hidden reasoning text.
 
 ## Error behavior
 

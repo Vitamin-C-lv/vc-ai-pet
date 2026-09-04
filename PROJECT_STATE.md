@@ -545,3 +545,56 @@ COMMIT=RECORDED_IN_GIT
 REMOTE_HEAD=PUSHED_TO_ORIGIN
 PUSH=PASS
 ```
+
+## v0.3-G — Reasoning Profiles + Thinking Feedback
+
+Interactive Pet inference now uses one centralized reasoning profile: ordinary
+text chat is `low`, Vision chat is `medium`, Dream is `high`, and Reflection
+remains `off`. LocalBrain measures monotonic request duration around the single
+Local Brain call, including bounded queue retry waits. The LAN/mobile API
+passes only the structured `reasoning.effort` and `reasoning.durationMs`
+telemetry; Conversation Store and Memory schemas remain unchanged.
+
+Both the LAN Companion and DSH desktop bubble insert a pet-style temporary
+thinking message with paw/dot motion, remove it on success or failure, and show
+the completed duration below successful Pet replies. The existing
+`chatPending`/host presence link still drives the Pet `thinking` visual state.
+
+```text
+FINAL_STATUS=VC_AI_PET_REASONING_AND_THINKING_UI_PASS
+TEXT_REASONING=low
+VISION_REASONING=medium
+DREAM_REASONING=high
+REFLECTION_REASONING=off
+TEXT_REASONING_LOW=PASS
+VISION_REASONING_MEDIUM=PASS
+DREAM_REASONING_HIGH=PASS
+REFLECTION_REASONING_OFF=PASS
+MODEL_INFERENCES_PER_CHAT=1
+THINKING_TIMER=PASS
+THINKING_DURATION_SOURCE=PET_LOCAL_BRAIN_REQUEST
+THINKING_DURATION_INCLUDES_QUEUE_WAIT=YES
+THINKING_DURATION_PERSISTED=NO
+MOBILE_THINKING_INDICATOR=PASS
+MOBILE_THINKING_ANIMATION=PASS
+MOBILE_THINKING_DURATION=PASS
+DESKTOP_THINKING_INDICATOR=PASS
+DESKTOP_THINKING_DURATION=PASS
+PET_THINKING_VISUAL_STATE=PASS
+VISION_THINKING_COPY=PASS
+DREAM_UI_REGRESSION=PASS
+VISION_REGRESSION=PASS
+TEXT_CHAT_REGRESSION=PASS
+CONVERSATION_REGRESSION=PASS
+MOBILE_UI_REGRESSION=PASS
+CHAIN_OF_THOUGHT_EXPOSED=NO
+ANDROID_NATIVE_CHANGED=NO
+APK_REBUILT=NO
+APK_REINSTALLED=NO
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DREAM_RERUN=NO
+BRANCH=feat/mobile-app-shell
+COMMIT=RECORDED_IN_GIT
+REMOTE_HEAD=PUSHED_TO_ORIGIN
+WORKTREE=CLEAN_AFTER_COMMIT
+```

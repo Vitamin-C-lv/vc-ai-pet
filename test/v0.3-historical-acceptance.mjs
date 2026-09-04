@@ -337,7 +337,7 @@ async function runChatCase({ memory, api, query }) {
   assert.equal(result.ok, true)
   assert.equal(newCalls.length, 1, `expected one Local Brain inference for ${query}`)
   assert.equal(newCalls[0].body.stream, false)
-  assert.equal(newCalls[0].body.reasoning_effort, 'off')
+  assert.equal(newCalls[0].body.reasoning_effort, 'low')
   assert.equal(Object.hasOwn(newCalls[0].body, 'model'), false)
   assert.equal(newCalls[0].body.messages.at(-1).role, 'user')
   assert.equal(newCalls[0].body.messages.at(-1).content, query)

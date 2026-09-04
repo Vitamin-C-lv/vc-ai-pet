@@ -28,7 +28,7 @@
     "localBrain": {
       "contract": "local-brain-v1",
       "baseUrl": "http://127.0.0.1:17862",
-      "reasoningEffort": "off",
+      "reasoningEffort": "low",
       "lifecycleOwner": "VC_LOCAL_BRAIN_SERVICE"
     },
     "resourceAwareBrain": {

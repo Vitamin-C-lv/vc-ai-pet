@@ -1,4 +1,4 @@
-import { validateLocalBrainConfig } from './local-brain-config.js'
+import { PET_REASONING_PROFILE, validateLocalBrainConfig } from './local-brain-config.js'
 import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { buildPetMessages } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
@@ -14,6 +14,20 @@ function wait(ms) {
 
 function canRetryQueueFull(error) {
   return error?.code === 'LOCAL_BRAIN_QUEUE_FULL' && error?.retryable === true
+}
+
+function monotonicNow() {
+  try {
+    const value = globalThis.performance?.now?.()
+    if (Number.isFinite(value)) return value
+  } catch {
+    // Fall through to the wall-clock fallback for older Node runtimes.
+  }
+  return Date.now()
+}
+
+function elapsedMs(startedAt) {
+  return Math.max(0, Math.round(monotonicNow() - startedAt))
 }
 
 async function chatWithBoundedQueueRetry(client, request) {
@@ -48,6 +62,9 @@ export class LocalBrain {
   async reply({ identity, state, userText, image = null, recentMessages = [], now = Date.now() }) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
+    const reasoningEffort = visionImage
+      ? PET_REASONING_PROFILE.vision
+      : PET_REASONING_PROFILE.chat
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     const timeContext = this.timeProvider(now)
     const historicalIntent = detectHistoricalRecallIntent(ownerText)
@@ -103,9 +120,13 @@ export class LocalBrain {
     }
 
     try {
+      // Start immediately before the actual Local Brain call. This includes
+      // API queue admission and bounded QUEUE_FULL backoff, but excludes image
+      // decoding, persistence, and time spent composing the message.
+      const startedAt = monotonicNow()
       const { payload } = await chatWithBoundedQueueRetry(this.client, {
         messages,
-        reasoningEffort: this.config.reasoningEffort,
+        reasoningEffort,
         temperature: 0.72,
         topP: 0.9,
         maxTokens: 256,
@@ -114,6 +135,7 @@ export class LocalBrain {
           schema: PET_CHAT_RESPONSE_SCHEMA,
         },
       })
+      const durationMs = elapsedMs(startedAt)
 
       const rawText = payload?.choices?.[0]?.message?.content
       if (typeof rawText !== 'string' || rawText.length === 0) {
@@ -129,6 +151,10 @@ export class LocalBrain {
         ok: true,
         unavailable: false,
         text: parsed.text,
+        reasoning: {
+          effort: reasoningEffort,
+          durationMs,
+        },
         memoryCandidate: parsed.memoryCandidate,
         rawMemoryCandidate: parsed.rawMemoryCandidate,
         memoryDecision: parsed.memoryDecision,
@@ -158,15 +184,17 @@ export class LocalBrain {
 
   async dreamCompletion({ messages, responseFormat }) {
     try {
+      const startedAt = monotonicNow()
       const { payload, requestId } = await chatWithBoundedQueueRetry(this.client, {
         messages,
-        reasoningEffort: 'medium',
+        reasoningEffort: PET_REASONING_PROFILE.dream,
         temperature: 0.35,
         topP: 0.85,
         maxTokens: 1600,
         omitMaxTokens: true,
         responseFormat,
       })
+      const durationMs = elapsedMs(startedAt)
 
       const rawText = payload?.choices?.[0]?.message?.content
       if (typeof rawText !== 'string' || rawText.length === 0) {
@@ -181,6 +209,10 @@ export class LocalBrain {
         ok: true,
         rawText,
         requestId,
+        reasoning: {
+          effort: PET_REASONING_PROFILE.dream,
+          durationMs,
+        },
       }
     } catch (error) {
       if (error?.retryable === true) {
@@ -202,7 +234,7 @@ export class LocalBrain {
         // Reflection is a small structured JSON pass. Keep thinking disabled
         // so the 500-token response budget is reserved for the JSON itself;
         // the normal Chat and Deep Dream contracts remain unchanged.
-        reasoningEffort: 'off',
+        reasoningEffort: PET_REASONING_PROFILE.reflection,
         temperature: 0.45,
         topP: 0.85,
         maxTokens: 500,

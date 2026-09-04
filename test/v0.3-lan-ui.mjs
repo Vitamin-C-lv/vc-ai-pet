@@ -33,7 +33,14 @@ const runtime = {
   snapshot: () => ({ current: 'idle', lifetimeInteractions: calls.length }),
   presentationSnapshot: () => ({ visualState: calls.at(-1) === 'long-press' ? 'relaxed' : 'idle', emotion: { happiness: .8, energy: .6 }, dream: false, sprite: 'idle-front.png' }),
   async interact(kind) { calls.push(kind); return this.snapshot() },
-  async chat(message) { return { ok: true, unavailable: false, text: `汪：${message}` } },
+  async chat(message) {
+    return {
+      ok: true,
+      unavailable: false,
+      text: `汪：${message}`,
+      reasoning: { effort: 'low', durationMs: 2784 },
+    }
+  },
 }
 const logs = []
 const server = await startLanServer({ runtime, assetRoot: join(root, 'assets/runtime'), port: 0, logger: { info: (line) => logs.push(line) } })
@@ -84,7 +91,9 @@ try {
 
   const chat = await call('POST', '/api/pet/chat', { message: '你好花花' })
   assert.equal(chat.status, 200)
-  assert.equal(JSON.parse(chat.text).text, '汪：你好花花')
+  const chatPayload = JSON.parse(chat.text)
+  assert.equal(chatPayload.text, '汪：你好花花')
+  assert.deepEqual(chatPayload.reasoning, { effort: 'low', durationMs: 2784 })
 } finally {
   server.close()
   await once(server, 'close')

@@ -1090,7 +1090,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
 })
 
 // LocalBrain contract: Dream uses the shared API v1 with Dream-only sampling
-// controls, while normal Chat remains one off-reasoning inference.
+// controls, while normal Chat remains one low-reasoning inference.
 {
   const calls = []
   let healthCalls = 0
@@ -1107,7 +1107,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
       },
       chat: async (request) => {
         calls.push(request)
-        const isDream = request.reasoningEffort === 'medium'
+        const isDream = request.reasoningEffort === 'high'
         return {
           requestId: isDream ? 'dream-request' : 'chat-request',
           payload: {
@@ -1162,7 +1162,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   assert.match(calls[0].messages[0].content, /名字：李花花/)
   assert.match(calls[0].messages[0].content, /品种：伯恩山犬/)
   assert.match(calls[0].messages[0].content, /生日：2026-08-31/)
-  assert.equal(calls[0].reasoningEffort, 'off')
+  assert.equal(calls[0].reasoningEffort, 'low')
   assert.equal(calls[0].temperature, .72)
   assert.equal(calls[0].topP, .9)
   assert.equal(calls[0].maxTokens, 256)
@@ -1170,7 +1170,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
     { role: 'user', content: '上一句' },
     { role: 'assistant', content: '上一答' },
   ])
-  assert.equal(calls[1].reasoningEffort, 'medium')
+  assert.equal(calls[1].reasoningEffort, 'high')
   assert.equal(calls[1].temperature, .35)
   assert.equal(calls[1].topP, .85)
   assert.equal(calls[1].maxTokens, 1600)

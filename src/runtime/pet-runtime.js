@@ -22,6 +22,17 @@ const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
 const REFLECTION_MIN_NEW_MEMORIES = 2
 const REFLECTION_OLDEST_SOURCE_AGE_MS = 60 * 60 * 1000
 
+function publicReasoningMetadata(value) {
+  if (!value || typeof value !== 'object') return null
+  const durationMs = Number(value.durationMs)
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null
+
+  const metadata = {}
+  if (typeof value.effort === 'string') metadata.effort = value.effort
+  metadata.durationMs = Math.round(durationMs)
+  return metadata
+}
+
 function dreamEligibility(memory, { now, minNewMemories = DREAM_MIN_NEW_MEMORIES, oldestSourceAgeMs = DREAM_OLDEST_SOURCE_AGE_MS } = {}) {
   const window = memory.dreamWindow()
   const after = Number.isFinite(Number(window?.last_dream_time)) ? Number(window.last_dream_time) : 0
@@ -311,12 +322,15 @@ export class PetRuntime {
       }
 
       // Never expose the candidate/evidence or internal gate details to the
-      // browser. UI receives the same public reply shape as v0.2-C.
+      // browser. Reasoning metadata is additive UI telemetry; it is not
+      // conversation content and is intentionally not persisted.
+      const reasoning = publicReasoningMetadata(result.reasoning)
       return {
         ok: true,
         unavailable: false,
         text: result.text,
         memoryWrite: gate.status,
+        ...(reasoning ? { reasoning } : {}),
       }
     } finally {
       this.chatInFlight -= 1

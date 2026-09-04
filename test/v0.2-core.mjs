@@ -18,7 +18,7 @@ assert.equal(LI_HUAHUA_IDENTITY.birthday, '2026-08-31')
 
 const config = validateLocalBrainConfig()
 assert.equal(config.baseUrl, 'http://127.0.0.1:17862')
-assert.equal(config.reasoningEffort, 'off')
+assert.equal(config.reasoningEffort, 'low')
 assert.equal(config.resourceGate.minFreeVramMiB, 0)
 assert.equal(config.resourceGate.maxGpuUtilizationPct, 55)
 
