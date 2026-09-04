@@ -6,5 +6,7 @@ pet-data/
 *.db
 *.db-wal
 *.db-shm
+conversation-store.json
+conversation-assets/
 !sandbox-template/
 !sandbox-template/**

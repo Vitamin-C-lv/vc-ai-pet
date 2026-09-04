@@ -6,6 +6,7 @@ import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { RecentConversation } from '../conversation/recent-conversation.js'
+import { ConversationStore } from '../conversation/conversation-store.js'
 import { DreamGate } from '../dream/dream-gate.js'
 import { DreamEngine } from '../dream/dream-engine.js'
 import { DreamScheduler } from '../dream/dream-scheduler.js'
@@ -88,6 +89,8 @@ export class PetRuntime {
     this.state = null
     this.identity = null
     this.conversation = new RecentConversation({ maxTurns: 12 })
+    this.conversationStore = new ConversationStore(this.sandbox.root)
+    this.conversationPersistenceReady = false
     this.dreamEngine = null
     this.reflectionEngine = null
     this.dreamScheduler = null
@@ -101,9 +104,12 @@ export class PetRuntime {
   async initialize() {
     assertPetPolicy()
     await this.sandbox.initialize()
+    await this.conversationStore.initialize()
+    this.conversationPersistenceReady = true
     this.state = await this.sandbox.readJson('world', 'state.json', null)
     if (!this.state) this.state = createInitialState()
     this.identity = await ensurePetIdentity(this.sandbox, this.state)
+    await this.restoreRecentConversation()
     this.emotion = syncAttachment(this.emotion, this.state.attachment)
     this.memory = new PetMemory(this.sandbox.root)
     this.memory.seedIfFresh(this.state.bornAt)
@@ -248,13 +254,34 @@ export class PetRuntime {
     return { kind: feedback.kind, until: Number(feedback.at) + duration }
   }
 
-  async chat(userText, image = null) {
+  async chat(userText, image = null, attachment = null) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     this.chatInFlight += 1
 
     try {
+      let persistedAttachment = null
+      if (visionImage && this.conversationPersistenceReady) {
+        persistedAttachment = attachment
+          ? await this.conversationStore.attachment(attachment.id)
+          : await this.conversationStore.saveAttachment({ image: visionImage })
+        if (!persistedAttachment) {
+          const error = new Error('conversation attachment not found')
+          error.code = 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND'
+          throw error
+        }
+      }
+
+      if (this.conversationPersistenceReady) {
+        await this.conversationStore.appendMessage({
+          role: 'user',
+          text: ownerText,
+          timestamp: Date.now(),
+          attachment: persistedAttachment,
+        })
+      }
+
       const result = await this.brain.reply({
         identity: this.identitySnapshot(),
         state: this.snapshot(),
@@ -275,6 +302,13 @@ export class PetRuntime {
         ? `[主人发送了一张图片]${ownerText.trim() ? ` ${ownerText.trim()}` : ''}`
         : ownerText
       this.conversation.append(recentUserText, result.text)
+      if (this.conversationPersistenceReady) {
+        await this.conversationStore.appendMessage({
+          role: 'assistant',
+          text: result.text,
+          timestamp: Date.now(),
+        })
+      }
 
       // Never expose the candidate/evidence or internal gate details to the
       // browser. UI receives the same public reply shape as v0.2-C.
@@ -317,6 +351,35 @@ export class PetRuntime {
     return this.memory.recall(query, k)
   }
 
+  async conversationHistory(limit = 50) {
+    if (!this.conversationPersistenceReady) return []
+    return this.conversationStore.history(limit)
+  }
+
+  async conversationAsset(id) {
+    if (!this.conversationPersistenceReady) return null
+    return this.conversationStore.readAttachmentDataUrl(id)
+  }
+
+  async restoreRecentConversation() {
+    if (!this.conversationPersistenceReady) return
+    const persisted = await this.conversationStore.list(24)
+    let pendingUser = null
+    this.conversation.clear()
+    for (const message of persisted) {
+      if (message.role === 'user') {
+        pendingUser = message
+        continue
+      }
+      if (message.role !== 'assistant' || !pendingUser) continue
+      const userText = pendingUser.attachment
+        ? `[主人发送了一张图片]${pendingUser.text ? ` ${pendingUser.text}` : ''}`
+        : pendingUser.text
+      this.conversation.append(userText, message.text)
+      pendingUser = null
+    }
+  }
+
   async persist() {
     await this.sandbox.writeJson('world', 'state.json', this.state)
   }
@@ -324,6 +387,7 @@ export class PetRuntime {
   close() {
     // Local Brain is now a shared external service. Pet owns no model process.
     this.conversation?.clear()
+    this.conversationPersistenceReady = false
     this.memory?.close()
   }
 }

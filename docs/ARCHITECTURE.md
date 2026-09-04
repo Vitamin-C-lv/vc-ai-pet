@@ -36,3 +36,20 @@ The three endpoints call the existing runtime methods directly: state reads
 `presentationSnapshot`, actions call `runtime.interact`, and chat calls
 `runtime.chat` (therefore the existing Local Brain API v1). No model process,
 Memory schema, Dream behavior, or account/authentication system is added.
+
+## v0.3-F Conversation Persistence Layer
+
+`src/conversation/conversation-store.js` is an independent short-term
+conversation store. It writes only `conversation-store.json` and local
+`conversation-assets/YYYY/MM/DD/*.webp` files inside the Pet sandbox; it never
+opens `pet-memory.db` and never participates in Memory, Historical Recall,
+Dream, Reflection, Local Brain, or Emotion Runtime state. Messages retain only
+`id`, `role`, `text`, `timestamp`, and attachment metadata. Image bytes are
+written as local assets, while the mobile UI receives only thumbnail URLs from
+`GET /api/pet/history`.
+
+The LAN companion uploads a resized image and a <=256px thumbnail first, then
+creates the user conversation record before passing a transient local asset
+data URL through the existing Local Brain Vision input. The persisted store
+contains no base64 image data. A fresh mobile page loads the latest 50 records
+and renders user attachments as image cards.

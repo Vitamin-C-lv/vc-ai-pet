@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_V0_3_E_PHASE2_PASS
+Status: FINAL_STATUS=VC_AI_PET_CONVERSATION_PERSISTENCE_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -386,4 +386,34 @@ INTERNAL_ERROR_CODE_LOGGING=PASS
 IMAGE_CONTENT_LOGGED=NO
 PRODUCTION_DB_MODIFIED=NO
 DREAM_RERUN=NO
+```
+
+## v0.3-F — Conversation Persistence
+
+The LAN companion now has an independent Conversation Persistence Layer. The
+store is separate from `pet-memory.db`, stores short-term message records and
+local date-partitioned image assets, and is not read by Memory, Historical
+Recall, Dream, Reflection, Local Brain, or Emotion Runtime. The mobile page
+loads the latest 50 records on startup and renders persisted user images from
+thumbnail URLs after a browser refresh.
+
+```text
+FINAL_STATUS=VC_AI_PET_CONVERSATION_PERSISTENCE_PASS
+VERSION=0.3.0-alpha.5
+CONVERSATION_STORE=conversation-store.json
+CONVERSATION_ASSETS=conversation-assets/YYYY/MM/DD
+CONVERSATION_HISTORY_LIMIT=50
+CONVERSATION_IMAGE_MAX_EDGE=1920
+CONVERSATION_THUMBNAIL_MAX_EDGE=256
+CONVERSATION_BASE64_PERSISTED=NO
+HISTORY_API=/api/pet/history
+IMAGE_UPLOAD_API=/api/pet/upload
+USER_RECORD_BEFORE_LOCAL_BRAIN=PASS
+REFRESH_HISTORY=PASS
+IMAGE_THUMBNAIL_RENDERING=PASS
+MEMORY=UNCHANGED
+DREAM=UNCHANGED
+HISTORICAL_RECALL=UNCHANGED
+LOCAL_BRAIN_API=UNCHANGED
+EMOTION_RUNTIME=UNCHANGED
 ```

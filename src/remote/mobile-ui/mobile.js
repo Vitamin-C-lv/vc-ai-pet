@@ -15,6 +15,7 @@ const removeImage = document.querySelector('#remove-image')
 const imageStatus = document.querySelector('#image-status')
 
 const MAX_LONG_EDGE = 1920
+const THUMBNAIL_MAX_EDGE = 256
 const IMAGE_QUALITY = 0.9
 const MAX_IMAGE_DATA_URL_BYTES = 7 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -23,7 +24,53 @@ let imageProcessing = false
 
 function setOnline(online) { connection.classList.toggle('online', online); connection.setAttribute('aria-label', online ? '已同步' : '同步中') }
 function number(value) { return `${Math.round(Number(value || 0) * 100)}%` }
-function line(role, text) { const node = document.createElement('p'); node.className = `${role}-line`; node.textContent = `${role === 'user' ? '主人' : '李花花'}：${text}`; messages.append(node); messages.scrollTop = messages.scrollHeight }
+function renderMessage({ role, text = '', attachment = null } = {}) {
+  const node = document.createElement('article')
+  node.className = `message ${role === 'user' ? 'user-line' : 'pet-line'}`
+
+  const label = document.createElement('div')
+  label.className = 'message-label'
+  label.textContent = role === 'user' ? '主人' : '李花花'
+  node.append(label)
+
+  const cleanText = String(text ?? '').trim()
+  if (cleanText) {
+    const textNode = document.createElement('p')
+    textNode.className = 'message-text'
+    textNode.textContent = cleanText
+    node.append(textNode)
+  }
+
+  const thumbnailUrl = typeof attachment?.thumbnailUrl === 'string' ? attachment.thumbnailUrl : ''
+  if (thumbnailUrl) {
+    const card = document.createElement('div')
+    card.className = 'image-card'
+    const image = document.createElement('img')
+    image.src = thumbnailUrl
+    image.alt = role === 'user' ? '主人发送的图片' : '花花回复中的图片'
+    image.loading = 'lazy'
+    image.decoding = 'async'
+    card.append(image)
+    node.append(card)
+  }
+
+  messages.append(node)
+  messages.scrollTop = messages.scrollHeight
+  return node
+}
+
+function line(role, text, attachment = null) {
+  return renderMessage({ role, text, attachment })
+}
+
+function renderHistory(history) {
+  messages.replaceChildren()
+  if (!history.length) {
+    line('pet', '汪，在呀。')
+    return
+  }
+  history.forEach((message) => renderMessage(message))
+}
 
 function updateSendButton() {
   sendButton.disabled = imageProcessing || (!input.value.trim() && !selectedImage)
@@ -67,6 +114,13 @@ async function decodeImage(file) {
   return decodeWithImageElement(file)
 }
 
+function exportCanvas(canvas) {
+  let dataUrl = canvas.toDataURL('image/webp', IMAGE_QUALITY)
+  if (!dataUrl.startsWith('data:image/webp;base64,')) dataUrl = canvas.toDataURL('image/jpeg', IMAGE_QUALITY)
+  if (!/^data:image\/(?:jpeg|webp);base64,/u.test(dataUrl)) throw new Error('image export failed')
+  return dataUrl
+}
+
 async function normalizeImage(file) {
   if (!file || !ALLOWED_IMAGE_TYPES.has(file.type)) throw new Error('unsupported image type')
   const decoded = await decodeImage(file)
@@ -82,11 +136,27 @@ async function normalizeImage(file) {
     if (!context) throw new Error('canvas unavailable')
     context.drawImage(decoded.source, 0, 0, width, height)
 
-    let dataUrl = canvas.toDataURL('image/webp', IMAGE_QUALITY)
-    if (!dataUrl.startsWith('data:image/webp;base64,')) dataUrl = canvas.toDataURL('image/jpeg', IMAGE_QUALITY)
-    if (!/^data:image\/(?:jpeg|webp);base64,/u.test(dataUrl)) throw new Error('image export failed')
+    const dataUrl = exportCanvas(canvas)
     if (new TextEncoder().encode(dataUrl).byteLength > MAX_IMAGE_DATA_URL_BYTES) throw new Error('image too large')
-    return dataUrl
+
+    const thumbnailScale = Math.min(1, THUMBNAIL_MAX_EDGE / Math.max(decoded.width, decoded.height))
+    const thumbnailWidth = Math.max(1, Math.round(decoded.width * thumbnailScale))
+    const thumbnailHeight = Math.max(1, Math.round(decoded.height * thumbnailScale))
+    const thumbnailCanvas = document.createElement('canvas')
+    thumbnailCanvas.width = thumbnailWidth
+    thumbnailCanvas.height = thumbnailHeight
+    const thumbnailContext = thumbnailCanvas.getContext('2d')
+    if (!thumbnailContext) throw new Error('canvas unavailable')
+    thumbnailContext.drawImage(decoded.source, 0, 0, thumbnailWidth, thumbnailHeight)
+
+    return {
+      dataUrl,
+      thumbnailDataUrl: exportCanvas(thumbnailCanvas),
+      width,
+      height,
+      thumbnailWidth,
+      thumbnailHeight,
+    }
   } finally {
     decoded.close?.()
   }
@@ -101,9 +171,8 @@ async function chooseImage() {
   imageStatus.textContent = '图片处理中……'
   updateSendButton()
   try {
-    const dataUrl = await normalizeImage(file)
-    selectedImage = { dataUrl }
-    imageThumbnail.src = dataUrl
+    selectedImage = await normalizeImage(file)
+    imageThumbnail.src = selectedImage.thumbnailDataUrl
     imagePreview.hidden = false
     imageStatus.textContent = '已选择一张图片'
   } catch {
@@ -127,6 +196,36 @@ async function refresh() {
     if (state.sprite) sprite.src = `/assets/${state.sprite}`
     setOnline(true)
   } catch { setOnline(false) }
+}
+
+async function loadHistory() {
+  try {
+    const response = await fetch('/api/pet/history', { cache: 'no-store' })
+    if (!response.ok) throw new Error('history unavailable')
+    const payload = await response.json()
+    const history = Array.isArray(payload) ? payload : payload?.messages
+    if (!Array.isArray(history)) throw new Error('invalid history')
+    renderHistory(history)
+    setOnline(true)
+  } catch { setOnline(false) }
+}
+
+async function uploadImage(image) {
+  const response = await fetch('/api/pet/upload', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      image: { dataUrl: image.dataUrl },
+      thumbnail: { dataUrl: image.thumbnailDataUrl },
+      width: image.width,
+      height: image.height,
+      thumbnailWidth: image.thumbnailWidth,
+      thumbnailHeight: image.thumbnailHeight,
+    }),
+  })
+  const result = await response.json()
+  if (!response.ok || !result?.attachment?.id) throw new Error(result?.error || 'image upload unavailable')
+  return result.attachment
 }
 
 async function action(action) {
@@ -166,17 +265,18 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault()
   if (imageProcessing) return
   const message = input.value.trim()
-  const image = selectedImage ? { dataUrl: selectedImage.dataUrl } : null
-  if (!message && !image) return
+  const pendingImage = selectedImage
+  if (!message && !pendingImage) return
 
   input.value = ''
   input.disabled = true
   imageButton.disabled = true
   sendButton.disabled = true
-  line('user', message || '[图片]')
   try {
+    const attachment = pendingImage ? await uploadImage(pendingImage) : null
+    line('user', message, attachment)
     const body = { message }
-    if (image) body.image = image
+    if (attachment) body.attachmentId = attachment.id
     const response = await fetch('/api/pet/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const result = await response.json()
     if (!response.ok) throw new Error(result?.error || 'chat unavailable')
@@ -192,4 +292,4 @@ form.addEventListener('submit', async (event) => {
 })
 
 updateSendButton()
-refresh(); setInterval(refresh, 1500)
+refresh(); loadHistory(); setInterval(refresh, 1500)

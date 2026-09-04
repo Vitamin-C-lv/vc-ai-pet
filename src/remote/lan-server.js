@@ -9,11 +9,13 @@ const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.ur
 const DEFAULT_PORT = 17870
 const DEFAULT_BODY_LIMIT_BYTES = 16 * 1024
 const CHAT_BODY_LIMIT_BYTES = 8 * 1024 * 1024
+const UPLOAD_BODY_LIMIT_BYTES = 12 * 1024 * 1024
 const CONTENT_TYPES = Object.freeze({
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.png': 'image/png',
+  '.webp': 'image/webp',
 })
 
 export function isPrivateIPv4(address) {
@@ -47,7 +49,7 @@ export function actionToInteractionKind(action, state = {}) {
   return null
 }
 
-export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {} }) {
+export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore } = {}) {
   const assets = resolve(assetRoot)
 
   return async (req, res) => {
@@ -59,6 +61,16 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {} 
         const presentation = runtime.presentationSnapshot(visualConfig)
         return sendJson(res, 200, presentation)
       }
+      if (req.method === 'GET' && url.pathname === '/api/pet/history') {
+        const messages = typeof runtime.conversationHistory === 'function'
+          ? await runtime.conversationHistory(50)
+          : typeof conversationStore?.history === 'function'
+            ? await conversationStore.history(50)
+            : typeof conversationStore?.getHistory === 'function'
+              ? await conversationStore.getHistory(50)
+            : []
+        return sendJson(res, 200, { messages: Array.isArray(messages) ? messages.slice(-50) : [] })
+      }
       if (req.method === 'POST' && url.pathname === '/api/pet/action') {
         const body = await readJsonBody(req, DEFAULT_BODY_LIMIT_BYTES)
         const kind = actionToInteractionKind(body?.action, runtime.snapshot())
@@ -66,32 +78,70 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {} 
         const state = await runtime.interact(kind)
         return sendJson(res, 200, { ok: true, state, ...runtime.presentationSnapshot(visualConfig) })
       }
+      if (req.method === 'POST' && url.pathname === '/api/pet/upload') {
+        if (!conversationStore?.saveAttachment) return sendJson(res, 503, { error: 'conversation-store-unavailable' })
+        const body = await readJsonBody(req, UPLOAD_BODY_LIMIT_BYTES)
+        if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
+        const attachment = await conversationStore.saveAttachment({
+          image: body?.image,
+          thumbnail: body?.thumbnail,
+          width: body?.width,
+          height: body?.height,
+          thumbnailWidth: body?.thumbnailWidth,
+          thumbnailHeight: body?.thumbnailHeight,
+          requireThumbnail: true,
+        })
+        const publicAttachment = typeof conversationStore.publicAttachment === 'function'
+          ? conversationStore.publicAttachment(attachment)
+          : attachment
+        return sendJson(res, 200, { ok: true, attachment: publicAttachment })
+      }
       if (req.method === 'POST' && url.pathname === '/api/pet/chat') {
         const body = await readJsonBody(req, CHAT_BODY_LIMIT_BYTES)
         const message = typeof body?.message === 'string' ? body.message.trim() : ''
         if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
         let image = null
-        try {
-          image = normalizeVisionImage(body?.image)
-        } catch {
-          return sendJson(res, 400, { error: 'invalid-image' })
+        let attachment = null
+        if (Object.hasOwn(body ?? {}, 'attachmentId')) {
+          if (Object.hasOwn(body ?? {}, 'image') || typeof body?.attachmentId !== 'string') {
+            return sendJson(res, 400, { error: 'invalid-image' })
+          }
+          const stored = typeof runtime.conversationAsset === 'function'
+            ? await runtime.conversationAsset(body.attachmentId)
+            : typeof conversationStore?.readAttachmentDataUrl === 'function'
+              ? await conversationStore.readAttachmentDataUrl(body.attachmentId)
+              : null
+          if (!stored?.dataUrl || !stored.attachment) return sendJson(res, 400, { error: 'invalid-image' })
+          image = { dataUrl: stored.dataUrl }
+          attachment = stored.attachment
+        } else {
+          try {
+            image = normalizeVisionImage(body?.image)
+          } catch {
+            return sendJson(res, 400, { error: 'invalid-image' })
+          }
         }
         if ((message.length < 1 && !image) || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
-        return sendJson(res, 200, await runtime.chat(message, image))
+        return sendJson(res, 200, await runtime.chat(message, image, attachment))
+      }
+      if (req.method === 'GET' && url.pathname.startsWith('/conversation-assets/')) {
+        return await serveConversationAsset(url.pathname, conversationStore, res)
       }
       if (req.method === 'GET') return await serveStatic(url.pathname, assets, res)
       return sendJson(res, 404, { error: 'not-found' })
     } catch (error) {
-      if (error?.code === 'invalid-json' || error?.code === 'body-too-large') return sendJson(res, 400, { error: error.code })
+      if (error?.code === 'invalid-json' || error?.code === 'body-too-large' || String(error?.code ?? '').startsWith('PET_CONVERSATION_')) {
+        return sendJson(res, 400, { error: error.code })
+      }
       return sendJson(res, 500, { error: 'remote-ui-error' })
     }
   }
 }
 
-export async function startLanServer({ runtime, assetRoot, visualConfig = {}, port = DEFAULT_PORT, host = '0.0.0.0', logger = console } = {}) {
+export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console } = {}) {
   if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
   if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
-  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig }))
+  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore }))
   await new Promise((resolveStart, rejectStart) => {
     server.once('error', rejectStart)
     server.listen(port, host, () => {
@@ -106,6 +156,29 @@ export async function startLanServer({ runtime, assetRoot, visualConfig = {}, po
   logger?.info?.('LOCAL_ONLY=true')
   logger?.info?.(`URL=${url}`)
   return Object.assign(server, { lanUrl: url, localOnly: true })
+}
+
+async function serveConversationAsset(pathname, conversationStore, res) {
+  let decoded
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return sendJson(res, 404, { error: 'not-found' })
+  }
+  const match = /^\/conversation-assets\/(\d{4})\/(\d{2})\/(\d{2})\/([0-9a-f-]{8,80}(?:-thumbnail)?\.webp)$/iu.exec(decoded)
+  if (!match || !conversationStore?.assetsRoot) return sendJson(res, 404, { error: 'not-found' })
+  const file = join(resolve(conversationStore.assetsRoot), match[1], match[2], match[3], match[4])
+  try {
+    const bytes = await readFile(file)
+    res.writeHead(200, {
+      'content-type': 'image/webp',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+    })
+    res.end(bytes)
+  } catch {
+    sendJson(res, 404, { error: 'not-found' })
+  }
 }
 
 async function serveStatic(pathname, assetRoot, res) {
