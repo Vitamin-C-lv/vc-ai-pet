@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">李花花</string>
+    <string name="paw">🐾</string>
+    <string name="connection_prompt">花花的电脑地址</string>
+    <string name="host_hint">例如 192.168.1.129:17870</string>
+    <string name="connect">连接</string>
+    <string name="connection_error">🐾 找不到花花的电脑</string>
+    <string name="retry">重新连接</string>
+    <string name="edit_address">修改地址</string>
+    <string name="invalid_address">请输入允许的局域网 host:port 地址</string>
+</resources>
