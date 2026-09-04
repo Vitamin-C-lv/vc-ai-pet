@@ -28,7 +28,7 @@ assert.match(mobileJs, /meta\.textContent = `🐾 \$\{durationText\}`/u)
 
 const submitBody = mobileJs.slice(mobileJs.indexOf("form.addEventListener('submit'"))
 assert.ok(submitBody.indexOf("line('user', message, localAttachment)") < submitBody.indexOf('appendThinkingMessage'))
-assert.ok(submitBody.indexOf('appendThinkingMessage') < submitBody.indexOf("fetch('/api/pet/chat'"))
+assert.ok(submitBody.indexOf('appendThinkingMessage') < submitBody.indexOf("fetchJsonDiagnostic('/api/pet/chat'"))
 assert.match(submitBody, /catch \{\s+removeThinkingMessage\(thinkingMessage\)/su)
 
 assert.match(mobileCss, /\.thinking-bubble\s*\{[^}]*max-width:\s*min\(210px,\s*100%\)/su)

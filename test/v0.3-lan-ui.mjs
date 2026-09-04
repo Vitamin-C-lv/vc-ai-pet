@@ -78,6 +78,10 @@ try {
   assert.equal(page.status, 200)
   assert.match(page.text, /李花花/)
 
+  const diagnosticsScript = await call('GET', '/diagnostics.js')
+  assert.equal(diagnosticsScript.status, 200)
+  assert.match(diagnosticsScript.text, /vc-ai-pet-diagnostics-v1/u)
+
   const state = await call('GET', '/api/pet/state')
   assert.equal(state.status, 200)
   assert.deepEqual(JSON.parse(state.text), { visualState: 'idle', emotion: { happiness: .8, energy: .6 }, dream: false, sprite: 'idle-front.png' })
@@ -103,4 +107,5 @@ console.log('LAN_SERVER_START=PASS')
 console.log('STATE_API=PASS')
 console.log('ACTION_API=PASS')
 console.log('CHAT_API=PASS')
+console.log('DIAGNOSTICS_ASSET=PASS')
 console.log('LOCAL_ONLY=PASS')

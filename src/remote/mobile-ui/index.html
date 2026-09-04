@@ -14,7 +14,7 @@
           <span class="paw">🐾</span>
           <h1>李花花</h1>
         </div>
-        <span id="connection" aria-label="同步中">●</span>
+        <button id="connection" type="button" aria-label="同步中" title="连接状态">●</button>
       </header>
 
       <div class="view-host">
@@ -70,6 +70,22 @@
         </button>
       </nav>
     </main>
+    <section id="diagnostics-panel" class="diagnostics-panel" role="dialog" aria-modal="true" aria-labelledby="diagnostics-title" hidden>
+      <div class="diagnostics-sheet">
+        <div class="diagnostics-heading">
+          <h2 id="diagnostics-title">花花诊断</h2>
+          <button id="diagnostics-close" type="button" aria-label="关闭诊断">×</button>
+        </div>
+        <p id="diagnostics-status" class="diagnostics-status" role="status" aria-live="polite"></p>
+        <pre id="diagnostics-output" class="diagnostics-output" aria-label="最近诊断记录"></pre>
+        <textarea id="diagnostics-copy-fallback" class="diagnostics-copy-fallback" readonly aria-label="可复制的诊断记录" hidden></textarea>
+        <div class="diagnostics-actions">
+          <button id="diagnostics-copy" type="button">复制诊断</button>
+          <button id="diagnostics-clear" class="diagnostics-clear" type="button">清空日志</button>
+        </div>
+      </div>
+    </section>
+    <script src="/diagnostics.js"></script>
     <script src="/mobile.js"></script>
   </body>
 </html>

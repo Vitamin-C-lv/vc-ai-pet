@@ -17,6 +17,13 @@ let playView
 let chatView
 let petApp
 let tabButtons = []
+let diagnosticsPanel
+let diagnosticsOutput
+let diagnosticsStatus
+let diagnosticsCopyFallback
+let diagnosticsCopyButton
+let diagnosticsClearButton
+let diagnosticsCloseButton
 
 const MAX_LONG_EDGE = 1920
 const THUMBNAIL_MAX_EDGE = 256
@@ -36,9 +43,67 @@ let keyboardOpen = false
 let keyboardFrame = null
 let keyboardViewportChanged = false
 let viewportBaselineHeight = 0
+let connectionTapCount = 0
+let connectionTapTimer = null
+
+const diagnostics = globalThis.VcAiPetDiagnostics?.createFrontendDiagnostics?.({
+  context: () => ({
+    tab: chatView?.hidden === false ? 'chat' : 'play',
+    online: globalThis.navigator?.onLine,
+    visibility: document.visibilityState,
+    viewportWidth: globalThis.innerWidth,
+    viewportHeight: globalThis.innerHeight,
+    pathname: globalThis.location?.pathname,
+  }),
+}) ?? {
+  record() {},
+  clear() {},
+  list: () => [],
+  exportText: () => 'VC_AI_PET_FRONTEND_DIAGNOSTICS\nSCHEMA=1',
+  async fetchJsonDiagnostic(url, options) {
+    const response = await globalThis.fetch(url, options)
+    const payload = await response.json()
+    if (!response.ok) throw new Error('request failed')
+    return { response, payload, requestId: null, durationMs: null }
+  },
+}
 
 function setOnline(online) { connection.classList.toggle('online', online); connection.setAttribute('aria-label', online ? '已同步' : '同步中') }
 function number(value) { return `${Math.round(Number(value || 0) * 100)}%` }
+
+function recordDiagnostic(input) {
+  diagnostics.record(input)
+}
+
+function imageDiagnosticDetails(image = {}) {
+  return {
+    hadImage: true,
+    mime: image.mime,
+    width: image.width,
+    height: image.height,
+    inputBytes: image.inputBytes,
+    imageBytes: image.imageBytes,
+  }
+}
+
+function imagePrepDetails(file = {}) {
+  return {
+    hadImage: true,
+    mime: file?.type,
+    inputBytes: file?.size,
+  }
+}
+
+function diagnosticError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  error.diagnosticLogged = true
+  return error
+}
+
+async function fetchJsonDiagnostic(url, options, requestContext) {
+  return diagnostics.fetchJsonDiagnostic(url, options, requestContext)
+}
 
 function getViewportHeight() {
   const visualViewport = globalThis.visualViewport
@@ -352,11 +417,21 @@ async function chooseImage() {
   imageStatus.textContent = '图片处理中……'
   updateSendButton()
   try {
-    selectedImage = await normalizeImage(file)
+    const normalized = await normalizeImage(file)
+    selectedImage = {
+      ...normalized,
+      mime: file.type,
+      inputBytes: Number(file.size),
+      imageBytes: new TextEncoder().encode(normalized.dataUrl).byteLength,
+    }
     imageThumbnail.src = selectedImage.thumbnailDataUrl
     imagePreview.hidden = false
     imageStatus.textContent = '已选择一张图片'
-  } catch {
+  } catch (error) {
+    recordDiagnostic({
+      level: 'error', stage: 'image-prep', code: 'IMAGE_PREP_FAILURE', message: error?.message,
+      details: imagePrepDetails(file),
+    })
     clearImageSelection({ clearStatus: false })
     imageStatus.textContent = '这张图片花花暂时看不了，再换一张试试吧。'
   } finally {
@@ -368,9 +443,7 @@ async function chooseImage() {
 
 async function refresh() {
   try {
-    const response = await fetch('/api/pet/state', { cache: 'no-store' })
-    if (!response.ok) throw new Error('state unavailable')
-    const state = await response.json()
+    const { payload: state } = await fetchJsonDiagnostic('/api/pet/state', { cache: 'no-store' }, { stage: 'state' })
     stateLabel.textContent = `当前状态：${state.visualState || 'idle'}`
     happiness.textContent = number(state.emotion?.happiness)
     energy.textContent = number(state.emotion?.energy)
@@ -381,11 +454,12 @@ async function refresh() {
 
 async function loadHistory() {
   try {
-    const response = await fetch('/api/pet/history', { cache: 'no-store' })
-    if (!response.ok) throw new Error('history unavailable')
-    const payload = await response.json()
+    const { payload } = await fetchJsonDiagnostic('/api/pet/history', { cache: 'no-store' }, { stage: 'history' })
     const history = Array.isArray(payload) ? payload : payload?.messages
-    if (!Array.isArray(history)) throw new Error('invalid history')
+    if (!Array.isArray(history)) {
+      recordDiagnostic({ level: 'error', stage: 'history', code: 'HISTORY_INVALID_RESPONSE' })
+      throw diagnosticError('HISTORY_INVALID_RESPONSE', 'invalid history')
+    }
     renderHistory(history)
     const chatWasHidden = chatView?.hidden
     if (chatWasHidden) chatView.hidden = false
@@ -396,7 +470,7 @@ async function loadHistory() {
 }
 
 async function uploadImage(image) {
-  const response = await fetch('/api/pet/upload', {
+  const { payload: result } = await fetchJsonDiagnostic('/api/pet/upload', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -407,19 +481,106 @@ async function uploadImage(image) {
       thumbnailWidth: image.thumbnailWidth,
       thumbnailHeight: image.thumbnailHeight,
     }),
-  })
-  const result = await response.json()
-  if (!response.ok || !result?.attachment?.id) throw new Error(result?.error || 'image upload unavailable')
+  }, { stage: 'upload', ...imageDiagnosticDetails(image) })
+  if (!result?.attachment?.id) {
+    recordDiagnostic({ level: 'error', stage: 'upload', code: 'UPLOAD_INVALID_RESPONSE', details: imageDiagnosticDetails(image) })
+    throw diagnosticError('UPLOAD_INVALID_RESPONSE', 'image upload unavailable')
+  }
   return result.attachment
 }
 
 async function action(action) {
   try {
-    const response = await fetch('/api/pet/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) })
-    if (!response.ok) throw new Error('action unavailable')
+    await fetchJsonDiagnostic('/api/pet/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) }, { stage: 'action' })
     sprite.classList.add('active'); setTimeout(() => sprite.classList.remove('active'), 240)
     await refresh()
   } catch { setOnline(false) }
+}
+
+function renderDiagnosticsPanel() {
+  if (!diagnosticsOutput) return
+  const events = diagnostics.list()
+  diagnosticsOutput.textContent = events.length ? diagnostics.exportText() : '暂无诊断记录。'
+  if (diagnosticsCopyFallback) diagnosticsCopyFallback.hidden = true
+}
+
+function openDiagnosticsPanel() {
+  if (!diagnosticsPanel) return
+  renderDiagnosticsPanel()
+  diagnosticsStatus.textContent = ''
+  diagnosticsPanel.hidden = false
+  diagnosticsCloseButton?.focus({ preventScroll: true })
+}
+
+function closeDiagnosticsPanel() {
+  if (!diagnosticsPanel) return
+  diagnosticsPanel.hidden = true
+  connection?.focus?.({ preventScroll: true })
+}
+
+async function copyDiagnostics() {
+  const text = diagnostics.exportText()
+  try {
+    await globalThis.navigator?.clipboard?.writeText?.(text)
+    diagnosticsStatus.textContent = '诊断记录已复制。'
+  } catch {
+    if (!diagnosticsCopyFallback) return
+    diagnosticsCopyFallback.hidden = false
+    diagnosticsCopyFallback.value = text
+    diagnosticsCopyFallback.focus({ preventScroll: true })
+    diagnosticsCopyFallback.select()
+    diagnosticsStatus.textContent = '请手动复制下面的诊断记录。'
+  }
+}
+
+function connectionDiagnosticTap() {
+  connectionTapCount += 1
+  if (connectionTapTimer) clearTimeout(connectionTapTimer)
+  connectionTapTimer = setTimeout(() => { connectionTapCount = 0 }, 1_200)
+  if (connectionTapCount < 5) return
+  connectionTapCount = 0
+  clearTimeout(connectionTapTimer)
+  openDiagnosticsPanel()
+}
+
+function sourceBasename(value) {
+  if (typeof value !== 'string') return null
+  return value.split(/[?#]/u)[0].split('/').filter(Boolean).at(-1)?.slice(0, 120) ?? null
+}
+
+function installDiagnosticHooks() {
+  globalThis.addEventListener?.('online', () => {
+    recordDiagnostic({ level: 'info', stage: 'network', code: 'ONLINE' })
+    void refresh()
+  })
+  globalThis.addEventListener?.('offline', () => {
+    recordDiagnostic({ level: 'warn', stage: 'network', code: 'OFFLINE' })
+    setOnline(false)
+  })
+  globalThis.addEventListener?.('error', (event) => {
+    const error = event?.error
+    recordDiagnostic({
+      level: 'error', stage: 'runtime', code: 'UNHANDLED_ERROR', message: error?.message,
+      details: {
+        errorName: typeof error?.name === 'string' ? error.name : null,
+        source: sourceBasename(event?.filename), line: event?.lineno, column: event?.colno,
+      },
+    })
+  })
+  globalThis.addEventListener?.('unhandledrejection', (event) => {
+    const reason = event?.reason
+    recordDiagnostic({
+      level: 'error', stage: 'runtime', code: 'UNHANDLED_REJECTION',
+      message: typeof reason === 'string' ? reason : reason?.message,
+      details: { errorName: typeof reason?.name === 'string' ? reason.name : null },
+    })
+  })
+  imageThumbnail?.addEventListener('error', () => {
+    recordDiagnostic({ level: 'error', stage: 'image-load', code: 'IMAGE_LOAD_FAILURE', details: imageDiagnosticDetails(selectedImage ?? {}) })
+  })
+  sprite?.addEventListener('error', () => {
+    recordDiagnostic({ level: 'error', stage: 'image-load', code: 'IMAGE_LOAD_FAILURE' })
+  })
 }
 
 function bindDom() {
@@ -442,6 +603,13 @@ function bindDom() {
   chatView = document.querySelector('#chat-view')
   petApp = document.querySelector('.pet-app')
   tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
+  diagnosticsPanel = document.querySelector('#diagnostics-panel')
+  diagnosticsOutput = document.querySelector('#diagnostics-output')
+  diagnosticsStatus = document.querySelector('#diagnostics-status')
+  diagnosticsCopyFallback = document.querySelector('#diagnostics-copy-fallback')
+  diagnosticsCopyButton = document.querySelector('#diagnostics-copy')
+  diagnosticsClearButton = document.querySelector('#diagnostics-clear')
+  diagnosticsCloseButton = document.querySelector('#diagnostics-close')
 
   tabButtons.forEach((button) => {
     button.addEventListener('click', () => setActiveTab(button.dataset.tab))
@@ -454,6 +622,15 @@ function bindDom() {
   imageInput.addEventListener('change', () => { void chooseImage() })
   removeImage.addEventListener('click', () => clearImageSelection())
   input.addEventListener('input', updateSendButton)
+  connection.addEventListener('click', connectionDiagnosticTap)
+  diagnosticsCloseButton.addEventListener('click', closeDiagnosticsPanel)
+  diagnosticsCopyButton.addEventListener('click', () => { void copyDiagnostics() })
+  diagnosticsClearButton.addEventListener('click', () => {
+    if (globalThis.confirm?.('清空诊断记录？') === false) return
+    diagnostics.clear()
+    diagnosticsStatus.textContent = '诊断记录已清空。'
+    renderDiagnosticsPanel()
+  })
 
   sprite.addEventListener('pointerdown', () => { pressTimer = setTimeout(() => { pressTimer = null; action('long_press') }, 700) })
   sprite.addEventListener('pointerup', () => {
@@ -491,12 +668,24 @@ function bindDom() {
       const attachment = pendingImage ? await uploadImage(pendingImage) : null
       const body = { message }
       if (attachment) body.attachmentId = attachment.id
-      const response = await fetch('/api/pet/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result?.error || 'chat unavailable')
+      const chatContext = {
+        stage: 'chat',
+        hadImage: Boolean(pendingImage),
+        attachmentId: attachment?.id,
+        ...(pendingImage ? imageDiagnosticDetails(pendingImage) : {}),
+      }
+      const { response, payload: result, requestId, durationMs } = await fetchJsonDiagnostic('/api/pet/chat', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      }, chatContext)
       removeThinkingMessage(thinkingMessage)
       if (result?.ok) line('pet', result.text, null, result.reasoning)
-      else line('pet', result?.petLine || '花花脑袋刚刚卡了一下……')
+      else {
+        recordDiagnostic({
+          level: 'warn', stage: 'chat', code: result?.reason ?? 'CHAT_UNAVAILABLE', httpStatus: response.status,
+          requestId, durationMs, details: chatContext,
+        })
+        line('pet', result?.petLine || '花花脑袋刚刚卡了一下……')
+      }
       scrollMessagesToBottom()
     } catch {
       removeThinkingMessage(thinkingMessage)
@@ -516,9 +705,11 @@ function bindDom() {
 
 function startApp() {
   bindDom()
+  installDiagnosticHooks()
   bindKeyboardState()
   restoreActiveTab()
   updateSendButton()
+  recordDiagnostic({ level: 'info', stage: 'app', code: 'APP_BOOT' })
   refresh()
   loadHistory()
   setInterval(refresh, 1500)
