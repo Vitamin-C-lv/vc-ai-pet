@@ -14,6 +14,13 @@ const CONTENT_TYPES = Object.freeze({
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+})
+const CONVERSATION_ASSET_CONTENT_TYPES = Object.freeze({
+  '.jpg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
 })
@@ -165,13 +172,15 @@ async function serveConversationAsset(pathname, conversationStore, res) {
   } catch {
     return sendJson(res, 404, { error: 'not-found' })
   }
-  const match = /^\/conversation-assets\/(\d{4})\/(\d{2})\/(\d{2})\/([0-9a-f-]{8,80}(?:-thumbnail)?\.webp)$/iu.exec(decoded)
+  const match = /^\/conversation-assets\/(\d{4})\/(\d{2})\/(\d{2})\/([a-z0-9_-]{1,80}(?:-thumbnail)?\.(?:webp|jpg|png))$/iu.exec(decoded)
   if (!match || !conversationStore?.assetsRoot) return sendJson(res, 404, { error: 'not-found' })
   const file = join(resolve(conversationStore.assetsRoot), match[1], match[2], match[3], match[4])
+  const contentType = CONVERSATION_ASSET_CONTENT_TYPES[extname(file).toLowerCase()]
+  if (!contentType) return sendJson(res, 404, { error: 'not-found' })
   try {
     const bytes = await readFile(file)
     res.writeHead(200, {
-      'content-type': 'image/webp',
+      'content-type': contentType,
       'cache-control': 'public, max-age=31536000, immutable',
       'x-content-type-options': 'nosniff',
     })

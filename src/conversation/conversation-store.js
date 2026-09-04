@@ -12,6 +12,11 @@ export const CONVERSATION_STORE_FILENAME = 'conversation-store.json'
 
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const IMAGE_EXTENSION_BY_MIME = Object.freeze({
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+})
 const WEBP_RIFF_HEADER = Buffer.from('RIFF')
 const WEBP_HEADER = Buffer.from('WEBP')
 const EMPTY_STATE = Object.freeze({ version: 1, messages: [], attachments: [] })
@@ -66,6 +71,12 @@ function parseDataUrl(value, { maxBytes = CONVERSATION_MAX_IMAGE_DATA_URL_BYTES 
   const bytes = Buffer.from(match[2], 'base64')
   if (bytes.length === 0) throw storeError('PET_CONVERSATION_IMAGE_INVALID')
   return { dataUrl, mimeType: match[1], bytes }
+}
+
+function imageExtension(mimeType) {
+  const extension = IMAGE_EXTENSION_BY_MIME[mimeType]
+  if (!extension) throw storeError('PET_CONVERSATION_IMAGE_INVALID')
+  return extension
 }
 
 function readPngDimensions(bytes) {
@@ -198,10 +209,18 @@ function copyAttachmentMetadata(value) {
 
   const assetPath = assertSafeRelativeAssetPath(value.assetPath)
   const thumbnailPath = assertSafeRelativeAssetPath(value.thumbnailPath)
+  const mimeType = IMAGE_TYPES.has(value.mimeType) ? value.mimeType : 'image/webp'
+  const originalMimeType = IMAGE_TYPES.has(value.originalMimeType) ? value.originalMimeType : mimeType
+  const thumbnailMimeType = IMAGE_TYPES.has(value.thumbnailMimeType) ? value.thumbnailMimeType : mimeType
+  const thumbnailOriginalMimeType = IMAGE_TYPES.has(value.thumbnailOriginalMimeType)
+    ? value.thumbnailOriginalMimeType
+    : thumbnailMimeType
   return {
     id,
-    mimeType: IMAGE_TYPES.has(value.mimeType) ? value.mimeType : 'image/webp',
-    originalMimeType: IMAGE_TYPES.has(value.originalMimeType) ? value.originalMimeType : (IMAGE_TYPES.has(value.mimeType) ? value.mimeType : 'image/webp'),
+    mimeType,
+    originalMimeType,
+    thumbnailMimeType,
+    thumbnailOriginalMimeType,
     width: imageDimension(value.width, 'width'),
     height: imageDimension(value.height, 'height'),
     thumbnailWidth: imageDimension(value.thumbnailWidth, 'thumbnailWidth'),
@@ -362,10 +381,12 @@ export class ConversationStore {
       const directory = join(this.assetsRoot, year, month, day)
       await mkdir(directory, { recursive: true })
 
-      const assetFile = join(directory, `${id}.webp`)
-      const thumbnailFile = join(directory, `${id}-thumbnail.webp`)
-      const assetBytes = stripWebpExif(asset.bytes)
-      const thumbnailBytes = stripWebpExif(thumb.bytes)
+      const assetExtension = imageExtension(asset.mimeType)
+      const thumbnailExtension = imageExtension(thumb.mimeType)
+      const assetFile = join(directory, `${id}.${assetExtension}`)
+      const thumbnailFile = join(directory, `${id}-thumbnail.${thumbnailExtension}`)
+      const assetBytes = asset.mimeType === 'image/webp' ? stripWebpExif(asset.bytes) : asset.bytes
+      const thumbnailBytes = thumb.mimeType === 'image/webp' ? stripWebpExif(thumb.bytes) : thumb.bytes
       await writeFile(assetFile, assetBytes, { mode: 0o600 })
       await writeFile(thumbnailFile, thumbnailBytes, { mode: 0o600 })
 
@@ -373,6 +394,8 @@ export class ConversationStore {
         id,
         mimeType: asset.mimeType,
         originalMimeType: asset.mimeType,
+        thumbnailMimeType: thumb.mimeType,
+        thumbnailOriginalMimeType: thumb.mimeType,
         width: actualWidth,
         height: actualHeight,
         thumbnailWidth: storedThumbnailWidth,
