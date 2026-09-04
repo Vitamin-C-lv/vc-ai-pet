@@ -79,8 +79,9 @@ function reflectionEligibility(memory, { now, minNewMemories = REFLECTION_MIN_NE
 }
 
 export class PetRuntime {
-  constructor({ sandboxRoot }) {
+  constructor({ sandboxRoot, logger = null }) {
     this.sandbox = new PetSandbox(sandboxRoot)
+    this.logger = logger
     this.memory = null
     this.memoryGate = null
     this.brain = null
@@ -109,7 +110,7 @@ export class PetRuntime {
     this.memory.migrateIdentity(this.identity)
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
-    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox })
+    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger })
     this.memoryGate = new MemoryGate({ memory: this.memory })
     this.dreamEngine = new DreamEngine({
       memory: this.memory,

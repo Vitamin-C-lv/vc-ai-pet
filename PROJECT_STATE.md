@@ -353,3 +353,37 @@ EMOTION_REGRESSION=PASS
 LAN_COMPANION_REGRESSION=PASS
 MANUAL_REAL_PHOTO_ACCEPTANCE=PENDING
 ```
+
+## Vision v0.1 — real-image E2E diagnosis
+
+The first real-image failure was isolated to a stale DSH Web host: the
+running host had started before the Vision commits, so its already-loaded LAN
+handler still rejected an image-only chat as `invalid-message`. Static mobile
+assets were current because they are read per request, which made the stale
+handler easy to miss. The DSH host was reloaded to the current `d77a242`
+working tree without restarting Relay or llama.
+
+A generated 128×128 red/blue PNG (390 bytes) then passed the complete LAN →
+PetRuntime → Local Brain path. A direct Local Brain v1 probe passed both
+without `response_format` and with the current Pet JSON response format, so no
+Vision compatibility workaround or lower-layer change was needed. Vision
+turns retain one inference and skip MemoryGate; image bytes remain request
+only. Internal failure logging now records only code, retryable, and request ID
+without returning or logging image/prompt/response content.
+
+```text
+REAL_IMAGE_E2E=PASS_FOR_CURRENT_RELOADED_HOST
+ROOT_CAUSE_LAYER=STALE_DSH_HOST_NOT_RELOADED
+ROOT_CAUSE=RUNNING_HOST_PREDATED_VISION_COMMIT
+LAN_TINY_PNG=PASS
+PET_RUNTIME_TINY_PNG=PASS
+LOCAL_BRAIN_MINIMAL_VISION=PASS
+VISION_NO_RESPONSE_FORMAT=PASS
+VISION_WITH_RESPONSE_FORMAT=PASS
+LOCAL_BRAIN_VISION_REGRESSION=NO
+MOBILE_REAL_PHOTO=PENDING_USER_RETEST
+INTERNAL_ERROR_CODE_LOGGING=PASS
+IMAGE_CONTENT_LOGGED=NO
+PRODUCTION_DB_MODIFIED=NO
+DREAM_RERUN=NO
+```

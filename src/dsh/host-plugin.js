@@ -27,7 +27,7 @@ export function apply(ctx, rawConfig = {}) {
   const assetRoot = resolve(rawConfig.assetRoot || DEFAULT_ASSETS);
   const tickMs = Number.isFinite(rawConfig.tickMs) ? Math.max(1_000, rawConfig.tickMs) : 10_000;
   const visualConfig = normalizePetVisualConfig(rawConfig?.petVisual);
-  const runtime = new PetRuntime({ sandboxRoot });
+  const runtime = new PetRuntime({ sandboxRoot, logger: ctx.logger });
   const ready = runtime.initialize();
   const lanEnabled = rawConfig.lanUi?.enabled !== false;
   const lanPort = Number.isInteger(rawConfig.lanUi?.port) ? rawConfig.lanUi.port : 17870;

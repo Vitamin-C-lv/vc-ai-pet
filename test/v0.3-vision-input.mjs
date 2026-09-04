@@ -5,6 +5,7 @@ import { request } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { LocalBrain } from '../src/brain/local-brain.js'
+import { LocalBrainApiError } from '../src/brain/local-brain-client.js'
 import { LI_HUAHUA_IDENTITY } from '../src/core/pet-identity.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../src/brain/vision-input.js'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
@@ -27,6 +28,35 @@ for (const invalid of [
   [jpeg],
   { dataUrl: jpeg, path: '/tmp/pet.png' },
 ]) assert.throws(() => normalizeVisionImage(invalid), /invalid image/u)
+
+{
+  const warnings = []
+  const brain = new LocalBrain({
+    config: { resourceGate: { enabled: false } },
+    memory: { recall: () => [], stableIdentityContext: () => [] },
+    logger: { warn: (message) => warnings.push(message) },
+    client: {
+      chat: async () => {
+        throw new LocalBrainApiError('temporary vision outage', {
+          code: 'LOCAL_BRAIN_UPSTREAM_ERROR',
+          retryable: true,
+          requestId: 'lb-vision-log',
+        })
+      },
+    },
+  })
+  const result = await brain.reply({
+    identity: LI_HUAHUA_IDENTITY,
+    state: { mood: .8, energy: .8, boredom: .1, sleepiness: .1, attachment: .8 },
+    userText: '花花你看这是什么？',
+    image: { dataUrl: jpeg },
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.unavailable, true)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /^PET_VISION_CHAT_FAILURE code=LOCAL_BRAIN_UPSTREAM_ERROR retryable=true requestId=lb-vision-log$/u)
+  assert.doesNotMatch(warnings[0], /data:image|花花你看/u)
+}
 
 {
   const requests = []
@@ -185,3 +215,4 @@ console.log('IMAGE_BYTES_IN_RECENT_CONVERSATION=0')
 console.log('IMAGE_BYTES_IN_PET_MEMORY=0')
 console.log('MODEL_INFERENCES_PER_VISION_CHAT=1')
 console.log('MOBILE_IMAGE_PICKER=PASS')
+console.log('INTERNAL_ERROR_CODE_LOGGING=PASS')

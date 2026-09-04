@@ -29,10 +29,11 @@ async function chatWithBoundedQueueRetry(client, request) {
 }
 
 export class LocalBrain {
-  constructor({ config = {}, memory, client = null, timeProvider = getCurrentTimeContext }) {
+  constructor({ config = {}, memory, client = null, timeProvider = getCurrentTimeContext, logger = null }) {
     this.config = validateLocalBrainConfig(config)
     this.memory = memory
     this.timeProvider = typeof timeProvider === 'function' ? timeProvider : getCurrentTimeContext
+    this.logger = logger
     this.client = client ?? new LocalBrainClient({
       baseUrl: this.config.baseUrl,
       healthTimeoutMs: this.config.healthTimeoutMs,
@@ -133,6 +134,13 @@ export class LocalBrain {
         memoryDecision: parsed.memoryDecision,
       }
     } catch (error) {
+      if (visionImage) {
+        this.logger?.warn?.(
+          `PET_VISION_CHAT_FAILURE code=${String(error?.code ?? 'UNKNOWN')} `
+          + `retryable=${error?.retryable === true ? 'true' : 'false'} `
+          + `requestId=${String(error?.requestId ?? '')}`,
+        )
+      }
       // Retryable Local Brain failures are an availability condition for the
       // pet UI, not a reason for Pet to manage/restart the shared model.
       if (error?.retryable === true) {
