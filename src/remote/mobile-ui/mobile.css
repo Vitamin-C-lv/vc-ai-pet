@@ -18,6 +18,8 @@ html {
 
 body {
   width: 100%;
+  height: 100vh;
+  min-height: 100vh;
   height: 100dvh;
   min-height: 100svh;
   margin: 0;
@@ -30,6 +32,8 @@ body {
 .pet-app,
 .pet-page {
   width: min(100%, 540px);
+  height: 100vh;
+  min-height: 100vh;
   height: 100dvh;
   min-height: 100svh;
   margin: 0 auto;
@@ -37,6 +41,10 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.pet-app.keyboard-open {
+  min-height: 0;
 }
 
 .app-header,
@@ -109,28 +117,41 @@ h1 {
   display: none;
 }
 
-/* Play owns the available height but does not scroll on a normal phone. */
+/* Play keeps the visual group compact while preserving a quiet bottom buffer. */
 #play-view,
 .play-view {
-  gap: 12px;
-  padding: 12px 14px 10px;
+  gap: 8px;
+  padding: 10px 14px clamp(34px, 6dvh, 48px);
   overflow: hidden;
+  justify-content: flex-end;
 }
 
 .play-view .pet-card,
 #play-view .pet-card {
   display: flex;
-  flex: 1;
+  flex: 0 0 clamp(300px, 56dvh, 480px);
   flex-direction: column;
   min-height: 0;
   width: 100%;
-  height: 100%;
-  padding: 12px 14px 10px;
+  height: auto;
+  padding: 14px 16px 12px;
   text-align: center;
   border: 1px solid #eadccd;
   border-radius: 24px;
   background: rgba(255, 255, 255, .66);
   box-shadow: 0 10px 30px rgba(88, 63, 41, .08);
+}
+
+.stage-hint {
+  display: flex;
+  flex: 0 0 10%;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  margin: 0;
+  color: #aa8872;
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .pet-card {
@@ -143,16 +164,16 @@ h1 {
 
 .sprite-wrap {
   display: grid;
-  flex: 1;
+  flex: 0 0 62%;
   min-height: 0;
   width: 100%;
   place-items: center;
 }
 
 #pet-sprite {
-  width: auto;
+  width: clamp(192px, 30dvh, 240px);
   height: auto;
-  max-width: min(78vw, 340px);
+  max-width: min(78vw, 240px);
   max-height: 100%;
   image-rendering: pixelated;
   object-fit: contain;
@@ -163,9 +184,19 @@ h1 {
   transform: scale(1.04);
 }
 
+.stage-status {
+  display: flex;
+  flex: 1 1 28%;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 0;
+  gap: 6px;
+  padding-top: 6px;
+}
+
 #state-label {
   flex: 0 0 auto;
-  margin: 2px 0 6px;
+  margin: 0 0 4px;
   font-size: 15px;
   font-weight: 700;
   line-height: 1.25;
@@ -175,7 +206,7 @@ h1 {
   display: flex;
   flex: 0 0 auto;
   justify-content: center;
-  gap: 20px;
+  gap: 16px;
   min-height: 18px;
   color: #806b5d;
   font-size: 14px;
@@ -189,11 +220,12 @@ h1 {
 .play-view .interaction,
 #play-view .interaction {
   display: grid;
-  flex: 0 0 56px;
+  flex: 0 0 clamp(72px, 16dvh, 112px);
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-  height: 56px;
-  min-height: 56px;
+  height: auto;
+  min-height: 72px;
+  align-items: center;
   margin: 0;
 }
 
@@ -244,8 +276,9 @@ button:disabled {
 }
 
 .messages {
-  display: block;
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
   padding: 14px 14px 18px;
   overflow-y: auto;
@@ -258,56 +291,107 @@ button:disabled {
   line-height: 1.5;
 }
 
-.messages > p {
-  max-width: 88%;
+.message {
+  display: flex;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
   margin-bottom: 12px;
+  line-height: 1.5;
 }
 
-.message {
-  max-width: 88%;
-  margin: 0 0 12px;
+.message-bubble,
+.messages > p.pet-line {
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  max-width: min(88%, 340px);
+  padding: 9px 12px;
+  border: 1px solid #eadccd;
+  border-radius: 18px 18px 18px 6px;
+  background: #fff9f1;
+  box-shadow: 0 3px 12px rgba(88, 63, 41, .06);
+}
+
+.message.user-line {
+  justify-content: flex-end;
+}
+
+.message.user-line .message-bubble {
+  border-color: #e3c4aa;
+  border-radius: 18px 18px 6px 18px;
+  background: #f5e1d0;
+}
+
+.message.pet-line {
+  justify-content: flex-start;
+}
+
+.message-label {
+  width: 100%;
+  margin-bottom: 4px;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  opacity: .66;
+}
+
+.message.user-line .message-label {
+  text-align: right;
+}
+
+.message-text {
+  width: 100%;
+  margin: 0;
+  color: inherit;
+  font-size: 15px;
   line-height: 1.5;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.user-line .message-text {
+  text-align: left;
+}
+
+.message.user-line,
+.messages .user-line {
+  color: #79533c;
+}
+
+.message.pet-line,
+.messages .pet-line {
+  color: #4a392e;
 }
 
 .message:last-child {
   margin-bottom: 0;
 }
 
-.message-label {
-  margin-bottom: 3px;
-  color: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.3;
-  opacity: .72;
+.message-bubble .image-card {
+  align-self: flex-start;
 }
 
-.message-text {
-  margin: 0;
-  color: inherit;
-  font-size: 15px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.message.user-line .image-card {
+  align-self: flex-end;
 }
 
-.message.user-line,
-.messages .user-line {
-  margin-left: auto;
-  text-align: right;
-  color: #876046;
-}
-
-.message.pet-line,
-.messages .pet-line {
-  margin-right: auto;
-  text-align: left;
-  color: #4a392e;
+.message-bubble .image-card {
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 2px;
+  border-color: rgba(145, 103, 74, .22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .7);
+  box-shadow: none;
+  overflow: hidden;
 }
 
 .image-card {
   display: inline-flex;
-  max-width: min(280px, 78vw);
+  max-width: min(256px, 72vw);
   margin-top: 5px;
   padding: 3px;
   border: 1px solid #dfcdbd;
@@ -319,8 +403,8 @@ button:disabled {
 .image-card img {
   display: block;
   width: auto;
-  max-width: 280px;
-  max-height: 280px;
+  max-width: 256px;
+  max-height: 256px;
   border-radius: 10px;
   object-fit: cover;
 }
@@ -399,6 +483,7 @@ button:disabled {
   min-height: 64px;
   padding: 9px 10px;
   border-top: 1px solid #f0e6db;
+  background: #fffdf9;
 }
 
 #image-input[hidden] {
@@ -413,7 +498,16 @@ button:disabled {
   border: 1px solid #dfcdbd;
   border-radius: 14px;
   padding: 10px 12px;
+  background: #fffefa;
+  color: #4a392e;
   font: inherit;
+  outline: none;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+
+#chat-input:focus {
+  border-color: #c99570;
+  box-shadow: 0 0 0 3px rgba(201, 149, 112, .16);
 }
 
 #image-button,
@@ -457,6 +551,23 @@ button:disabled {
   border-top: 1px solid #eadccd;
   background: #fffdf9;
   box-shadow: 0 -3px 12px rgba(88, 63, 41, .04);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.pet-app.keyboard-open #bottom-nav,
+.pet-app.keyboard-open .bottom-nav {
+  flex-basis: 0;
+  height: 0;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 0;
+  border-top-color: transparent;
+  box-shadow: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px);
+  pointer-events: none;
 }
 
 .nav-item {
@@ -465,9 +576,9 @@ button:disabled {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 48px;
+  min-height: 46px;
   gap: 2px;
-  padding: 4px 8px;
+  padding: 3px 6px;
   border-radius: 14px;
   background: transparent;
   color: #806b5d;
@@ -487,7 +598,7 @@ button:disabled {
 }
 
 .nav-icon {
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
 }
 
@@ -496,16 +607,28 @@ button:disabled {
 }
 
 @media (max-height: 620px) {
+  #play-view,
+  .play-view {
+    gap: 8px;
+    padding: 8px 12px 28px;
+  }
+
   .play-view .pet-card,
   #play-view .pet-card {
+    flex-basis: clamp(270px, 56dvh, 360px);
     padding: 8px 10px;
+  }
+
+  .stage-status {
+    gap: 4px;
+    padding-top: 4px;
   }
 
   .play-view .interaction,
   #play-view .interaction {
-    flex-basis: 50px;
-    height: 50px;
-    min-height: 50px;
+    flex-basis: 64px;
+    height: 64px;
+    min-height: 64px;
   }
 
   .play-view .interaction button,
@@ -515,6 +638,45 @@ button:disabled {
   }
 
   #pet-sprite {
-    max-width: min(70vw, 300px);
+    width: clamp(176px, 32dvh, 210px);
+    max-width: min(70vw, 210px);
+  }
+}
+
+@media (max-height: 500px) {
+  #play-view,
+  .play-view {
+    gap: 6px;
+    padding: 6px 10px 18px;
+  }
+
+  .play-view .pet-card,
+  #play-view .pet-card {
+    flex-basis: clamp(230px, 50dvh, 270px);
+    padding: 6px 8px;
+  }
+
+  .stage-hint {
+    font-size: 11px;
+  }
+
+  .play-view .interaction,
+  #play-view .interaction {
+    flex-basis: 58px;
+    height: 58px;
+    min-height: 58px;
+    gap: 6px;
+  }
+
+  .play-view .interaction button,
+  #play-view .interaction button {
+    height: 48px;
+    min-height: 48px;
+    border-radius: 14px;
+  }
+
+  #pet-sprite {
+    width: min(52vw, 170px);
+    max-width: min(52vw, 170px);
   }
 }

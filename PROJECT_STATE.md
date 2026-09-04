@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_MOBILE_APP_SHELL_PASS
+Status: FINAL_STATUS=VC_AI_PET_MOBILE_UI_POLISH_PHASE2_PASS
 
 ```text
 DSH_VERSION=0.1.1-rc.2
@@ -461,6 +461,44 @@ LAN_SERVER_CHANGED=NO
 Production changes are limited to the three LAN mobile UI files. The
 Conversation Persistence Layer, Memory, Dream, Historical Recall, Local Brain
 API, Emotion Runtime, and Android Companion remain unchanged.
+
+## v0.3-F — Mobile UI Polish Phase 2
+
+The LAN companion mobile UI now hides the bottom navigation while the Chat
+composer has focus on a mobile viewport. VisualViewport resize/scroll events,
+window resize, focus lifecycle, and a conservative legacy-WebView fallback are
+coalesced into a `keyboard-open` root state. During that state the navigation
+releases its layout height and the shell tracks the visible viewport without
+allowing body scrolling.
+
+Play has a compact stage/actions composition with an explicit hint, a larger
+centered sprite, closer status metrics, and a 6–8% bottom breathing buffer.
+Chat messages retain the existing article data flow while rendering through a
+shared `.message-bubble`; owner and pet bubbles have distinct warm tones and
+images remain inside the same message block as accompanying text.
+
+```text
+FINAL_STATUS=VC_AI_PET_MOBILE_UI_POLISH_PHASE2_PASS
+KEYBOARD_NAV_HIDE=PASS
+PLAY_LAYOUT_REBALANCE=PASS
+CHAT_BUBBLES=PASS
+CHAT_COMPOSER_STABLE=PASS
+BOTTOM_NAV_POLISH=PASS
+IMAGE_PREVIEW_UI=PASS
+TEXT_CHAT_REGRESSION=PASS
+IMAGE_CHAT_REGRESSION=PASS
+PLAY_INTERACTION_REGRESSION=PASS
+TAB_PERSISTENCE=PASS
+APK_REBUILD_REQUIRED=NO
+ANDROID_NATIVE_CHANGED=NO
+PET_CORE_CHANGED=NO
+MEMORY_CHANGED=NO
+DREAM_CHANGED=NO
+LOCAL_BRAIN_CHANGED=NO
+RELAY_CHANGED=NO
+CONVERSATION_STORE_CHANGED=NO
+LAN_SERVER_CHANGED=NO
+```
 
 ## v0.1 Android Companion
 

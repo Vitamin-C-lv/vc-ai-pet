@@ -15,6 +15,7 @@ let removeImage
 let imageStatus
 let playView
 let chatView
+let petApp
 let tabButtons = []
 
 const MAX_LONG_EDGE = 1920
@@ -25,13 +26,91 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const ACTIVE_TAB_STORAGE_KEY = 'vc-ai-pet-mobile-active-tab-v1'
 const DEFAULT_ACTIVE_TAB = 'play'
 const VALID_TABS = new Set(['play', 'chat'])
+const KEYBOARD_OPEN_THRESHOLD = 120
+const KEYBOARD_CLOSE_THRESHOLD = 72
 let selectedImage = null
 let imageProcessing = false
 let pressTimer = null
 let clickTimer = null
+let keyboardOpen = false
+let keyboardFrame = null
+let keyboardViewportChanged = false
+let viewportBaselineHeight = 0
 
 function setOnline(online) { connection.classList.toggle('online', online); connection.setAttribute('aria-label', online ? '已同步' : '同步中') }
 function number(value) { return `${Math.round(Number(value || 0) * 100)}%` }
+
+function getViewportHeight() {
+  const visualViewport = globalThis.visualViewport
+  const heights = [visualViewport?.height, globalThis.innerHeight, document.documentElement.clientHeight]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0)
+  return heights.length ? Math.min(...heights) : 0
+}
+
+function setKeyboardOpen(open, height = getViewportHeight()) {
+  if (!petApp) return
+  keyboardOpen = open
+  petApp.classList.toggle('keyboard-open', open)
+  if (open) {
+    petApp.style.height = `${Math.round(height)}px`
+    petApp.style.minHeight = '0'
+  } else {
+    petApp.style.removeProperty('height')
+    petApp.style.removeProperty('min-height')
+  }
+}
+
+function syncKeyboardState(viewportChanged = false) {
+  keyboardFrame = null
+  const height = getViewportHeight()
+  if (!height) return
+
+  const focused = document.activeElement === input
+  const mobileViewport = Number(globalThis.innerWidth || 0) <= 900
+  if (!viewportBaselineHeight || (!keyboardOpen && !focused)) viewportBaselineHeight = height
+  if (height > viewportBaselineHeight) viewportBaselineHeight = height
+
+  const heightDelta = viewportBaselineHeight - height
+  const threshold = keyboardOpen ? KEYBOARD_CLOSE_THRESHOLD : KEYBOARD_OPEN_THRESHOLD
+  const viewportKeyboard = heightDelta >= threshold
+  const focusKeyboard = mobileViewport && focused
+  const shouldOpen = keyboardOpen
+    ? viewportKeyboard || (focusKeyboard && !viewportChanged)
+    : focused && (viewportKeyboard || focusKeyboard)
+  setKeyboardOpen(shouldOpen, height)
+}
+
+function scheduleKeyboardState(viewportChanged = false) {
+  if (viewportChanged) keyboardViewportChanged = true
+  if (keyboardFrame !== null) return
+  const update = () => {
+    const changed = keyboardViewportChanged
+    keyboardViewportChanged = false
+    syncKeyboardState(changed)
+  }
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    keyboardFrame = globalThis.requestAnimationFrame(update)
+  } else {
+    keyboardFrame = globalThis.setTimeout(update, 50)
+  }
+}
+
+function bindKeyboardState() {
+  const visualViewport = globalThis.visualViewport
+  input.addEventListener('focus', () => scheduleKeyboardState())
+  input.addEventListener('blur', () => {
+    setKeyboardOpen(false)
+    scheduleKeyboardState()
+  })
+  globalThis.addEventListener?.('resize', () => scheduleKeyboardState(true))
+  globalThis.addEventListener?.('orientationchange', () => scheduleKeyboardState(true))
+  globalThis.addEventListener?.('pageshow', () => scheduleKeyboardState())
+  document.addEventListener('visibilitychange', () => scheduleKeyboardState())
+  visualViewport?.addEventListener('resize', () => scheduleKeyboardState(true))
+  visualViewport?.addEventListener('scroll', () => scheduleKeyboardState(true))
+  scheduleKeyboardState()
+}
 
 function readStoredTab() {
   try {
@@ -73,18 +152,20 @@ function scrollMessagesToBottom() {
 function renderMessage({ role, text = '', attachment = null } = {}) {
   const node = document.createElement('article')
   node.className = `message ${role === 'user' ? 'user-line' : 'pet-line'}`
+  const bubble = document.createElement('div')
+  bubble.className = 'message-bubble'
 
   const label = document.createElement('div')
   label.className = 'message-label'
   label.textContent = role === 'user' ? '主人' : '李花花'
-  node.append(label)
+  bubble.append(label)
 
   const cleanText = String(text ?? '').trim()
   if (cleanText) {
     const textNode = document.createElement('p')
     textNode.className = 'message-text'
     textNode.textContent = cleanText
-    node.append(textNode)
+    bubble.append(textNode)
   }
 
   const thumbnailUrl = typeof attachment?.thumbnailUrl === 'string' ? attachment.thumbnailUrl : ''
@@ -97,9 +178,10 @@ function renderMessage({ role, text = '', attachment = null } = {}) {
     image.loading = 'lazy'
     image.decoding = 'async'
     card.append(image)
-    node.append(card)
+    bubble.append(card)
   }
 
+  node.append(bubble)
   messages.append(node)
   return node
 }
@@ -304,6 +386,7 @@ function bindDom() {
   imageStatus = document.querySelector('#image-status')
   playView = document.querySelector('#play-view')
   chatView = document.querySelector('#chat-view')
+  petApp = document.querySelector('.pet-app')
   tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
 
   tabButtons.forEach((button) => {
@@ -339,8 +422,9 @@ function bindDom() {
     const pendingImage = selectedImage
     if (!message && !pendingImage) return
 
+    const restoreInputFocus = document.activeElement === input
     input.value = ''
-    input.disabled = true
+    input.readOnly = true
     imageButton.disabled = true
     sendButton.disabled = true
     try {
@@ -359,10 +443,10 @@ function bindDom() {
       scrollMessagesToBottom()
       setOnline(false)
     } finally {
-      input.disabled = false
+      input.readOnly = false
       imageButton.disabled = false
       clearImageSelection()
-      input.focus()
+      if (restoreInputFocus && !chatView.hidden) input.focus({ preventScroll: true })
       updateSendButton()
       refresh()
     }
@@ -371,6 +455,7 @@ function bindDom() {
 
 function startApp() {
   bindDom()
+  bindKeyboardState()
   restoreActiveTab()
   updateSendButton()
   refresh()

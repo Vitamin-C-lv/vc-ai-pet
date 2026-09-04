@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#f5eee3">
     <title>李花花</title>
     <link rel="stylesheet" href="/mobile.css">
@@ -20,9 +20,12 @@
       <div class="view-host">
         <section id="play-view" class="app-view play-view" data-view="play" aria-label="和花花玩耍">
           <div class="pet-card" aria-live="polite">
+            <p class="stage-hint" aria-hidden="true">今天也陪花花玩一会儿吧</p>
             <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
-            <p id="state-label">当前状态：idle</p>
-            <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
+            <div class="stage-status">
+              <p id="state-label">当前状态：idle</p>
+              <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
+            </div>
           </div>
           <div class="interaction" aria-label="和花花互动">
             <button id="pet-button" type="button">摸摸头</button>
@@ -33,7 +36,14 @@
 
         <section id="chat-view" class="app-view chat-view" data-view="chat" aria-label="和李花花聊天" hidden>
           <div class="chat">
-            <div id="messages" class="messages"><p class="pet-line">李花花：汪，在呀。</p></div>
+            <div id="messages" class="messages">
+              <article class="message pet-line">
+                <div class="message-bubble">
+                  <div class="message-label">李花花</div>
+                  <p class="message-text">汪，在呀。</p>
+                </div>
+              </article>
+            </div>
             <div id="image-preview" class="image-preview" hidden>
               <img id="image-thumbnail" alt="待发送图片预览">
               <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
