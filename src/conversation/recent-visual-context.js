@@ -1,3 +1,10 @@
+import {
+  CJK_STOP_CHARACTERS,
+  cleanVisualText,
+  overlapScore,
+  visualKeywordTerms,
+} from '../vision/visual-keywords.js'
+
 export const RECENT_VISUAL_MAX_ATTACHMENTS = 10
 export const RECENT_VISUAL_WINDOW = '10_IMAGE_MESSAGES'
 
@@ -12,14 +19,7 @@ const COMPARISON_PATTERN = /(两张|这两个|这两幅|比较|区别|不同|哪
 const STANDALONE_PREVIOUS_PATTERN = /^(?:前一张|上一张)$/u
 const AMBIGUOUS_DEICTIC_PATTERN = /(之前那个|前面那个|那个怎么样)/u
 
-// These characters occur in almost every short Chinese turn. Removing them
-// from the lightweight overlap score keeps a shared "这/是/看" from beating
-// a candidate that actually mentions the subject being asked about.
-const CJK_STOP_CHARACTERS = new Set('这个些它那个刚才里面张的是吗呢啊呀我你主人花花再看一下重新仔细清楚图片照片图像截图画面什么真的'.split(''))
-
-function cleanText(value) {
-  return String(value ?? '').normalize('NFKC').trim().slice(0, 1200)
-}
+const cleanText = cleanVisualText
 
 function attachmentIdFromMessage(message) {
   const id = message?.attachment?.id ?? message?.attachmentId
@@ -65,41 +65,6 @@ function hasImmediateImage(messages) {
   return users.slice(-2).some((message) => Boolean(attachmentIdFromMessage(message)))
 }
 
-function cjkTerms(text) {
-  const terms = new Map()
-  const runs = cleanText(text).match(/[\u3400-\u9fff]+/gu) ?? []
-  for (const run of runs) {
-    for (const character of run) {
-      if (!CJK_STOP_CHARACTERS.has(character)) terms.set(character, 1)
-    }
-    for (let index = 0; index + 1 < run.length; index += 1) {
-      const term = run.slice(index, index + 2)
-      if ([...term].some((character) => CJK_STOP_CHARACTERS.has(character))) continue
-      terms.set(term, 3)
-    }
-  }
-  return terms
-}
-
-function keywordTerms(text) {
-  const terms = cjkTerms(text)
-  const ascii = cleanText(text).toLocaleLowerCase().match(/[a-z0-9][a-z0-9_-]*/giu) ?? []
-  for (const term of ascii) terms.set(term, 3)
-  return terms
-}
-
-function overlapScore(query, candidate) {
-  const queryTerms = keywordTerms(query)
-  // Assistant text is deliberately excluded: an earlier visual mistake must
-  // never become the main evidence for selecting a later image.
-  const candidateTerms = keywordTerms(candidate.userText)
-  let score = 0
-  for (const [term, weight] of queryTerms) {
-    if (candidateTerms.has(term)) score += Math.min(weight, candidateTerms.get(term))
-  }
-  return score
-}
-
 export function detectVisualIntent(userText, { hasCurrent = false, candidateCount = 0 } = {}) {
   const text = cleanText(userText)
   if (!text && hasCurrent) return 'single_inspection'
@@ -135,7 +100,7 @@ function newestByScore(query, candidates) {
   let bestScore = -1
   let secondScore = -1
   for (const candidate of candidates) {
-    const score = overlapScore(query, candidate)
+    const score = overlapScore(query, candidate.userText)
     if (score > bestScore) {
       secondScore = bestScore
       best = candidate
