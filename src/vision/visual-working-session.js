@@ -1,5 +1,6 @@
 import { normalizeVisionImage } from '../brain/vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
+import { visualTermsFor, VISUAL_OBSERVATION_TERM_BOOST } from './visual-keywords.js'
 
 export const MAX_VISUAL_INSPECTIONS_PER_TURN = 5
 export const COMPARISON_TASK_MIN_UNIQUE_IMAGES = 2
@@ -29,7 +30,7 @@ function visualFailure({ reason = 'visual-step-failed', unavailable = false, req
 }
 
 export class VisualWorkingSession {
-  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now() }) {
+  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null }) {
     this.turnId = turnId
     this.userText = String(userText ?? '')
     this.candidatePool = Array.isArray(candidatePool) ? candidatePool : []
@@ -50,6 +51,7 @@ export class VisualWorkingSession {
     this.brain = brain
     this.emit = emit
     this.now = now
+    this.experienceStore = experienceStore
     this.startedAt = this.now()
     this.observations = []
     this.inspections = []
@@ -71,6 +73,80 @@ export class VisualWorkingSession {
       ?? this.candidatePool.find((candidate) => candidate.visualId === this.inspections.at(-1)?.visualId)?.visualId
       ?? this.candidatePool[0]?.visualId
       ?? null
+  }
+
+  async #recordVisualEvents(candidate, summary, focus) {
+    const store = this.experienceStore
+    if (!store || typeof store.findExperienceByAttachmentId !== 'function' || typeof store.recordEvent !== 'function') return
+
+    let experience
+    try {
+      experience = await store.findExperienceByAttachmentId(candidate.attachmentId)
+    } catch (error) {
+      return
+    }
+    if (!experience?.experienceId) return
+
+    const previouslyInspected = this.inspections
+      .slice(0, -1)
+      .some((item) => item.attachmentId === candidate.attachmentId)
+    try {
+      await store.recordEvent({
+        experienceId: experience.experienceId,
+        turnId: this.turnId,
+        kind: previouslyInspected ? 'revisit' : 'inspection',
+        occurredAt: this.now(),
+        summary: null,
+        focus: null,
+      })
+    } catch (error) {
+      return
+    }
+
+    if (summary) {
+      try {
+        await store.recordEvent({
+          experienceId: experience.experienceId,
+          turnId: this.turnId,
+          kind: 'observation',
+          occurredAt: this.now(),
+          summary,
+          focus,
+          evidence: 'inferred',
+          terms: visualTermsFor(summary, { boost: VISUAL_OBSERVATION_TERM_BOOST }),
+        })
+      } catch (error) {
+        // Visual event persistence is best effort and must never fail a turn.
+      }
+    }
+
+    if (!this.comparison || !summary) return
+    const otherInspection = this.inspections
+      .slice(0, -1)
+      .find((item) => item.attachmentId !== candidate.attachmentId)
+    if (!otherInspection || typeof store.findExperienceByAttachmentId !== 'function') return
+
+    let relatedExperience
+    try {
+      relatedExperience = await store.findExperienceByAttachmentId(otherInspection.attachmentId)
+    } catch (error) {
+      return
+    }
+    if (!relatedExperience?.experienceId) return
+    try {
+      await store.recordEvent({
+        experienceId: experience.experienceId,
+        turnId: this.turnId,
+        kind: 'comparison',
+        occurredAt: this.now(),
+        summary,
+        focus,
+        evidence: 'inferred',
+        relatedExperienceId: relatedExperience.experienceId,
+      })
+    } catch (error) {
+      // Visual event persistence is best effort and must never fail a turn.
+    }
   }
 
   async run(firstVisualId) {
@@ -95,7 +171,9 @@ export class VisualWorkingSession {
         ? '🔎 花花想再确认一下这张……'
         : candidate.relation === 'current'
           ? '🐾 花花先仔细看看这张……'
-          : '↩️ 花花再回头看看前一张……'
+          : candidate.relation === 'recalled'
+            ? '↩️ 花花翻到以前的一张照片'
+            : '↩️ 花花再回头看看前一张……'
       const selectedEvent = this.emit('visual_selected', { relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, caption })
       await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_selected', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: selectedEvent?.seq, activityAt: selectedEvent?.at, turnId: this.turnId, text: caption })
       let publicAttachment
@@ -105,7 +183,10 @@ export class VisualWorkingSession {
         return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', requestId: error?.requestId ?? null, unavailable: error?.retryable === true, stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
       }
       if (!publicAttachment) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
-      const imageEvent = this.emit('visual_image', { sourceAttachmentId: candidate.attachmentId, attachment: publicAttachment, caption: candidate.relation === 'current' ? '花花看看这张' : '花花再看看这张' })
+      const imageCaption = candidate.relation === 'recalled'
+        ? '花花重新看看这张'
+        : candidate.relation === 'current' ? '花花看看这张' : '花花再看看这张'
+      const imageEvent = this.emit('visual_image', { sourceAttachmentId: candidate.attachmentId, attachment: publicAttachment, caption: imageCaption })
       await this.conversationStore.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', sourceAttachmentId: candidate.attachmentId, activitySeq: imageEvent?.seq, activityAt: imageEvent?.at, turnId: this.turnId, text: caption, attachment: metadata })
       this.inspections.push({ visualId, attachmentId: candidate.attachmentId })
       let step
@@ -135,6 +216,7 @@ export class VisualWorkingSession {
       const focus = typeof step.focus === 'string' ? step.focus.trim() : ''
       const safeFocus = sanitizeSafeTraceText(focus, 120)
       if (focus.length > 120 || (focus && !safeFocus)) return visualFailure({ reason: 'unsafe-visual-focus', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
+      await this.#recordVisualEvents(candidate, summary, safeFocus)
       if (summary) {
         const observation = { visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary }
         this.observations.push(observation)
