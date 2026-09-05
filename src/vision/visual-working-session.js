@@ -2,6 +2,7 @@ import { normalizeVisionImage } from '../brain/vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 
 export const MAX_VISUAL_INSPECTIONS_PER_TURN = 5
+export const COMPARISON_TASK_MIN_UNIQUE_IMAGES = 2
 
 function visualFailure({ reason = 'visual-step-failed', unavailable = false, requestId = null, stage, inspectionOrdinal, candidate = null, nextVisualId = null, inspections }) {
   const currentVisualId = typeof candidate?.visualId === 'string' ? candidate.visualId.slice(0, 16) : null
@@ -28,10 +29,23 @@ function visualFailure({ reason = 'visual-step-failed', unavailable = false, req
 }
 
 export class VisualWorkingSession {
-  constructor({ turnId, userText, candidatePool, conversationStore, brain, emit, now = () => Date.now() }) {
+  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now() }) {
     this.turnId = turnId
     this.userText = String(userText ?? '')
-    this.candidatePool = candidatePool
+    this.candidatePool = Array.isArray(candidatePool) ? candidatePool : []
+    this.comparison = comparison === true
+    const candidateIds = new Set(this.candidatePool.map((candidate) => candidate?.visualId).filter((visualId) => typeof visualId === 'string'))
+    const seenAttachments = new Set()
+    this.comparisonPair = (Array.isArray(comparisonPair) ? comparisonPair : [])
+      .filter((candidate) => {
+        const attachmentId = typeof candidate?.attachmentId === 'string' ? candidate.attachmentId : ''
+        const visualId = typeof candidate?.visualId === 'string' ? candidate.visualId : ''
+        if (!candidateIds.has(visualId) || !attachmentId || seenAttachments.has(attachmentId)) return false
+        seenAttachments.add(attachmentId)
+        return true
+      })
+      .slice(0, COMPARISON_TASK_MIN_UNIQUE_IMAGES)
+    this.requiredUniqueImages = this.comparison ? COMPARISON_TASK_MIN_UNIQUE_IMAGES : 1
     this.conversationStore = conversationStore
     this.brain = brain
     this.emit = emit
@@ -39,9 +53,25 @@ export class VisualWorkingSession {
     this.startedAt = this.now()
     this.observations = []
     this.inspections = []
+    this.prematureAnswersBlocked = 0
+    this.prematureReplyMessagesDiscarded = 0
   }
 
   get inspectionCount() { return this.inspections.length }
+
+  #nextUninspectedComparisonVisualId() {
+    for (const candidate of this.comparisonPair) {
+      if (!this.inspections.some((item) => item.attachmentId === candidate.attachmentId)) return candidate.visualId
+    }
+    return null
+  }
+
+  #comparisonFallbackVisualId() {
+    return this.comparisonPair[0]?.visualId
+      ?? this.candidatePool.find((candidate) => candidate.visualId === this.inspections.at(-1)?.visualId)?.visualId
+      ?? this.candidatePool[0]?.visualId
+      ?? null
+  }
 
   async run(firstVisualId) {
     let visualId = firstVisualId
@@ -80,7 +110,18 @@ export class VisualWorkingSession {
       this.inspections.push({ visualId, attachmentId: candidate.attachmentId })
       let step
       try {
-        step = await this.brain.visualStep({ userText: this.userText, image, candidatePool: this.candidatePool, observations: this.observations, forceAnswer: ordinal === MAX_VISUAL_INSPECTIONS_PER_TURN - 1 })
+        step = await this.brain.visualStep({
+          userText: this.userText,
+          image,
+          candidatePool: this.candidatePool,
+          observations: this.observations,
+          comparison: this.comparison,
+          comparisonPair: this.comparisonPair,
+          currentVisualId: visualId,
+          inspections: this.inspections,
+          requiredUniqueImages: this.requiredUniqueImages,
+          forceAnswer: ordinal === MAX_VISUAL_INSPECTIONS_PER_TURN - 1,
+        })
       } catch (error) {
         return visualFailure({ reason: error?.code ?? 'visual-step-failed', unavailable: error?.retryable === true, requestId: error?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
       }
@@ -110,18 +151,52 @@ export class VisualWorkingSession {
         ? step.replyMessages.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
         : []
       if (replyMessages.some((item) => item.length > 300 || !sanitizeSafeTraceText(item, 300))) return visualFailure({ reason: 'unsafe-visual-reply', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
+      const uniqueImages = new Set(this.inspections.map((item) => item.attachmentId)).size
+      if (this.comparison && uniqueImages < this.requiredUniqueImages) {
+        const nextComparisonVisualId = this.#nextUninspectedComparisonVisualId()
+        if (nextComparisonVisualId) {
+          if (action === 'answer') {
+            this.prematureAnswersBlocked += 1
+            this.prematureReplyMessagesDiscarded += replyMessages.length
+          }
+          visualId = nextComparisonVisualId
+          continue
+        }
+        if (action === 'answer') {
+          this.prematureAnswersBlocked += 1
+          this.prematureReplyMessagesDiscarded += replyMessages.length
+          final = null
+          break
+        }
+      }
       if (action === 'answer') {
         if (!forcedFinal && (step.nextVisualId || replyMessages.length === 0)) return visualFailure({ reason: 'invalid-visual-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
         if (forcedFinal && replyMessages.length === 0) { final = null; break }
         final = { ...step, action: 'answer', nextVisualId: '', replyMessages }
         break
       }
-      if (action !== 'inspect' || typeof step.nextVisualId !== 'string' || !this.candidatePool.some((item) => item.visualId === step.nextVisualId)) {
+      if (action !== 'inspect' || typeof step.nextVisualId !== 'string') {
+        return visualFailure({ reason: 'invalid-visual-inspection', stage: 'protocol', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
+      }
+      if (!this.candidatePool.some((item) => item.visualId === step.nextVisualId)) {
+        const comparisonFallback = this.comparison ? (this.#nextUninspectedComparisonVisualId() ?? this.#comparisonFallbackVisualId()) : null
+        if (comparisonFallback) {
+          visualId = comparisonFallback
+          continue
+        }
         return visualFailure({ reason: 'invalid-visual-inspection', stage: 'protocol', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
       }
       visualId = step.nextVisualId
     }
     const capped = this.inspections.length >= MAX_VISUAL_INSPECTIONS_PER_TURN && !final
-    return { ok: true, final: final ?? { replyMessages: ['花花已经来回看了好几遍，但这里还是不能完全确认哦。'] }, capped, inspections: this.inspections, observations: this.observations }
+    return {
+      ok: true,
+      final: final ?? { replyMessages: ['花花已经来回看了好几遍，但这里还是不能完全确认哦。'] },
+      capped,
+      inspections: this.inspections,
+      observations: this.observations,
+      prematureAnswersBlocked: this.prematureAnswersBlocked,
+      prematureReplyMessagesDiscarded: this.prematureReplyMessagesDiscarded,
+    }
   }
 }

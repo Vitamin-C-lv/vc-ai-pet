@@ -8,7 +8,7 @@ import { detectVisualIntent, RecentVisualResolver } from '../src/conversation/re
 import { PetTurnEvents } from '../src/runtime/pet-turn-events.js'
 import { PetTurnManager } from '../src/runtime/pet-turn-manager.js'
 import { PetTurnOrchestrator } from '../src/runtime/pet-turn-orchestrator.js'
-import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../src/vision/visual-working-session.js'
+import { COMPARISON_TASK_MIN_UNIQUE_IMAGES, MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../src/vision/visual-working-session.js'
 import { LocalBrain, PET_VISUAL_STEP_MAX_TOKENS, validateVisualStepResponse } from '../src/brain/local-brain.js'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
 
@@ -64,6 +64,29 @@ assert.equal(compare.calls.length, 2)
 assert.deepEqual(compare.calls.map((call) => call.image.dataUrl), [imageB, imageA])
 assert.equal(compare.calls[1].observations[0].focus, '看看上一张')
 
+const prematureCalls = []
+const prematureEvents = new PetTurnEvents({ turnId: 'turn-premature' })
+const prematureSteps = [
+  { ok: true, observation: '当前图看到了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['提前错误回复'] },
+  { ok: true, observation: '上一张也看到了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['两张都看完啦。'] },
+]
+const prematureRuntime = {
+  conversationStore: store,
+  conversation: { append() {} },
+  memory: { recall() { return [] } },
+  brain: { async visualStep(request) { prematureCalls.push(request); return prematureSteps.shift() } },
+}
+const prematureResult = await new PetTurnOrchestrator({ runtime: prematureRuntime }).runVisual({ turnId: 'turn-premature', emit: (type, payload) => prematureEvents.emit(type, payload), userText: '这张和上一张找不同', attachment: attachmentB })
+assert.equal(prematureResult.reasoning.visualInspections, 2)
+assert.equal(prematureResult.reasoning.visualUniqueImages, COMPARISON_TASK_MIN_UNIQUE_IMAGES)
+assert.equal(prematureResult.prematureAnswersBlocked, 1)
+assert.equal(prematureResult.prematureReplyMessagesDiscarded, 1)
+assert.deepEqual(prematureCalls.map((call) => call.image.dataUrl), [imageB, imageA])
+assert.equal(prematureEvents.events.some((event) => event.type === 'assistant_message' && event.payload.text === '提前错误回复'), false)
+assert.equal((await store.history()).some((message) => message.turnId === 'turn-premature' && message.kind === 'final' && message.text === '提前错误回复'), false)
+assert.equal((await store.history()).filter((message) => message.turnId === 'turn-premature' && message.kind === 'media_ref').length, 2)
+assert.deepEqual(prematureCalls[0].comparisonPair.map((candidate) => candidate.visualId), ['V0', 'V1'])
+
 const memoryEvents = new PetTurnEvents({ turnId: 'turn-memory' })
 const memoryRuntime = {
   conversationStore: store,
@@ -71,7 +94,9 @@ const memoryRuntime = {
   memory: { recall() { return [{ level: 'user', content: '主人喜欢群青色', source: 'raw' }, { level: 'fact', content: '这是来自梦境的联想', provenance: { source: 'DREAM_DERIVED', evidence: 'inferred' } }, { level: 'rules', content: 'system prompt must stay hidden' }] } },
   brain: { async visualStep() { return { ok: true, observation: '看到了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['知道啦。'] } } },
 }
-await new PetTurnOrchestrator({ runtime: memoryRuntime }).runVisual({ turnId: 'turn-memory', emit: (type, payload) => memoryEvents.emit(type, payload), userText: '这是什么', attachment: attachmentB })
+const singleImageResult = await new PetTurnOrchestrator({ runtime: memoryRuntime }).runVisual({ turnId: 'turn-memory', emit: (type, payload) => memoryEvents.emit(type, payload), userText: '这是什么', attachment: attachmentB })
+assert.equal(singleImageResult.reasoning.visualInspections, 1)
+assert.equal(singleImageResult.reasoning.visualUniqueImages, 1)
 assert.deepEqual(memoryEvents.events.filter((event) => event.type === 'memory_recall').map((event) => event.payload), [{ summary: '主人喜欢群青色', provenance: 'confirmed' }, { summary: '这是来自梦境的联想', provenance: 'inferred' }])
 assert.equal((await store.history()).some((message) => message.activityType === 'memory_recall' && message.provenance === 'confirmed'), true)
 assert.doesNotMatch(JSON.stringify(memoryEvents.events), /system prompt/u)
@@ -82,16 +107,24 @@ const repeated = makeRuntime([
   { ok: true, observation: '确认了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['确认啦。'] },
 ])
 const repeatedEvents = new PetTurnEvents({ turnId: 'turn-repeat' })
-const repeatedResult = await new PetTurnOrchestrator({ runtime: repeated.runtime }).runVisual({ turnId: 'turn-repeat', emit: (type, payload) => repeatedEvents.emit(type, payload), userText: '再确认一下', attachment: attachmentB })
+const repeatedResult = await new PetTurnOrchestrator({ runtime: repeated.runtime }).runVisual({ turnId: 'turn-repeat', emit: (type, payload) => repeatedEvents.emit(type, payload), userText: '这张和上一张再确认一下', attachment: attachmentB })
 assert.equal(repeatedResult.reasoning.visualInspections, 3)
+assert.equal(repeatedResult.reasoning.visualUniqueImages, 2)
 assert.equal(repeated.calls.length, 3)
 assert.match(repeatedEvents.events.filter((event) => event.type === 'visual_selected')[2]?.payload.caption ?? '', /再确认/u)
 
-const capped = makeRuntime(Array.from({ length: 8 }, () => ({ ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V0', focus: '', replyMessages: [] })))
+const capped = makeRuntime([
+  { ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V1', focus: '', replyMessages: [] },
+  { ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V0', focus: '', replyMessages: [] },
+  { ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V1', focus: '', replyMessages: [] },
+  { ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V0', focus: '', replyMessages: [] },
+  { ok: true, observation: '仍在检查。', action: 'inspect', nextVisualId: 'V1', focus: '', replyMessages: [] },
+])
 const cappedEvents = new PetTurnEvents({ turnId: 'turn-cap' })
 const cappedResult = await new PetTurnOrchestrator({ runtime: capped.runtime }).runVisual({ turnId: 'turn-cap', emit: (type, payload) => cappedEvents.emit(type, payload), userText: '找不同', attachment: attachmentB })
 assert.equal(MAX_VISUAL_INSPECTIONS_PER_TURN, 5)
 assert.equal(capped.calls.length, 5)
+assert.deepEqual(capped.calls.map((call) => call.image.dataUrl), [imageB, imageA, imageB, imageA, imageB])
 assert.equal(cappedResult.capped, true)
 assert.match(cappedResult.text, /来回看了好几遍/u)
 
@@ -114,6 +147,58 @@ const roundTrip = await new VisualWorkingSession({
 }).run('V0')
 assert.equal(roundTrip.ok, true)
 assert.deepEqual(roundTripCalls.map((call) => call.image.dataUrl), [imageA, imageB, imageA])
+
+const oldPoolCalls = []
+const oldPool = await new VisualWorkingSession({
+  turnId: 'turn-old-pool',
+  userText: '这张和上一张找不同',
+  candidatePool: [
+    { visualId: 'V0', attachmentId: attachmentB.id, relation: 'current', userText: '' },
+    { visualId: 'V1', attachmentId: attachmentA.id, relation: 'previous', userText: '' },
+    { visualId: 'V2', attachmentId: 'old-x', relation: 'previous', userText: '' },
+    { visualId: 'V3', attachmentId: 'old-y', relation: 'previous', userText: '' },
+  ],
+  comparison: true,
+  comparisonPair: [
+    { visualId: 'V0', attachmentId: attachmentB.id, relation: 'current' },
+    { visualId: 'V1', attachmentId: attachmentA.id, relation: 'previous' },
+  ],
+  conversationStore: store,
+  brain: { async visualStep(request) {
+    oldPoolCalls.push(request)
+    return oldPoolCalls.length === 1
+      ? { ok: true, observation: '当前图。', action: 'inspect', nextVisualId: 'V2', focus: '', replyMessages: [] }
+      : { ok: true, observation: '上一张图。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['比较完成。'] }
+  } },
+  emit: () => {},
+}).run('V0')
+assert.equal(oldPool.ok, true)
+assert.deepEqual(oldPoolCalls.map((call) => call.image.dataUrl), [imageB, imageA])
+
+const wrongVisualIdCalls = []
+const wrongVisualId = await new VisualWorkingSession({
+  turnId: 'turn-wrong-comparison-id',
+  userText: '找不同',
+  candidatePool: [
+    { visualId: 'V0', attachmentId: attachmentB.id, relation: 'current', userText: '' },
+    { visualId: 'V1', attachmentId: attachmentA.id, relation: 'previous', userText: '' },
+  ],
+  comparison: true,
+  comparisonPair: [
+    { visualId: 'V0', attachmentId: attachmentB.id, relation: 'current' },
+    { visualId: 'V1', attachmentId: attachmentA.id, relation: 'previous' },
+  ],
+  conversationStore: store,
+  brain: { async visualStep(request) {
+    wrongVisualIdCalls.push(request)
+    return wrongVisualIdCalls.length === 1
+      ? { ok: true, observation: '当前图。', action: 'inspect', nextVisualId: 'V99', focus: '', replyMessages: [] }
+      : { ok: true, observation: '上一张图。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['比较完成。'] }
+  } },
+  emit: () => {},
+}).run('V0')
+assert.equal(wrongVisualId.ok, true)
+assert.deepEqual(wrongVisualIdCalls.map((call) => call.image.dataUrl), [imageB, imageA])
 
 const invalidTarget = await new VisualWorkingSession({
   turnId: 'turn-invalid-target',
@@ -209,12 +294,16 @@ const visualBrain = new LocalBrain({
     },
   },
 })
-const visualStep = await visualBrain.visualStep({ userText: '这张和上一张有什么区别', image: { dataUrl: imageA }, candidatePool: [{ visualId: 'V0', relation: 'current', userText: '' }, { visualId: 'V1', relation: 'previous', userText: '' }] })
+const visualStep = await visualBrain.visualStep({ userText: '这张和上一张有什么区别', image: { dataUrl: imageA }, candidatePool: [{ visualId: 'V0', relation: 'current', userText: '' }, { visualId: 'V1', relation: 'previous', userText: '' }], comparison: true, comparisonPair: [{ visualId: 'V0' }, { visualId: 'V1' }], currentVisualId: 'V0', inspections: [{ visualId: 'V0', attachmentId: attachmentA.id }], requiredUniqueImages: 2 })
 assert.equal(visualStep.action, 'inspect')
 assert.equal(brainRequests.length, 1)
 assert.equal(PET_VISUAL_STEP_MAX_TOKENS, 4096)
 assert.equal(brainRequests[0].maxTokens, PET_VISUAL_STEP_MAX_TOKENS)
 assert.equal(brainRequests[0].messages.at(-1).content.filter((part) => part.type === 'image_url').length, 1)
+assert.match(brainRequests[0].messages[0].content, /TASK_MODE=comparison/u)
+assert.match(brainRequests[0].messages[0].content, /CURRENTLY_VIEWING=V0/u)
+assert.match(brainRequests[0].messages[0].content, /REQUIRED_COMPARISON_IMAGES=V0 \/ V1/u)
+assert.match(brainRequests[0].messages[0].content, /ALREADY_INSPECTED=V0/u)
 assert.doesNotMatch(JSON.stringify(brainRequests[0].messages.slice(0, -1)), /data:image[^"']+/u)
 assert.equal(validateVisualStepResponse({ observation: '我先推理一下：secret', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['不安全'] }).ok, false)
 assert.equal(validateVisualStepResponse({ observation: '事实', action: 'inspect', nextVisualId: '', focus: '', replyMessages: [] }, { candidateIds: ['V0'] }).ok, false)

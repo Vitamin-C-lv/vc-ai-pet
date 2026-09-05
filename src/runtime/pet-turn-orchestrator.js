@@ -2,6 +2,13 @@ import { buildVisualCandidatePool, detectVisualIntent, isImmediatePreviousVisual
 import { VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
 
+function buildPrimaryComparisonPair(pool, intent) {
+  if (intent !== 'comparison' || !Array.isArray(pool)) return []
+  const current = pool.find((candidate) => candidate?.relation === 'current')
+  const previous = pool.find((candidate) => candidate?.relation === 'previous' && candidate.attachmentId !== current?.attachmentId)
+  return current && previous ? [current, previous] : []
+}
+
 export class PetTurnOrchestrator {
   constructor({ runtime, resolver = new RecentVisualResolver(), now = () => Date.now() } = {}) { this.runtime = runtime; this.resolver = resolver; this.now = now }
 
@@ -16,6 +23,7 @@ export class PetTurnOrchestrator {
     const pool = buildVisualCandidatePool({ currentAttachment: attachment, userText, messages })
     const resolved = this.resolver.resolve(userText, messages)
     const intent = detectVisualIntent(userText, { hasCurrent: Boolean(attachment), candidateCount: pool.length - (attachment ? 1 : 0) })
+    const comparisonPair = buildPrimaryComparisonPair(pool, intent)
     emit('turn_started', { mode: 'visual' }); emit('thinking', {})
     const historicalCandidateCount = pool.length - (attachment ? 1 : 0)
     const explicitPreviousReference = intent === 'temporal_followup' && isImmediatePreviousVisualReference(userText)
@@ -23,7 +31,7 @@ export class PetTurnOrchestrator {
       && historicalCandidateCount > 0
       && !resolved?.matched
       && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
-    if (intent === 'ambiguous' || pool.length === 0 || unresolvedHistoricalReference) {
+    if (intent === 'ambiguous' || pool.length === 0 || unresolvedHistoricalReference || (intent === 'comparison' && comparisonPair.length < 2)) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
     }
     const resolvedVisual = pool.find((candidate) => candidate.attachmentId === resolved?.attachmentId)?.visualId
@@ -50,7 +58,17 @@ export class PetTurnOrchestrator {
       const recallEvent = emit('memory_recall', { summary, provenance })
       await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'memory_recall', provenance, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text: `${provenance === 'inferred' ? '联想到：' : '想起：'}${summary}` })
     }
-    const session = new VisualWorkingSession({ turnId, userText, candidatePool: pool, conversationStore: store, brain: this.runtime.brain, emit, now: this.now })
+    const session = new VisualWorkingSession({
+      turnId,
+      userText,
+      candidatePool: pool,
+      comparison: intent === 'comparison',
+      comparisonPair,
+      conversationStore: store,
+      brain: this.runtime.brain,
+      emit,
+      now: this.now,
+    })
     const result = await session.run(first)
     if (!result.ok) return result
     const replyMessages = result.final.replyMessages?.length ? result.final.replyMessages : ['花花看到了，不过还不太确定。']
@@ -62,7 +80,17 @@ export class PetTurnOrchestrator {
     }
     this.runtime.conversation.append(attachment ? `[主人发送了一张图片] ${userText}` : userText, replyMessages.join('\n'))
     emit('turn_completed', { durationMs, reasoning })
-    return { ok: true, text: replyMessages[0], replyMessages, memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning, capped: result.capped }
+    return {
+      ok: true,
+      text: replyMessages[0],
+      replyMessages,
+      memoryWrite: 'skipped',
+      memoryWriteReason: 'vision-context',
+      reasoning,
+      capped: result.capped,
+      prematureAnswersBlocked: result.prematureAnswersBlocked ?? 0,
+      prematureReplyMessagesDiscarded: result.prematureReplyMessagesDiscarded ?? 0,
+    }
   }
 
   async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt }) {
