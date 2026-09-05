@@ -177,6 +177,75 @@ function bindKeyboardState() {
   scheduleKeyboardState()
 }
 
+let innerLifeView
+let innerLifeNextOffset = null
+let innerLifeLoading = false
+
+function formatInnerLifeTime(value) {
+  if (value === null || !Number.isFinite(Number(value))) return '还没有'
+  return new Date(Number(value)).toLocaleString('zh-CN', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function renderInnerLifeEntry(item) {
+  const card = document.createElement('article')
+  card.className = 'inner-life-card'
+  const heading = document.createElement('div')
+  heading.className = 'inner-life-card-heading'
+  const type = document.createElement('strong')
+  type.textContent = item.kind === 'dream' ? '🌙 一场梦境' : '💭 小思考'
+  const time = document.createElement('time')
+  time.dateTime = new Date(Number(item.at)).toISOString()
+  time.textContent = formatInnerLifeTime(item.at)
+  heading.append(type, time)
+  const summary = document.createElement('p')
+  summary.className = 'inner-life-summary'
+  summary.textContent = item.summary || (item.understandingCount === 0 ? '这次只是整理了一些最近的事情。' : '这段回想暂不展示摘要。')
+  const meta = document.createElement('p')
+  meta.className = 'inner-life-meta'
+  meta.textContent = `联想与理解 · ${item.understandingCount} 条新理解`
+  card.append(heading, summary, meta)
+  return card
+}
+
+async function loadInnerLife({ more = false } = {}) {
+  if (innerLifeLoading) return
+  innerLifeLoading = true
+  const status = document.querySelector('#inner-life-status')
+  const list = document.querySelector('#inner-life-list')
+  const moreButton = document.querySelector('#inner-life-more')
+  const refreshButton = document.querySelector('#inner-life-refresh')
+  moreButton.disabled = true
+  refreshButton.disabled = true
+  status.textContent = '正在翻开花花的心事……'
+  try {
+    const offset = more ? innerLifeNextOffset : 0
+    const { payload } = await fetchJsonDiagnostic(`/api/inner-life?offset=${offset ?? 0}`, { cache: 'no-store' }, { stage: 'inner-life' })
+    if (!Array.isArray(payload?.items) || !payload?.stats) throw diagnosticError('INNER_LIFE_INVALID_RESPONSE', 'inner-life unavailable')
+    document.querySelector('#dream-recent').textContent = String(payload.stats.recentDream)
+    document.querySelector('#dream-total').textContent = String(payload.stats.totalDream)
+    document.querySelector('#dream-latest').textContent = `最近梦境：${formatInnerLifeTime(payload.stats.lastDreamAt)}`
+    if (!more) list.replaceChildren()
+    payload.items.forEach(item => list.append(renderInnerLifeEntry(item)))
+    innerLifeNextOffset = payload.nextOffset
+    moreButton.hidden = innerLifeNextOffset === null
+    status.textContent = list.children.length ? '' : '花花还没有留下梦境或回想，新的心事会慢慢出现在这里。'
+  } catch {
+    status.textContent = '暂时没能翻开心事，请稍后再试。'
+  } finally {
+    innerLifeLoading = false
+    moreButton.disabled = false
+    refreshButton.disabled = false
+  }
+}
+
+function openInnerLife() {
+  setActiveTab('play', { persist: false })
+  playView.hidden = true
+  innerLifeView.hidden = false
+  document.querySelector('#inner-life-back').focus({ preventScroll: true })
+  void loadInnerLife()
+}
+
 function readStoredTab() {
   try {
     const storedTab = globalThis.localStorage?.getItem(ACTIVE_TAB_STORAGE_KEY)
@@ -194,6 +263,7 @@ function persistActiveTab(tab) {
 
 function setActiveTab(tab, { persist = true } = {}) {
   const activeTab = VALID_TABS.has(tab) ? tab : DEFAULT_ACTIVE_TAB
+  if (innerLifeView) innerLifeView.hidden = true
   if (playView) playView.hidden = activeTab !== 'play'
   if (chatView) chatView.hidden = activeTab !== 'chat'
   tabButtons.forEach((button) => {
@@ -728,6 +798,11 @@ function bindDom() {
   imageStatus = document.querySelector('#image-status')
   playView = document.querySelector('#play-view')
   chatView = document.querySelector('#chat-view')
+  innerLifeView = document.querySelector('#inner-life-view')
+  document.querySelector('#inner-life-open')?.addEventListener('click', openInnerLife)
+  document.querySelector('#inner-life-back')?.addEventListener('click', () => { setActiveTab('play'); document.querySelector('#inner-life-open').focus({ preventScroll: true }) })
+  document.querySelector('#inner-life-refresh')?.addEventListener('click', () => { void loadInnerLife() })
+  document.querySelector('#inner-life-more')?.addEventListener('click', () => { void loadInnerLife({ more: true }) })
   petApp = document.querySelector('.pet-app')
   tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
   diagnosticsPanel = document.querySelector('#diagnostics-panel')

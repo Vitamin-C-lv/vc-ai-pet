@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { DatabaseSync } from 'node:sqlite'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { normalizeConversationReasoning } from './reasoning-metadata.js'
 
@@ -10,6 +11,7 @@ export const CONVERSATION_THUMBNAIL_MAX_EDGE = 256
 export const CONVERSATION_MAX_IMAGE_DATA_URL_BYTES = 7 * 1024 * 1024
 export const CONVERSATION_ASSETS_DIR = 'conversation-assets'
 export const CONVERSATION_STORE_FILENAME = 'conversation-store.json'
+export const CONVERSATION_ARCHIVE_FILENAME = 'conversation-archive.db'
 
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -339,6 +341,8 @@ export class ConversationStore {
 
     this.root = resolve(root)
     this.storePath = join(this.root, CONVERSATION_STORE_FILENAME)
+    this.archivePath = join(this.root, CONVERSATION_ARCHIVE_FILENAME)
+    this.archive = null
     this.assetsRoot = join(this.root, CONVERSATION_ASSETS_DIR)
     this.now = now
     this.idFactory = idFactory
@@ -356,13 +360,48 @@ export class ConversationStore {
     this.initializing = (async () => {
       await mkdir(this.root, { recursive: true })
       await mkdir(this.assetsRoot, { recursive: true })
+      let legacy = clone(EMPTY_STATE)
       try {
-        this.state = normalizeState(JSON.parse(await readFile(this.storePath, 'utf8')))
+        legacy = JSON.parse(await readFile(this.storePath, 'utf8'))
+        this.state = normalizeState(legacy)
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error
         this.state = clone(EMPTY_STATE)
         await this.#writeState()
       }
+      this.archive = new DatabaseSync(this.archivePath)
+      await chmod(this.archivePath, 0o600)
+      this.archive.exec(`
+        PRAGMA busy_timeout = 1000;
+        CREATE TABLE IF NOT EXISTS raw_messages (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          id TEXT NOT NULL UNIQUE,
+          role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+          payload TEXT NOT NULL
+        );
+      `)
+      // Import before trimming the recent cache. Already-pruned legacy records
+      // cannot be reconstructed; every record still present is retained as-is.
+      const insert = this.archive.prepare('INSERT OR IGNORE INTO raw_messages(id, role, payload) VALUES (?, ?, ?)')
+      this.archive.exec('BEGIN')
+      try {
+        for (const message of Array.isArray(legacy.messages) ? legacy.messages : []) {
+          if (cleanId(message?.id) && ['user', 'assistant'].includes(message?.role)) {
+            insert.run(message.id, message.role, JSON.stringify(message))
+          }
+        }
+        this.archive.exec('COMMIT')
+      } catch (error) {
+        this.archive.exec('ROLLBACK')
+        this.archive.close()
+        this.archive = null
+        throw error
+      }
+      // SQLite is authoritative: a successful append survives a later cache
+      // write failure. The ordinary context/UI never reads the whole archive.
+      const recent = this.archive.prepare('SELECT payload FROM raw_messages ORDER BY sequence DESC LIMIT ?')
+        .all(this.maxMessages).reverse().map((row) => JSON.parse(row.payload))
+      this.state = normalizeState({ ...this.state, messages: recent })
       this.initialized = true
       return this
     })()
@@ -374,13 +413,43 @@ export class ConversationStore {
     }
   }
 
+  // Internal evidence lookup. This does not admit a row as a belief and is not
+  // exposed by the LAN UI; callers must check role and source semantics.
+  async sourceMessage(id) {
+    await this.initialize()
+    const key = cleanId(id)
+    if (!key) return null
+    const row = this.archive.prepare('SELECT payload FROM raw_messages WHERE id = ?').get(key)
+    return row ? JSON.parse(row.payload) : null
+  }
+
+  async rawHistory({ afterId = null, limit = CONVERSATION_HISTORY_LIMIT } = {}) {
+    await this.initialize()
+    const requested = Number(limit)
+    const count = Number.isFinite(requested) ? Math.max(0, Math.min(200, Math.floor(requested))) : CONVERSATION_HISTORY_LIMIT
+    let after = 0
+    if (afterId !== null) {
+      const cursor = this.archive.prepare('SELECT sequence FROM raw_messages WHERE id = ?').get(String(afterId))
+      if (!cursor) return []
+      after = cursor.sequence
+    }
+    return this.archive.prepare('SELECT payload FROM raw_messages WHERE sequence > ? ORDER BY sequence LIMIT ?')
+      .all(after, count).map((row) => JSON.parse(row.payload))
+  }
+
+  close() {
+    this.archive?.close()
+    this.archive = null
+    this.initialized = false
+  }
+
   async list(limit = CONVERSATION_HISTORY_LIMIT) {
     await this.initialize()
     const requested = Number(limit)
     const count = Number.isFinite(requested)
       ? Math.max(0, Math.min(CONVERSATION_HISTORY_LIMIT, requested))
       : CONVERSATION_HISTORY_LIMIT
-    return clone(this.state.messages.slice(-count))
+    return count === 0 ? [] : clone(this.state.messages.slice(-count))
   }
 
   /**
@@ -395,7 +464,7 @@ export class ConversationStore {
     const count = Number.isFinite(requested)
       ? Math.max(0, Math.min(this.maxMessages, Math.floor(requested)))
       : this.maxMessages
-    return clone(this.state.messages.slice(-count))
+    return count === 0 ? [] : clone(this.state.messages.slice(-count))
   }
 
   async history(limit = CONVERSATION_HISTORY_LIMIT) {
@@ -592,6 +661,11 @@ export class ConversationStore {
         ...(normalizedActivityAt !== null ? { activityAt: normalizedActivityAt } : {}),
         ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       }
+      // Preserve the original text in durable raw evidence; the recent cache
+      // keeps its established normalized length and projection contract.
+      const raw = { ...message, text: String(text ?? '') }
+      this.archive.prepare('INSERT INTO raw_messages(id, role, payload) VALUES (?, ?, ?)')
+        .run(message.id, message.role, JSON.stringify(raw))
       this.state.messages.push(message)
       if (this.state.messages.length > this.maxMessages) {
         this.state.messages.splice(0, this.state.messages.length - this.maxMessages)

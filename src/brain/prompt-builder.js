@@ -6,7 +6,7 @@ function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1,
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
 function memoryLines(memories = [], limit = 6) {
   return memories.slice(0, limit).map((memory) => (
-    `- [${memory.level}] ${String(memory.content).slice(0, 220)} [source=${classifyMemorySource(memory)}] [evidence=${classifyMemoryEvidence(memory)}]`
+    `- [${memory.level}] ${String(memory.content).slice(0, 220)} [source=${classifyMemorySource(memory)}] [evidence=${classifyMemoryEvidence(memory)}]${memory.provenance?.evidenceQuote ? ` [原文优先=${JSON.stringify(memory.provenance.evidenceQuote)}]` : ''}${memory.provenance?.selfStatus ? ` [self=${memory.provenance.selfStatus}; confidence=${memory.provenance.confidence}]` : ''}`
   )).join('\n')
 }
 export { formatHistoricalTime }
@@ -333,7 +333,7 @@ export function formatHistoricalRecallContext(context = null, { userText = '' } 
 TOPIC: ${topic}
 
 EVIDENCE AUTHORITY:
-以下 Historical Recall records 是当前历史问题的唯一历史事件证据。
+以下 Historical Recall records 与 CURRENT_UNDERSTANDING 中带 messageId 的原话记录，共同构成当前历史问题的唯一历史事件证据。
 Identity Kernel 不是历史事件证据，除非当前问题本身明确询问身份、生日、出生、名字或品种。
 IDENTITY_EVIDENCE_SCOPE=${identityEvidenceAllowed ? 'CURRENT_QUESTION' : 'BACKGROUND_ONLY'}
 
@@ -359,7 +359,7 @@ raw memory 是原始历史证据；reflection/dream 是后来形成的理解。
 - 不要自动把旧事实当作当前事实；当前主人消息优先。
 - 历史记录通常是压缩后的 memory，不是持久化的原始聊天转录。
 - 没有 raw transcript 时，不要声称逐字引用主人原话；只能说明“我留下的记忆大概是……”。
-RAW_CHAT_HISTORY_PERSISTED=NO
+HISTORICAL_MEMORY_RAW_TRANSCRIPT_INCLUDED=NO
 ${provenanceNote}
 
 ${rows || '- 暂无足够相关的历史记录；请诚实表达不确定。'}`
@@ -432,6 +432,7 @@ ${memoryLines(stableRules) || '- 暂无额外规则'}
 
 当前自我认识（本轮最多选取少量最相关内容）：
 ${memoryLines(currentSelfContext, 3) || '- 暂无已形成的自我认识'}
+自我理解如果是 inferred/hypothesis/evolving，只能用“也许、好像”，允许改变或不知道；自己的旧回答不能增强它。
 
 与你当前对话相关的历史记忆：
 ${memoryLines(memories) || '- 暂无相关长期记忆'}

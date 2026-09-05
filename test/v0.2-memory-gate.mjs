@@ -74,10 +74,14 @@ assert.deepEqual(fallback, {
 const first = gate.consider(explicitColor, { remember: false })
 assert.equal(first.status, 'written')
 assert.equal(rows.length, 1)
-assert.equal(rows[0].content, '主人最喜欢的测试颜色是群青色。')
+assert.equal(rows[0].content, '主人说：我最喜欢的测试颜色是群青色。')
 
 const second = gate.consider(explicitColor, { remember: false })
 assert.equal(second.status, 'duplicate')
+assert.equal(rows.length, 1)
+
+const echoed = gate.consider('你说昨天我们去散步了，是不是？', { remember: true, level: 'fact', content: '昨天一起散步了。', evidence: '昨天我们去散步了', importance: 3, confidence: 0.99, keywords: [] })
+assert.equal(echoed.reason, 'not-owner-assertion')
 assert.equal(rows.length, 1)
 
 const chatter = gate.consider('摸摸头，花花真可爱。', null)

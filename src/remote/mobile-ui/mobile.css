@@ -1,3 +1,60 @@
+
+/* A read-only inner-life subpage shares the existing two-tab shell. */
+#play-view .inner-life-entry {
+  flex: 0 0 44px;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border: 1px solid #e5d9cc;
+  border-radius: 16px;
+  color: #665047;
+  background: #fffaf3;
+  font: inherit;
+  font-weight: 600;
+}
+.inner-life-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex: 0 0 auto;
+}
+.inner-life-heading h2 { flex: 1; margin: 0; font-size: 17px; }
+.inner-life-heading button, .inner-life-more {
+  min-height: 44px;
+  border: 1px solid #e5d9cc;
+  border-radius: 13px;
+  padding: 8px 12px;
+  color: #665047;
+  background: #fffaf3;
+  font: inherit;
+  font-size: 13px;
+}
+.inner-life-scroll { min-height: 0; overflow-y: auto; padding: 6px 16px 24px; }
+.inner-life-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.inner-life-stats p { margin: 0; padding: 18px 12px; border-radius: 18px; background: #eee6ee; text-align: center; }
+.inner-life-stats b { display: block; font-size: 28px; color: #77647a; }
+.inner-life-stats span { display: block; margin-top: 5px; font-size: 12px; }
+.inner-life-latest, .inner-life-note, .inner-life-status { font-size: 13px; line-height: 1.7; }
+.inner-life-note { color: #877669; }
+.inner-life-status:empty { display: none; }
+.inner-life-list { display: flex; flex-direction: column; gap: 12px; }
+.inner-life-card { border: 1px solid #e8ddd2; border-radius: 18px; padding: 16px; background: #fffcf8; overflow-wrap: anywhere; }
+.inner-life-card-heading { display: flex; flex-direction: column; gap: 6px; }
+.inner-life-card-heading strong { font-size: 15px; }
+.inner-life-card-heading time { font-size: 12px; color: #8d7c70; }
+.inner-life-summary { margin: 12px 0; font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
+.inner-life-meta { margin: 0; font-size: 12px; color: #917e96; }
+.inner-life-more { display: block; margin: 16px auto 0; }
+.inner-life-more[hidden] { display: none; }
+@media (max-height: 620px) {
+  #play-view .pet-card { flex-shrink: 1; }
+}
+
 :root {
   color-scheme: light;
   font-family: ui-rounded, "PingFang SC", system-ui, sans-serif;

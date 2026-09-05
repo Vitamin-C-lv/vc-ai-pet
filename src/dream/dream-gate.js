@@ -1,3 +1,4 @@
+import { evaluateDerivedEvidence, findSameEvidenceDerivation } from '../memory/derived-evidence.js'
 import { normalizeProvenance } from '../memory/memory-provenance.js'
 import { validateDerivedMemorySemantics } from '../memory/semantic-stability.js'
 
@@ -29,6 +30,8 @@ export function validateDreamCandidate(
     availableSourceIds = [],
     rawSourceIds = undefined,
     rawNewSourceIds = undefined,
+    sourceRows = [],
+    findById,
   } = {},
 ) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -41,10 +44,9 @@ export function validateDreamCandidate(
   if (!DREAM_DERIVED_LEVELS.has(level)) return null
   if (content.length < 4) return null
   if (!Number.isInteger(importance) || importance < 2 || importance > 3) return null
-  if (!Number.isFinite(confidence) || confidence < 0.72 || confidence > 1) return null
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null
   if (level === 'soul' && (
     importance !== 3 ||
-    confidence < 0.82 ||
     !content.startsWith('我')
   )) return null
 
@@ -66,43 +68,17 @@ export function validateDreamCandidate(
   )]
 
   if (sourceIds.length === 0) return null
-  if (level === 'soul' && sourceIds.length < 2) return null
 
-  const newIds = asIdSet(newSourceIds)
   const availableIds = asIdSet(availableSourceIds)
-  const hasRawProvenance = rawSourceIds !== undefined || rawNewSourceIds !== undefined
-  const rawIds = asIdSet(rawSourceIds)
-  const rawNewIds = new Set(
-    [...asIdSet(rawNewSourceIds)].filter((id) => rawIds.has(id) && newIds.has(id)),
-  )
-
-  // Every citation must be a real memory that was supplied in this batch.
   if (!sourceIds.every((id) => availableIds.has(id))) return null
-
-  if (level === 'soul') {
-    // Soul is fail-closed when row-aware provenance is unavailable. Related
-    // reflection/dream/soul rows may be cited, but at least two cited IDs must
-    // resolve to raw vc-ai-pet rows and one of those must be current NEW raw.
-    if (rawSourceIds === undefined || rawNewSourceIds === undefined) return null
-    const citedRawIds = sourceIds.filter((id) => rawIds.has(id))
-    if (citedRawIds.length < 2) return null
-    if (!citedRawIds.some((id) => rawNewIds.has(id))) return null
-  } else if (hasRawProvenance) {
-    // Once row-aware provenance is provided, non-soul candidates also need a
-    // current raw NEW source; derived related history cannot satisfy NEW.
-    if (rawSourceIds === undefined || rawNewSourceIds === undefined) return null
-    if (!sourceIds.some((id) => rawNewIds.has(id))) return null
-  } else if (!sourceIds.some((id) => newIds.has(id))) {
-    // Backward-compatible callers without row-aware context still retain the
-    // original NEW-source check. DreamEngine always supplies the raw sets.
-    return null
-  }
+  const evidence = evaluateDerivedEvidence({ level, sourceIds }, { sourceRows, newSourceIds, findById })
+  if (!evidence) return null
 
   return {
     level,
     content,
     importance,
-    confidence,
+    ...evidence,
     keywords,
     sourceIds,
   }
@@ -135,11 +111,14 @@ export class DreamGate {
       }
     }
 
-    const provenance = normalizeProvenance(raw?.provenance ?? {
+    const requested = raw?.provenance ?? { source: 'DREAM_DERIVED' }
+    if (normalizeProvenance(requested).source !== 'DREAM_DERIVED') return { status: 'skipped', reason: 'invalid-provenance' }
+    const provenance = { ...normalizeProvenance({
       source: 'DREAM_DERIVED',
       evidence: 'inferred',
       sourceIds: candidate.sourceIds,
-    })
+    }), sourceRoots: candidate.sourceRoots, confidence: candidate.confidence,
+      evidenceCount: candidate.evidenceCount, ...(candidate.selfStatus ? { selfStatus: candidate.selfStatus } : {}) }
     if (provenance.source !== 'DREAM_DERIVED' || provenance.evidence !== 'inferred') {
       return {
         status: 'skipped',
@@ -147,7 +126,9 @@ export class DreamGate {
       }
     }
 
-    const existing = this.memory.findEquivalentMemory(candidate.content)
+    const existing = this.memory.findEquivalentMemory(candidate.content) ??
+      this.memory.findSameEvidenceDerivation?.({ ...candidate, provenance }) ??
+      findSameEvidenceDerivation({ ...candidate, provenance }, context?.sourceRows)
 
     if (existing) {
       return {

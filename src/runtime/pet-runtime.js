@@ -282,6 +282,7 @@ export class PetRuntime {
 
     try {
       let persistedAttachment = null
+      let ownerMessage = null
       if (currentVisionImage && this.conversationPersistenceReady) {
         persistedAttachment = attachment
           ? await this.conversationStore.attachment(attachment.id)
@@ -320,7 +321,7 @@ export class PetRuntime {
       const promptText = ownerText.trim() || (effectiveVisionImage ? VISION_ONLY_MESSAGE : ownerText)
 
       if (this.conversationPersistenceReady) {
-        await this.conversationStore.appendMessage({
+        ownerMessage = await this.conversationStore.appendMessage({
           role: 'user',
           text: ownerText,
           timestamp: Date.now(),
@@ -340,10 +341,16 @@ export class PetRuntime {
 
       if (!result?.ok) return result
 
+      // Only the message persisted by this user turn may supply evidence.
+      // Assistant output and visual observations never enter this write path.
+      if (!effectiveVisionImage && ownerMessage) {
+        this.memory.beliefs?.consider(result.beliefCandidates, ownerMessage)
+      }
+
       const gate = effectiveVisionImage
         ? { status: 'skipped', reason: 'vision-context' }
         : ownerText.trim()
-          ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate)
+          ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate, { messageId: ownerMessage?.id })
           : { status: 'skipped', reason: 'empty-message' }
 
       const recentUserText = currentVisionImage
@@ -504,6 +511,7 @@ export class PetRuntime {
     // Local Brain is now a shared external service. Pet owns no model process.
     this.conversation?.clear()
     this.conversationPersistenceReady = false
+    this.conversationStore?.close()
     this.memory?.close()
   }
 }

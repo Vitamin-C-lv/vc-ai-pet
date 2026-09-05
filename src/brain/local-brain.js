@@ -6,6 +6,7 @@ import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
+import { BELIEF_OUTPUT_INSTRUCTION, formatBeliefContext, groundedBeliefReply } from '../memory/current-belief.js'
 
 export const PET_VISUAL_STEP_RESPONSE_SCHEMA = Object.freeze({
   type: 'object', additionalProperties: false,
@@ -153,6 +154,7 @@ export class LocalBrain {
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     const timeContext = this.timeProvider(now)
     const historicalIntent = detectHistoricalRecallIntent(ownerText)
+    const beliefContext = !visionImage ? this.memory?.beliefs?.context(ownerText, { now, historical: historicalIntent.deep }) ?? [] : []
     const related = ownerText.trim() ? this.memory?.recall?.(ownerText, 5, {
       // Visual input is contextual evidence, not a confirmed memory event;
       // even its relevance lookup must remain read-only for Memory telemetry.
@@ -204,7 +206,7 @@ export class LocalBrain {
     // visible reply and at most one memory candidate.
     messages[0] = {
       ...messages[0],
-      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}`,
+      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}`,
     }
 
     try {
@@ -238,18 +240,20 @@ export class LocalBrain {
       }
 
       const parsed = parseStructuredChatResponse(rawText, promptText)
+      const evidenceReply = groundedBeliefReply(ownerText, beliefContext)
 
       return {
         ok: true,
         unavailable: false,
-        text: parsed.text,
-        replyMessages: parsed.replyMessages,
+        text: evidenceReply ?? parsed.text,
+        replyMessages: evidenceReply ? [] : parsed.replyMessages,
         reasoning: {
           effort: reasoningEffort,
           durationMs,
         },
         memoryCandidate: parsed.memoryCandidate,
         rawMemoryCandidate: parsed.rawMemoryCandidate,
+        beliefCandidates: parsed.beliefCandidates ?? [],
         memoryDecision: parsed.memoryDecision,
       }
     } catch (error) {

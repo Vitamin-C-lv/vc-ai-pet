@@ -5,6 +5,7 @@ import {
   userOptedOutOfMemory,
   validateMemoryCandidate,
 } from '../brain/memory-candidate.js'
+import { containsNonAssertion } from './current-belief.js'
 
 const EXPLICIT_FALLBACK_REASONS = new Set(['model-skip', 'content-invalid', 'evidence-invalid'])
 
@@ -13,7 +14,7 @@ export class MemoryGate {
     this.memory = memory
   }
 
-  consider(userText, rawCandidate) {
+  consider(userText, rawCandidate, { messageId = null } = {}) {
     if (userOptedOutOfMemory(userText)) {
       return { status: 'skipped', reason: 'user-opt-out' }
     }
@@ -21,12 +22,17 @@ export class MemoryGate {
     if (containsSensitiveMemoryText(userText)) {
       return { status: 'skipped', reason: 'memory-sensitive-reject' }
     }
+    if (containsNonAssertion(userText)) return { status: 'skipped', reason: 'not-owner-assertion' }
 
     const checked = validateMemoryCandidate(rawCandidate, userText)
     const fallback = userExplicitlyRequestsMemory(userText) && EXPLICIT_FALLBACK_REASONS.has(checked.reason)
       ? createExplicitMemoryFallbackCandidate(userText)
       : null
-    const candidate = checked.accepted ? checked.candidate : fallback
+    const proposed = checked.accepted ? checked.candidate : fallback
+    // The model may summarize a statement incorrectly despite quoting valid
+    // evidence. Store the verified quote as content; never bless that summary
+    // as a new raw fact. Existing rows remain unchanged.
+    const candidate = proposed ? { ...proposed, content: `主人说：${proposed.evidence}` } : null
 
     if (!candidate) {
       return { status: 'skipped', reason: checked.reason }
@@ -42,7 +48,7 @@ export class MemoryGate {
       }
     }
 
-    const row = this.memory.rememberCandidate(candidate)
+    const row = this.memory.rememberCandidate({ ...candidate, ...(messageId ? { messageId } : {}) })
     return {
       status: 'written',
       reason: 'accepted',

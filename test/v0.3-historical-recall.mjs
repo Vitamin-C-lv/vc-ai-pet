@@ -877,7 +877,7 @@ await withMemory('read-only', async ({ memory }) => {
   })
   const systemPrompt = messages[0].content
   assert.match(systemPrompt, /历史回忆模式：/u)
-  assert.match(systemPrompt, /RAW_CHAT_HISTORY_PERSISTED=NO/u)
+  assert.match(systemPrompt, /HISTORICAL_MEMORY_RAW_TRANSCRIPT_INCLUDED=NO/u)
   assert.match(systemPrompt, /不要声称逐字引用主人原话/u)
   assert.match(systemPrompt, /不是持久化的原始聊天转录/u)
   assert.match(systemPrompt, /\[source=raw\]/u)
@@ -887,7 +887,7 @@ await withMemory('read-only', async ({ memory }) => {
   assert.equal(messages.at(-1).content, '我当时具体说了什么？')
 
   console.log('EXACT_RECALL=PASS')
-  console.log('RAW_CHAT_HISTORY_PERSISTED=NO')
+  console.log('HISTORICAL_MEMORY_RAW_TRANSCRIPT_INCLUDED=NO')
 }
 
 // Historical time answers use the retrieved created_at evidence even though
@@ -1011,7 +1011,7 @@ await withMemory('one-inference', async ({ memory, counters }) => {
   const systemPrompt = capturedRequest.messages[0].content
   assert.match(systemPrompt, /历史回忆模式：/u)
   assert.match(systemPrompt, /目标：WHY/u)
-  assert.match(systemPrompt, /RAW_CHAT_HISTORY_PERSISTED=NO/u)
+  assert.match(systemPrompt, /HISTORICAL_MEMORY_RAW_TRANSCRIPT_INCLUDED=NO/u)
   assert.match(systemPrompt, /\[source=raw\]/u)
   assert.match(systemPrompt, /\[source=dream\]/u)
   assert.match(systemPrompt, /与你当前对话相关的历史记忆：\n- 暂无相关长期记忆/u)

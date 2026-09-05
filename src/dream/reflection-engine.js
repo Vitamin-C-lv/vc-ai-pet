@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { evaluateDerivedEvidence, findSameEvidenceDerivation, isRawEvidenceRow } from '../memory/derived-evidence.js'
 import { normalizeProvenance } from '../memory/memory-provenance.js'
 import { validateDerivedMemorySemantics } from '../memory/semantic-stability.js'
 
@@ -93,6 +94,8 @@ export function validateReflectionCandidate(
     rawSourceIds = undefined,
     rawNewSourceIds = undefined,
     availableSourceIds = [],
+    sourceRows = [],
+    findById,
   } = {},
 ) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -105,7 +108,7 @@ export function validateReflectionCandidate(
   if (!REFLECTION_LEVELS.has(level)) return null
   if (content.length < 4) return null
   if (!Number.isInteger(importance) || importance < 2 || importance > 3) return null
-  if (!Number.isFinite(confidence) || confidence < 0.72 || confidence > 1) return null
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null
 
   const keywords = Array.isArray(raw.keywords)
     ? raw.keywords.map((item) => cleanString(item, 24)).filter(Boolean).slice(0, 6)
@@ -116,14 +119,10 @@ export function validateReflectionCandidate(
   if (sourceIds.length === 0) return null
 
   const availableIds = asIdSet(availableSourceIds)
-  const requiredNewIds = asIdSet(rawNewSourceIds === undefined ? newSourceIds : rawNewSourceIds)
-  const rawIds = asIdSet(rawSourceIds)
-  if (rawSourceIds === undefined || rawNewSourceIds === undefined) return null
-  const rawNewIds = new Set([...requiredNewIds].filter((id) => rawIds.has(id)))
   if (!sourceIds.every((id) => availableIds.has(id))) return null
-  if (!sourceIds.some((id) => rawNewIds.has(id))) return null
-
-  return { level, content, importance, confidence, keywords, sourceIds }
+  const evidence = evaluateDerivedEvidence({ level, sourceIds }, { sourceRows, newSourceIds, findById })
+  if (!evidence) return null
+  return { level, content, importance, ...evidence, keywords, sourceIds }
 }
 
 export class ReflectionGate {
@@ -147,16 +146,20 @@ export class ReflectionGate {
       }
     }
 
-    const provenance = normalizeProvenance(raw?.provenance ?? {
+    const requested = raw?.provenance ?? { source: 'REFLECTION_DERIVED' }
+    if (normalizeProvenance(requested).source !== 'REFLECTION_DERIVED') return { status: 'skipped', reason: 'invalid-provenance' }
+    const provenance = { ...normalizeProvenance({
       source: 'REFLECTION_DERIVED',
       evidence: 'inferred',
       sourceIds: candidate.sourceIds,
-    })
+    }), sourceRoots: candidate.sourceRoots, confidence: candidate.confidence, evidenceCount: candidate.evidenceCount }
     if (provenance.source !== 'REFLECTION_DERIVED' || provenance.evidence !== 'inferred') {
       return { status: 'skipped', reason: 'invalid-provenance' }
     }
 
-    const existing = this.memory.findEquivalentMemory(candidate.content)
+    const existing = this.memory.findEquivalentMemory(candidate.content) ??
+      this.memory.findSameEvidenceDerivation?.({ ...candidate, provenance }) ??
+      findSameEvidenceDerivation({ ...candidate, provenance }, context?.sourceRows)
     if (existing) return { status: 'duplicate', existingId: existing.id }
 
     const row = this.memory.rememberReflectionCandidate({ ...candidate, provenance })
@@ -200,6 +203,7 @@ function formatMemoryRow(row) {
     `[${rowId(row) ?? ''}]`,
     `[${cleanString(row?.level, 16)}]`,
     `[source_session=${sourceSession}]`,
+    `[evidence=${isRawEvidenceRow(row) ? 'raw' : 'background-only'}]`,
     `[${row?.created_at ?? row?.updated_at ?? ''}]`,
     `[${row?.importance ?? ''}]`,
     String(row?.content ?? '').trim(),
@@ -328,7 +332,7 @@ export class ReflectionEngine {
       if (!Array.isArray(rawRows)) throw reflectionFailure('PET_REFLECTION_SOURCE_ROWS_INVALID')
       sourceRows = sortRows(rawRows.filter((row) =>
         row?.status === 'active' &&
-        row?.source_session === RAW_SOURCE_SESSION &&
+        isRawEvidenceRow(row) &&
         Number(row?.importance) >= 2 &&
         Number.isFinite(Number(row?.created_at)) &&
         Number(row.created_at) > previousCheckpoint &&
@@ -379,7 +383,7 @@ export class ReflectionEngine {
         ])
         const rawSourceIds = new Set(
           [...batch, ...related]
-            .filter((row) => row?.source_session === RAW_SOURCE_SESSION)
+            .filter((row) => isRawEvidenceRow(row))
             .map((row) => rowId(row))
             .filter(Boolean),
         )

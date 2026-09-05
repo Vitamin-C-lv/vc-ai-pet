@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 import { basename, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readInnerLifeTimeline } from '../memory/inner-life-timeline.js'
 import { normalizeVisionImage } from '../brain/vision-input.js'
 
 const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
@@ -64,6 +65,12 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
     const url = new URL(req.url ?? '/', 'http://lan.local')
 
     try {
+      if (req.method === 'GET' && url.pathname === '/api/inner-life') {
+        const offset = url.searchParams.get('offset') ?? '0'
+        if (!/^\d{1,7}$/u.test(offset)) return sendJson(res, 400, { error: 'invalid-offset' })
+        if (!runtime.memory?.db?.db) return sendJson(res, 503, { error: 'inner-life-unavailable' })
+        return sendJson(res, 200, readInnerLifeTimeline(runtime.memory.db.db, { offset: Number(offset) }))
+      }
       if (req.method === 'GET' && url.pathname === '/api/pet/state') {
         const presentation = runtime.presentationSnapshot(visualConfig)
         return sendJson(res, 200, presentation)

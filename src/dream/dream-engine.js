@@ -1,3 +1,4 @@
+import { isRawEvidenceRow } from '../memory/derived-evidence.js'
 import { randomUUID } from 'node:crypto'
 
 import { DreamGate, validateDreamCandidate } from './dream-gate.js'
@@ -79,12 +80,12 @@ export const DREAM_RESPONSE_SCHEMA = Object.freeze({
               },
             },
             then: {
-              description: 'Soul 只能是慢慢形成的第一人称自我理解；必须以“我”开头、importance=3、confidence>=0.82，并引用至少两个独立 memory id。',
+              description: 'Soul 只能是慢慢形成的第一人称自我理解；必须以“我”开头、importance=3、弱假设可以只有一个真实来源；置信度由证据根去重计算。',
               properties: {
                 content: { pattern: '^我' },
                 importance: { const: 3 },
-                confidence: { minimum: 0.82 },
-                source_ids: { minItems: 2 },
+                confidence: { minimum: 0 },
+                source_ids: { minItems: 1 },
               },
             },
           },
@@ -108,10 +109,10 @@ export const DREAM_SYSTEM_PROMPT = [
   '不要创造来源中没有支持的信息；“相似”不等于“必须合并”。',
   '如果证据互相矛盾或发生时间变化，不要强行选择真相；宁可输出 memories=[]。',
   '最多产生 3 条 derived memory；没有值得形成的新认识时，memories=[] 是正确答案。',
-  '每条 source_ids 必须引用本批输入中出现的完整 memory id，并且至少引用一条当前 NEW 的 raw memory；只有 source_session=vc-ai-pet 才是 raw。',
+  '每条 source_ids 必须引用本批输入中出现的完整 memory id，并且至少引用一条当前 NEW 的 raw memory；输入 evidence=raw 才是原始证据，session 标签不能覆盖 provenance。',
   'derived memory 可以是 soul、user、fact、lesson、topic；绝对不要输出 rules 或 project。',
-  'soul 只用于慢慢形成的第一人称自我理解：content 必须以“我”开头、importance 必须为 3、confidence 至少 0.82，并且至少引用两个彼此独立的 source_ids。',
-  'related 的 reflection、旧 dream、旧 soul 只能作为背景，不能替代 soul 所需的两个 raw source；soul 至少引用两个 source_session=vc-ai-pet 的不同 id，其中至少一个是当前 NEW。',
+  'soul 只用于慢慢形成的第一人称自我理解：content 必须以“我”开头、importance 必须为 3、单一经历只能形成待修正的弱假设；confidence 不代表事实，最终由真实证据根数计算。',
+  'related 的 reflection、旧 dream、旧 soul 只能作为背景，不能增加证据数或置信度；soul 必须有真实 raw 来源，其中至少一个是当前 NEW。',
   '不要因为单一事件生成固定的 soul 或人格判断；不要预设或硬编码任何人格形容词。',
   '请严格返回 Dream JSON schema，不要返回 Markdown、解释文字或代码围栏。',
 ].join('\n')
@@ -182,7 +183,7 @@ function isEligibleSource(row, after, before) {
     row.status === 'active' &&
     Number.isFinite(importance) &&
     importance >= 2 &&
-    row.source_session === PET_RAW_SOURCE_SESSION &&
+    isRawEvidenceRow(row) &&
     Number.isFinite(createdAt) &&
     createdAt > after &&
     createdAt <= before,
@@ -215,6 +216,7 @@ function formatMemoryRow(row) {
     `[${id}]`,
     `[${level}]`,
     `[source_session=${sourceSession}]`,
+    `[evidence=${isRawEvidenceRow(row) ? 'raw' : 'background-only'}]`,
     `[${createdAt}]`,
     `[${importance}]`,
     content,
@@ -439,13 +441,13 @@ export class DreamEngine {
         ])
         const rawSourceIds = new Set(
           [...batch, ...related]
-            .filter((row) => row?.source_session === PET_RAW_SOURCE_SESSION)
+            .filter((row) => isRawEvidenceRow(row))
             .map((row) => rowId(row))
             .filter(Boolean),
         )
         const rawNewSourceIds = new Set(
           batch
-            .filter((row) => row?.source_session === PET_RAW_SOURCE_SESSION)
+            .filter((row) => isRawEvidenceRow(row))
             .map((row) => rowId(row))
             .filter(Boolean),
         )

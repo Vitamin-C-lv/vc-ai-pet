@@ -98,6 +98,11 @@ export function normalizeProvenance(input = {}, { fallbackSource = UNKNOWN_PROVE
   if (Number.isFinite(Number(raw.confidence))) {
     normalized.confidence = Math.max(0, Math.min(1, Number(raw.confidence)))
   }
+  if (Array.isArray(raw.sourceRoots)) normalized.sourceRoots = uniqueSourceIds(raw.sourceRoots)
+  if (Number.isInteger(raw.evidenceCount)) normalized.evidenceCount = Math.max(0, raw.evidenceCount)
+  if (['hypothesis', 'evolving'].includes(raw.selfStatus)) normalized.selfStatus = raw.selfStatus
+  if (typeof raw.evidenceQuote === 'string') normalized.evidenceQuote = raw.evidenceQuote.slice(0, 200)
+  if (typeof raw.messageId === 'string') normalized.messageId = raw.messageId.slice(0, 80)
   return normalized
 }
 

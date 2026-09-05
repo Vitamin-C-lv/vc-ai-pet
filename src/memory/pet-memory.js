@@ -1,5 +1,7 @@
 import { resolve, relative, sep, join } from 'node:path'
 import { MemoryDb, search as rankMemories } from 'meow-memory'
+import { CurrentBeliefStore } from './current-belief.js'
+import { evaluateDerivedEvidence, findSameEvidenceDerivation, isRawEvidenceRow } from './derived-evidence.js'
 import {
   HISTORICAL_CANDIDATE_LIMIT,
   HISTORICAL_LINEAGE_MAX_DEPTH,
@@ -142,6 +144,7 @@ export class PetMemory {
     this.dbPath = inside(this.sandboxRoot, join(this.sandboxRoot, 'memory', 'pet-memory.db'))
     this.db = new MemoryDb(this.dbPath)
     this.provenanceStore = new MemoryProvenanceStore(this.db.db)
+    this.beliefs = new CurrentBeliefStore(this.db.db)
     this.provenanceReader = provenanceReader
   }
 
@@ -231,6 +234,8 @@ export class PetMemory {
       provenance: candidate.provenance ?? {
         source: 'MEMORY_GATE_ACCEPTED',
         evidence: 'confirmed',
+        ...(candidate.evidence ? { evidenceQuote: candidate.evidence } : {}),
+        ...(candidate.messageId ? { messageId: candidate.messageId } : {}),
       },
     })
   }
@@ -299,10 +304,8 @@ export class PetMemory {
     if (sourceIds.length === 0) throw new Error('PET_DREAM_SOURCE_IDS_REQUIRED')
     if (candidate.level === 'soul' && (
       Number(candidate.importance) !== 3 ||
-      !Number.isFinite(Number(candidate.confidence)) ||
-      Number(candidate.confidence) < 0.82 ||
       !String(candidate.content ?? '').trim().startsWith('我') ||
-      new Set(sourceIds.map((id) => String(id))).size < 2
+      new Set(sourceIds.map((id) => String(id))).size < 1
     )) {
       throw new Error('PET_DREAM_SOUL_CANDIDATE_DENIED')
     }
@@ -312,6 +315,7 @@ export class PetMemory {
     }
     const provenance = normalizeProvenance({
       ...requestedProvenance,
+      ...this.derivedEvidence(candidate),
       sourceIds,
     })
     if (provenance.source !== 'DREAM_DERIVED' || provenance.evidence !== 'inferred') {
@@ -342,6 +346,7 @@ export class PetMemory {
     }
     const provenance = normalizeProvenance({
       ...requestedProvenance,
+      ...this.derivedEvidence(candidate),
       sourceIds,
     })
     if (provenance.source !== 'REFLECTION_DERIVED' || provenance.evidence !== 'inferred') {
@@ -375,6 +380,22 @@ export class PetMemory {
     return enrichedHits.map((row) => this.provenanceStore.decorate(row))
   }
 
+  derivedEvidence(candidate) {
+    const sourceRows = (candidate.sourceIds ?? []).map((id) => this.findById(id)?.row).filter(Boolean)
+    const evidence = evaluateDerivedEvidence(candidate, {
+      sourceRows, newSourceIds: sourceRows.filter(isRawEvidenceRow).map((row) => row.id),
+      findById: (id) => this.findById(id),
+    })
+    if (!evidence) throw new Error('PET_DERIVED_RAW_EVIDENCE_REQUIRED')
+    return evidence
+  }
+
+  findSameEvidenceDerivation(candidate) {
+    const rows = DREAM_DEDUPE_LEVELS.flatMap((level) => this.db.list(level, { status: 'active' }))
+      .map((row) => this.provenanceStore.decorate(row))
+    return findSameEvidenceDerivation(candidate, rows)
+  }
+
   historicalSearch(
     query,
     {
@@ -399,7 +420,7 @@ export class PetMemory {
       candidateLimit: HISTORICAL_CANDIDATE_LIMIT,
       mode: 'none',
       now: null,
-    })
+    }).map((row) => this.provenanceStore.decorate(row))
   }
 
   stableIdentityContext() {
@@ -420,7 +441,7 @@ export class PetMemory {
       .filter((row) => Number(row.importance) >= 2)
     const hits = rankMemories(CURRENT_SELF_QUERY, rows, { k: limit })
     const byId = new Map(rows.map((row) => [row.id, row]))
-    return hits.map((hit) => byId.get(hit.id) ?? hit)
+    return hits.map((hit) => this.provenanceStore.decorate(byId.get(hit.id) ?? hit))
   }
 
   buildHistoricalRecallContext(
@@ -559,6 +580,7 @@ export class PetMemory {
       updated_at: row.updated_at,
       source: row.source ?? memorySourceKind(row),
       section: sectionById.get(String(row.id)) ?? null,
+      provenance: this.provenanceStore.resolve(row),
     }))
 
     return {
@@ -626,8 +648,10 @@ export class PetMemory {
     const upper = Number(before)
     return RAW_SOURCE_LEVELS
       .flatMap((level) => this.db.list(level, { status: 'active' }))
+      .map((row) => this.provenanceStore.decorate(row))
       .filter((row) =>
         row.source_session === PET_SOURCE_SESSION &&
+        isRawEvidenceRow(row) &&
         Number(row.importance) >= 2 &&
         Number.isFinite(Number(row.created_at)) &&
         Number(row.created_at) > lower &&

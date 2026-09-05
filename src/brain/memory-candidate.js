@@ -1,4 +1,5 @@
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
+import { BELIEF_OUTPUT_SCHEMA } from '../memory/current-belief.js'
 
 export const MEMORY_WRITE_LEVELS = Object.freeze(['user', 'project', 'fact', 'lesson', 'topic'])
 
@@ -6,6 +7,7 @@ export const PET_CHAT_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
   properties: {
+    beliefs: BELIEF_OUTPUT_SCHEMA,
     reply: {
       type: 'string',
       minLength: 1,
@@ -35,7 +37,7 @@ export const PET_CHAT_RESPONSE_SCHEMA = Object.freeze({
       required: ['remember', 'level', 'content', 'importance', 'keywords', 'confidence', 'evidence'],
     },
   },
-  required: ['reply', 'memory'],
+  required: ['reply', 'memory', 'beliefs'],
 })
 
 export const MEMORY_OUTPUT_INSTRUCTION = `
@@ -173,6 +175,7 @@ export function parseStructuredChatResponse(text, userText) {
       replyMessages,
       memoryCandidate: checked.accepted ? checked.candidate : null,
       rawMemoryCandidate,
+      beliefCandidates: Array.isArray(parsed.beliefs) ? parsed.beliefs.slice(0, 2) : [],
       memoryDecision: checked.reason,
       structured: true,
     }

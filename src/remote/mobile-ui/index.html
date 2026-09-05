@@ -19,6 +19,7 @@
 
       <div class="view-host">
         <section id="play-view" class="app-view play-view" data-view="play" aria-label="和花花玩耍">
+          <button id="inner-life-open" class="inner-life-entry" type="button" aria-controls="inner-life-view">🌙 花花的梦境 <span aria-hidden="true">›</span></button>
           <div class="pet-card" aria-live="polite">
             <p class="stage-hint" aria-hidden="true">今天也陪花花玩一会儿吧</p>
             <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
@@ -31,6 +32,25 @@
             <button id="pet-button" type="button">摸摸头</button>
             <button id="play-button" type="button">玩耍</button>
             <button id="long-button" type="button">长按</button>
+          </div>
+        </section>
+
+        <section id="inner-life-view" class="app-view inner-life-view" aria-label="花花的梦境" hidden>
+          <div class="inner-life-heading">
+            <button id="inner-life-back" type="button" aria-label="返回玩耍">‹ 返回</button>
+            <h2>🌙 花花的梦境</h2>
+            <button id="inner-life-refresh" type="button">刷新</button>
+          </div>
+          <div class="inner-life-scroll">
+            <div class="inner-life-stats" aria-label="梦境统计">
+              <p><b id="dream-recent">—</b><span>近 7 天梦境</span></p>
+              <p><b id="dream-total">—</b><span>累计梦境</span></p>
+            </div>
+            <p id="dream-latest" class="inner-life-latest">最近梦境：—</p>
+            <p class="inner-life-note">这里记录花花的回想与梦中联想，是逐渐形成的理解，可能还需要你的纠正。</p>
+            <p id="inner-life-status" class="inner-life-status" role="status" aria-live="polite"></p>
+            <div id="inner-life-list" class="inner-life-list"></div>
+            <button id="inner-life-more" class="inner-life-more" type="button" hidden>更早的心事</button>
           </div>
         </section>
 

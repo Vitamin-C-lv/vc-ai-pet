@@ -473,6 +473,7 @@ await withMemory('gate', async ({ memory }) => {
   const oldSoulBefore = snapshotIds(memory, [oldSoul.id])
   const context = {
     newSourceIds: new Set([newSource.id]),
+    sourceRows: [newSource, oldSource, oldDerivedSource],
     availableSourceIds: new Set([newSource.id, oldSource.id, oldDerivedSource.id]),
     rawSourceIds: new Set([newSource.id, oldSource.id]),
     rawNewSourceIds: new Set([newSource.id]),
@@ -493,7 +494,7 @@ await withMemory('gate', async ({ memory }) => {
   assert.equal(validateDreamCandidate({ ...base, content: 'abc' }, context), null)
   assert.equal(validateDreamCandidate({ ...base, importance: 1 }, context), null)
   assert.equal(validateDreamCandidate({ ...base, importance: 4 }, context), null)
-  assert.equal(validateDreamCandidate({ ...base, confidence: 0.71 }, context), null)
+  assert.equal(validateDreamCandidate({ ...base, confidence: 0.71 }, context).confidence, 0.55)
   assert.equal(validateDreamCandidate({ ...base, source_ids: ['missing'] }, context), null)
   assert.equal(validateDreamCandidate({ ...base, source_ids: ['old-a'] }, context), null)
   assert.equal(validateDreamCandidate({ ...base, source_ids: ['derived-old'] }, context), null)
@@ -506,7 +507,7 @@ await withMemory('gate', async ({ memory }) => {
     confidence: 0.82,
     source_ids: ['new-a'],
   }
-  assert.equal(validateDreamCandidate(singleSourceSoul, context), null)
+  assert.equal(validateDreamCandidate(singleSourceSoul, context).selfStatus, 'hypothesis')
 
   const accepted = validateDreamCandidate({
     ...base,
@@ -517,7 +518,9 @@ await withMemory('gate', async ({ memory }) => {
     level: 'user',
     content: '主人似乎很喜欢群青色。',
     importance: 2,
-    confidence: 0.72,
+    confidence: 0.55,
+    sourceRoots: ['new-a', 'old-a'],
+    evidenceCount: 2,
     keywords: ['群青色', '偏好'],
     sourceIds: ['new-a', 'old-a'],
   })
@@ -534,15 +537,18 @@ await withMemory('gate', async ({ memory }) => {
     level: 'soul',
     content: '我会把群青色记成主人的稳定偏好。',
     importance: 3,
-    confidence: 0.82,
+    confidence: 0.55,
+    sourceRoots: ['new-a', 'old-a'],
+    evidenceCount: 2,
+    selfStatus: 'hypothesis',
     keywords: ['自我', '群青色', '偏好'],
     sourceIds: ['new-a', 'old-a'],
   })
 
   const gate = new DreamGate({ memory })
   const dreamSingleSoul = gate.consider(singleSourceSoul, context)
-  assert.equal(dreamSingleSoul.status, 'skipped')
-  assert.equal(dreamSingleSoul.reason, 'invalid-candidate')
+  assert.equal(dreamSingleSoul.status, 'written')
+  assert.equal(dreamSingleSoul.row.provenance.selfStatus, 'hypothesis')
 
   const dreamRules = gate.consider({ ...base, level: 'rules' }, context)
   assert.equal(dreamRules.status, 'skipped')
@@ -905,6 +911,7 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   memory.finishDream(deepCheckpoint)
 
   const reflectionContext = {
+    sourceRows: [sourceA, sourceB],
     newSourceIds: new Set(rawSourceIds),
     rawSourceIds: new Set(rawSourceIds),
     rawNewSourceIds: new Set(rawSourceIds),
@@ -1050,15 +1057,17 @@ await withMemory('micro-reflection-deep-dream', async ({ root, memory }) => {
   assert.equal(deepResult.status, 'completed')
   assert.equal(deepResult.sourceCount, 2)
   assert.equal(deepResult.batchCount, 1)
-  assert.equal(deepResult.derivedCount, 1)
-  assert.equal(deepResult.skipped, 1)
+  assert.equal(deepResult.derivedCount, 2)
+  assert.equal(deepResult.skipped, 0)
   assert.equal(deepCalls.length, 1)
   assert.match(deepCalls[0].messages[1].content, /microA-source/)
   assert.match(deepCalls[0].messages[1].content, /microB-source/)
 
   const deepDerivedRows = LEVELS.flatMap((level) => memory.db.list(level))
     .filter((row) => row.source_session === PET_DREAM_SOURCE_SESSION)
-  const deepSoul = deepDerivedRows.find((row) => row.level === 'soul')
+  const weakSoul = deepDerivedRows.find((row) => row.title === 'dream:microA-s')
+  assert.equal(memory.provenanceForMemory(weakSoul.id).confidence, 0.45)
+  const deepSoul = deepDerivedRows.find((row) => row.level === 'soul' && row.id !== weakSoul.id)
   assert.ok(deepSoul)
   assert.equal(deepSoul.title, `dream:${rawSourceIds.map((id) => id.slice(0, 8)).join(',')}`)
   assert.equal(deepSoul.title, 'dream:microA-s,microB-s')

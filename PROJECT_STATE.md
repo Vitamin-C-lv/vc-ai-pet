@@ -1,6 +1,60 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_MOBILE_UI_POLISH_PHASE2_PASS
+Status: FINAL_STATUS=VC_AI_PET_COGNITION_PHASE1_SOURCE_VALIDATED_NOT_DEPLOYED
+
+## 2026-09-05 — Long-term cognition phase 1
+
+The delivered scope is durable raw conversation history, temporal owner
+beliefs, source-backed direct belief answers, evidence-rooted weak Self
+hypotheses, Dream/Reflection loop guards and a user-facing inner-life timeline.
+See [phase design and acceptance](docs/LONG_TERM_COGNITION_PHASE1.md).
+
+```text
+BASELINE_BRANCH=feat/visual-working-session
+BASELINE_HEAD=50789e0fd15854c2e45aa89a4fc1d07f45b7fb4c
+BRANCH=feat/long-term-cognition
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-cognition
+CURRENT_BELIEF=supported/contested/temporary/unknown
+RAW_HISTORY=SQLITE_ARCHIVE_PLUS_BOUNDED_RECENT_CACHE
+SELF=WEAK_INFERRED_HYPOTHESES_FROM_DISTINCT_RAW_ROOTS
+DERIVED_SELF_REINFORCEMENT=GUARDED
+DREAM_UI=PLAY_TOP_ENTRY_AND_PAGINATED_TIMELINE
+REFLECTION_UI=SMALL_THOUGHTS_IN_SAME_TIMELINE
+EXISTING_TEST_PROGRAMS=25_PASS_AFTER_INTENTIONAL_CONTRACT_UPDATES
+LONG_LIFE_TEST_PROGRAMS=4_PASS
+REAL_LOCAL_BRAIN_CHANGE_AND_RECALL=PASS_IN_TEMP_SANDBOX
+CLIENT_BUILD_AND_VERIFY=PASS
+NARROW_SCREEN_RENDER_QA=UNVERIFIED_CHROMIUM_NAVIGATION_TIMEOUT
+PRODUCTION_DATA_MODIFIED=NO
+PRODUCTION_DREAM_RUN=NO
+PRODUCTION_HOST_RESTARTED=NO
+ANDROID_NATIVE_CHANGED=NO
+LOCAL_BRAIN_API_CHANGED=NO
+GOMOKU=DEFERRED
+INITIATIVE_AND_BACKGROUND_NOTIFICATIONS=DEFERRED
+ARCHIVE_WIDE_VISUAL_EXPERIENCE_RETRIEVAL=DEFERRED
+```
+
+Runtime audit found **two** DSH Host processes opening the production Pet DB.
+The LAN Host predates the latest source modifications, so its loaded code is
+not verified equal to source. This branch was tested independently and has not
+been activated in that production Host. No reset, force push, or replacement
+of the original checkout was used. Older acceptance sections below are
+historical snapshots, not a current service-status assertion.
+
+Additional fixes: old 500-message deletion became a bounded cache plus durable
+archive; new MemoryGate writes retain actual evidence instead of model
+paraphrases; questions/assistant quotations cannot become facts; historical
+and current-Self reads retain provenance; out-of-order cognition completion
+does not overwrite newer owner evidence; zero-sized history reads return empty.
+
+The explicit product adjustment is staged delivery, plus a narrow evidence
+answer renderer because live Local Brain testing showed correct retrieval did
+not guarantee a correct final answer. No claims are made of universal semantic
+contradiction resolution, retroactive restoration of deleted data, full Self
+revision or Android device acceptance.
+
+## Historical baseline
 
 ```text
 DSH_VERSION=0.1.1-rc.2
