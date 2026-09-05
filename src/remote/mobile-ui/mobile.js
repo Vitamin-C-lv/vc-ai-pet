@@ -353,14 +353,22 @@ function line(role, text, attachment = null, reasoning = null) {
   return renderMessage({ role, text, attachment, reasoning })
 }
 
-const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
+const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_recall', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
 
 function renderTurnEvent(event) {
   const payload = event?.payload ?? {}
   if (event?.type === 'turn_started' || event?.type === 'thinking' || event?.type === 'turn_failed') return null
+  if (event?.type === 'visual_recall') {
+    const node = renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
+    node.classList.add('vm-recall')
+    if (typeof payload.sourceAttachmentId === 'string' && payload.sourceAttachmentId) node.classList.add('has-source')
+    return node
+  }
   if (event?.type === 'visual_selected') {
     removeThinkingMessage(document.querySelector('.thinking-message'))
-    return renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
+    const node = renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
+    if (payload.relation === 'recalled') node.classList.add('vm-recalled')
+    return node
   }
   if (event?.type === 'visual_image') {
     removeThinkingMessage(document.querySelector('.thinking-message'))
