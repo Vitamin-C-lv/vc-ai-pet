@@ -131,6 +131,42 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         if ((message.length < 1 && !image) || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
         return sendJson(res, 200, await runtime.chat(message, image, attachment))
       }
+      if (req.method === 'POST' && url.pathname === '/api/pet/chat/start') {
+        const body = await readJsonBody(req, CHAT_BODY_LIMIT_BYTES)
+        const message = typeof body?.message === 'string' ? body.message.trim() : ''
+        if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
+        let image = null
+        let attachment = null
+        let attachmentId = null
+        if (Object.hasOwn(body ?? {}, 'attachmentId')) {
+          if (Object.hasOwn(body ?? {}, 'image') || typeof body?.attachmentId !== 'string') return sendJson(res, 400, { error: 'invalid-image' })
+          attachmentId = body.attachmentId
+          if (!/^[a-z0-9_-]{1,80}$/iu.test(attachmentId)) return sendJson(res, 400, { error: 'invalid-image' })
+          const metadata = await conversationStore?.attachment?.(attachmentId)
+          if (conversationStore?.attachment && !metadata) return sendJson(res, 400, { error: 'invalid-image' })
+        } else {
+          try { image = normalizeVisionImage(body?.image) } catch { return sendJson(res, 400, { error: 'invalid-image' }) }
+        }
+        if ((message.length < 1 && !image && !attachmentId) || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
+        if (typeof runtime.startChatTurn !== 'function') return sendJson(res, 503, { error: 'turn-transport-unavailable' })
+        let started
+        try {
+          started = runtime.startChatTurn({ userText: message, image, attachment, attachmentId })
+        } catch (error) {
+          if (error?.code === 'PET_TURN_MANAGER_CAPACITY') return sendJson(res, 503, { error: 'turn-capacity' })
+          throw error
+        }
+        if (!started?.turnId) return sendJson(res, 500, { error: 'turn-start-failed' })
+        return sendJson(res, 202, { ok: true, turnId: started.turnId })
+      }
+      if (req.method === 'GET' && url.pathname.startsWith('/api/pet/chat/turn/')) {
+        const turnId = url.pathname.slice('/api/pet/chat/turn/'.length)
+        if (!/^[a-z0-9-]{1,80}$/iu.test(turnId) || typeof runtime.pollChatTurn !== 'function') return sendJson(res, 404, { error: 'turn-not-found' })
+        const after = url.searchParams.get('after')
+        if (after !== null && !/^\d{1,9}$/u.test(after)) return sendJson(res, 400, { error: 'invalid-after' })
+        const result = runtime.pollChatTurn(turnId, after)
+        return result ? sendJson(res, 200, result) : sendJson(res, 404, { error: 'turn-not-found' })
+      }
       if (req.method === 'GET' && url.pathname.startsWith('/conversation-assets/')) {
         return await serveConversationAsset(url.pathname, conversationStore, res)
       }

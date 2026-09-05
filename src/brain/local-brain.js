@@ -5,8 +5,60 @@ import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredCha
 import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
+import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
+
+export const PET_VISUAL_STEP_RESPONSE_SCHEMA = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: {
+    observation: { type: 'string', maxLength: 180 },
+    action: { type: 'string', enum: ['inspect', 'answer'] },
+    nextVisualId: { type: 'string', maxLength: 16 },
+    focus: { type: 'string', maxLength: 120 },
+    replyMessages: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1, maxLength: 300 } },
+  },
+  required: ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages'],
+})
 
 export const LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS = Object.freeze([250, 500, 1000])
+
+function invalidVisualStep(reason) {
+  return { ok: false, reason }
+}
+
+export function validateVisualStepResponse(value, { candidateIds = [], forceAnswer = false } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidVisualStep('object-required')
+  const required = ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages']
+  if (required.some((key) => !Object.hasOwn(value, key))) return invalidVisualStep('required-field-missing')
+  if (Object.keys(value).some((key) => !required.includes(key))) return invalidVisualStep('unknown-field')
+  if (typeof value.observation !== 'string' || value.observation.trim().length > 180) return invalidVisualStep('observation-invalid')
+  if (value.observation.trim() && !sanitizeSafeTraceText(value.observation, 180)) return invalidVisualStep('observation-unsafe')
+  if (value.action !== 'inspect' && value.action !== 'answer') return invalidVisualStep('action-invalid')
+  if (typeof value.nextVisualId !== 'string' || value.nextVisualId.trim().length > 16) return invalidVisualStep('next-visual-id-invalid')
+  if (typeof value.focus !== 'string' || value.focus.trim().length > 120) return invalidVisualStep('focus-invalid')
+  if (value.focus.trim() && !sanitizeSafeTraceText(value.focus, 120)) return invalidVisualStep('focus-unsafe')
+  if (!Array.isArray(value.replyMessages) || value.replyMessages.length > 3) return invalidVisualStep('reply-messages-invalid')
+  const replyMessages = []
+  for (const item of value.replyMessages) {
+    if (typeof item !== 'string' || item.trim().length < 1 || item.trim().length > 300) return invalidVisualStep('reply-message-invalid')
+    if (!sanitizeSafeTraceText(item, 300)) return invalidVisualStep('reply-message-unsafe')
+    replyMessages.push(item.trim())
+  }
+
+  const requested = value.nextVisualId.trim()
+  if (value.action === 'inspect' && !forceAnswer) {
+    if (!requested || (candidateIds.length > 0 && !candidateIds.includes(requested))) return invalidVisualStep('inspect-target-invalid')
+  }
+  if (value.action === 'answer' && (requested || (!forceAnswer && replyMessages.length === 0))) return invalidVisualStep('answer-shape-invalid')
+
+  return {
+    ok: true,
+    observation: value.observation.trim(),
+    action: forceAnswer ? 'answer' : value.action,
+    nextVisualId: forceAnswer ? '' : value.action === 'inspect' ? requested : '',
+    focus: value.focus.trim(),
+    replyMessages,
+  }
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -57,6 +109,39 @@ export class LocalBrain {
 
   async health() {
     return this.client.health()
+  }
+
+  async visualStep({ userText, image, candidatePool = [], observations = [], forceAnswer = false }) {
+    const visionImage = normalizeVisionImage(image)
+    if (!visionImage) throw new LocalBrainApiError('visual step requires an image', { code: 'PET_INVALID_VISION_IMAGE' })
+    const catalog = (Array.isArray(candidatePool) ? candidatePool : []).map(({ visualId, relation, userText: caption }) => `${visualId} (${relation}): ${String(caption ?? '').slice(0, 120)}`).join('\n')
+    const ledger = (Array.isArray(observations) ? observations : []).map(({ visualId, focus, summary }) => {
+      const safeSummary = sanitizeSafeTraceText(summary, 180)
+      const safeFocus = sanitizeSafeTraceText(focus, 120)
+      return safeSummary ? `${visualId}: ${safeSummary}${safeFocus ? `（重点：${safeFocus}）` : ''}` : ''
+    }).filter(Boolean).join('\n') || '- 暂无'
+    const instruction = `你是李花花，正在分步看图片。只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。\nobservation 最多180字。${forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+    const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
+    const startedAt = monotonicNow()
+    let requestId = null
+    try {
+      const response = await chatWithBoundedQueueRetry(this.client, {
+        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: 0.45, topP: 0.85, maxTokens: 768,
+        responseFormat: { type: 'json_object', schema: PET_VISUAL_STEP_RESPONSE_SCHEMA },
+      })
+      const { payload } = response
+      requestId = response.requestId ?? null
+      const raw = payload?.choices?.[0]?.message?.content
+      if (typeof raw !== 'string' || !raw.trim()) throw new LocalBrainApiError('visual step missing content', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId })
+      let parsed
+      try { parsed = JSON.parse(raw) } catch { throw new LocalBrainApiError('visual step invalid json', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId }) }
+      const checked = validateVisualStepResponse(parsed, { candidateIds: (Array.isArray(candidatePool) ? candidatePool : []).map((candidate) => candidate.visualId), forceAnswer })
+      if (!checked.ok) throw new LocalBrainApiError(`invalid visual step: ${checked.reason}`, { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_STEP', requestId })
+      return { ...checked, requestId, reasoning: { effort: PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
+    } catch (error) {
+      if (error?.retryable) return { ok: false, unavailable: true, reason: 'local-brain-unavailable', requestId: error.requestId ?? requestId }
+      throw error
+    }
   }
 
   async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], now = Date.now() }) {
@@ -158,6 +243,7 @@ export class LocalBrain {
         ok: true,
         unavailable: false,
         text: parsed.text,
+        replyMessages: parsed.replyMessages,
         reasoning: {
           effort: reasoningEffort,
           durationMs,

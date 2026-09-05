@@ -9,6 +9,9 @@ import { RecentConversation } from '../conversation/recent-conversation.js'
 import { ConversationStore } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
 import { RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { PetTurnOrchestrator } from './pet-turn-orchestrator.js'
+import { PetTurnManager } from './pet-turn-manager.js'
+import { createTurnId } from './pet-turn-events.js'
 import { DreamGate } from '../dream/dream-gate.js'
 import { DreamEngine } from '../dream/dream-engine.js'
 import { DreamScheduler } from '../dream/dream-scheduler.js'
@@ -97,6 +100,8 @@ export class PetRuntime {
     this.conversation = new RecentConversation({ maxTurns: 12 })
     this.conversationStore = new ConversationStore(this.sandbox.root)
     this.recentVisualResolver = new RecentVisualResolver()
+    this.turnManager = new PetTurnManager()
+    this.turnOrchestrator = null
     this.conversationPersistenceReady = false
     this.dreamEngine = null
     this.reflectionEngine = null
@@ -124,6 +129,7 @@ export class PetRuntime {
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
     this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger })
+    this.turnOrchestrator = new PetTurnOrchestrator({ runtime: this })
     this.memoryGate = new MemoryGate({ memory: this.memory })
     this.dreamEngine = new DreamEngine({
       memory: this.memory,
@@ -261,9 +267,17 @@ export class PetRuntime {
     return { kind: feedback.kind, until: Number(feedback.at) + duration }
   }
 
-  async chat(userText, image = null, attachment = null) {
+  async chat(userText, image = null, attachment = null, { turnId = createTurnId() } = {}) {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
+    const recalled = !currentVisionImage && this.conversationPersistenceReady
+      ? await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
+      : null
+    if ((currentVisionImage || recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') && typeof this.brain?.visualStep === 'function') {
+      let currentAttachment = attachment
+      if (currentVisionImage && !currentAttachment) currentAttachment = await this.conversationStore.saveAttachment({ image: currentVisionImage })
+      return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: currentAttachment })
+    }
     this.chatInFlight += 1
 
     try {
@@ -311,6 +325,7 @@ export class PetRuntime {
           text: ownerText,
           timestamp: Date.now(),
           attachment: persistedAttachment,
+          turnId,
         })
       }
 
@@ -334,15 +349,20 @@ export class PetRuntime {
       const recentUserText = currentVisionImage
         ? `[主人发送了一张图片]${ownerText.trim() ? ` ${ownerText.trim()}` : ''}`
         : ownerText
-      this.conversation.append(recentUserText, result.text)
+      const replyMessages = Array.isArray(result.replyMessages)
+        ? result.replyMessages.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).slice(0, 3)
+        : []
+      const semanticReplies = replyMessages.length ? replyMessages : [result.text]
+      this.conversation.append(recentUserText, semanticReplies.join('\n'))
       const reasoning = publicReasoningMetadata(result.reasoning)
       if (this.conversationPersistenceReady) {
-        await this.conversationStore.appendMessage({
-          role: 'assistant',
-          text: result.text,
-          timestamp: Date.now(),
-          reasoning,
-        })
+        if (semanticReplies.length > 1) {
+          for (const [index, text] of semanticReplies.entries()) {
+            await this.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, timestamp: Date.now(), reasoning: index === semanticReplies.length - 1 ? reasoning : null })
+          }
+        } else {
+          await this.conversationStore.appendMessage({ role: 'assistant', text: semanticReplies[0], timestamp: Date.now(), reasoning, turnId })
+        }
       }
 
       // Never expose the candidate/evidence or internal gate details to the
@@ -352,13 +372,49 @@ export class PetRuntime {
         ok: true,
         unavailable: false,
         text: result.text,
+        ...(replyMessages.length ? { replyMessages } : {}),
         memoryWrite: gate.status,
+        ...(effectiveVisionImage && gate.reason ? { memoryWriteReason: gate.reason } : {}),
         ...(reasoning ? { reasoning } : {}),
       }
     } finally {
       this.chatInFlight -= 1
     }
   }
+
+  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null } = {}) {
+    this.chatInFlight += 1
+    try { return await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment }) }
+    finally { this.chatInFlight -= 1 }
+  }
+
+  startChatTurn({ userText, image = null, attachment = null, attachmentId = null } = {}) {
+    return this.turnManager.start(async ({ turnId, emit }) => {
+      let normalized = normalizeVisionImage(image)
+      if (!normalized && attachmentId) {
+        const stored = await this.conversationAsset(attachmentId)
+        if (!stored?.dataUrl || !stored.attachment) throw Object.assign(new Error('conversation attachment not found'), { code: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND' })
+        image = { dataUrl: stored.dataUrl }
+        attachment = stored.attachment
+        normalized = normalizeVisionImage(image)
+      }
+      if (normalized) {
+        const currentAttachment = attachment ?? await this.conversationStore.saveAttachment({ image: normalized })
+        return this.runVisualTurn({ turnId, emit, userText, attachment: currentAttachment })
+      }
+      const recalled = await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
+      if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      emit('turn_started', { mode: 'text' }); emit('thinking', {})
+      const result = await this.chat(userText, null, null, { turnId })
+      if (!result?.ok) return result
+      const replies = Array.isArray(result.replyMessages) && result.replyMessages.length ? result.replyMessages : [result.text]
+      for (const text of replies) emit('assistant_message', { text })
+      emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
+      return result
+    })
+  }
+
+  pollChatTurn(turnId, after = 0) { return this.turnManager.poll(turnId, after) }
 
   runDreamNow() {
     const options = {
@@ -400,20 +456,43 @@ export class PetRuntime {
 
   async restoreRecentConversation() {
     if (!this.conversationPersistenceReady) return
-    const persisted = await this.conversationStore.list(24)
-    let pendingUser = null
+    const persisted = typeof this.conversationStore.semanticHistory === 'function'
+      ? await this.conversationStore.semanticHistory(48)
+      : await this.conversationStore.list(24)
     this.conversation.clear()
-    for (const message of persisted) {
-      if (message.role === 'user') {
-        pendingUser = message
-        continue
+    const entries = []
+    const keyed = new Map()
+    let legacy = null
+    const entryFor = (message, index) => {
+      if (message.turnId) {
+        let entry = keyed.get(message.turnId)
+        if (!entry) {
+          entry = { user: null, replies: [], index }
+          keyed.set(message.turnId, entry)
+          entries.push(entry)
+        }
+        return entry
       }
-      if (message.role !== 'assistant' || !pendingUser) continue
-      const userText = pendingUser.attachment
-        ? `[主人发送了一张图片]${pendingUser.text ? ` ${pendingUser.text}` : ''}`
-        : pendingUser.text
-      this.conversation.append(userText, message.text)
-      pendingUser = null
+      if (message.role === 'user') {
+        legacy = { user: message, replies: [], index }
+        entries.push(legacy)
+        return legacy
+      }
+      return legacy
+    }
+    for (const [index, message] of persisted.entries()) {
+      if (['activity', 'media_ref'].includes(message.kind)) continue
+      const entry = entryFor(message, index)
+      if (!entry) continue
+      if (message.role === 'user') entry.user = message
+      else if (message.role === 'assistant') entry.replies.push(message.text)
+    }
+    for (const entry of entries.sort((left, right) => left.index - right.index)) {
+      if (!entry.user || entry.replies.length === 0) continue
+      const userText = entry.user.attachment
+        ? `[主人发送了一张图片]${entry.user.text ? ` ${entry.user.text}` : ''}`
+        : entry.user.text
+      this.conversation.append(userText, entry.replies.join('\n'))
     }
   }
 

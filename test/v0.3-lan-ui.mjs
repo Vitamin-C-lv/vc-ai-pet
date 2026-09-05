@@ -29,6 +29,12 @@ try {
 }
 
 const calls = []
+const turn = {
+  turnId: 'turn-test',
+  status: 'done',
+  events: [{ seq: 1, turnId: 'turn-test', type: 'assistant_message', at: Date.now(), payload: { text: '汪：完成。' } }],
+  result: { ok: true, text: '汪：完成。' },
+}
 const runtime = {
   snapshot: () => ({ current: 'idle', lifetimeInteractions: calls.length }),
   presentationSnapshot: () => ({ visualState: calls.at(-1) === 'long-press' ? 'relaxed' : 'idle', emotion: { happiness: .8, energy: .6 }, dream: false, sprite: 'idle-front.png' }),
@@ -39,8 +45,10 @@ const runtime = {
       unavailable: false,
       text: `汪：${message}`,
       reasoning: { effort: 'low', durationMs: 2784 },
-    }
+      }
   },
+  startChatTurn() { return { turnId: turn.turnId } },
+  pollChatTurn(turnId, after = 0) { return turnId === turn.turnId ? { ok: true, turnId, status: turn.status, events: turn.events.filter((event) => event.seq > Number(after)), lastSeq: 1, result: turn.result } : null },
 }
 const logs = []
 const server = await startLanServer({ runtime, assetRoot: join(root, 'assets/runtime'), port: 0, logger: { info: (line) => logs.push(line) } })
@@ -98,6 +106,13 @@ try {
   const chatPayload = JSON.parse(chat.text)
   assert.equal(chatPayload.text, '汪：你好花花')
   assert.deepEqual(chatPayload.reasoning, { effort: 'low', durationMs: 2784 })
+
+  const start = await call('POST', '/api/pet/chat/start', { message: '你好花花' })
+  assert.equal(start.status, 202)
+  assert.equal(JSON.parse(start.text).turnId, turn.turnId)
+  const poll = await call('GET', `/api/pet/chat/turn/${turn.turnId}?after=0`)
+  assert.equal(poll.status, 200)
+  assert.equal(JSON.parse(poll.text).status, 'done')
 } finally {
   server.close()
   await once(server, 'close')
@@ -108,4 +123,6 @@ console.log('STATE_API=PASS')
 console.log('ACTION_API=PASS')
 console.log('CHAT_API=PASS')
 console.log('DIAGNOSTICS_ASSET=PASS')
+console.log('TURN_START_API=PASS')
+console.log('TURN_POLL_API=PASS')
 console.log('LOCAL_ONLY=PASS')

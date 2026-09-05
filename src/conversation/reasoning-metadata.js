@@ -13,5 +13,9 @@ export function normalizeConversationReasoning(value) {
   const metadata = {}
   if (REASONING_EFFORTS.has(value.effort)) metadata.effort = value.effort
   metadata.durationMs = Math.round(durationMs)
+  for (const key of ['visualInspections', 'visualUniqueImages']) {
+    const count = Number(value[key])
+    if (Number.isInteger(count) && count >= 0 && count <= 5) metadata[key] = count
+  }
   return metadata
 }

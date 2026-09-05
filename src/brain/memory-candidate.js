@@ -1,3 +1,5 @@
+import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
+
 export const MEMORY_WRITE_LEVELS = Object.freeze(['user', 'project', 'fact', 'lesson', 'topic'])
 
 export const PET_CHAT_RESPONSE_SCHEMA = Object.freeze({
@@ -8,6 +10,11 @@ export const PET_CHAT_RESPONSE_SCHEMA = Object.freeze({
       type: 'string',
       minLength: 1,
       maxLength: 600,
+    },
+    replyMessages: {
+      type: 'array',
+      maxItems: 3,
+      items: { type: 'string', minLength: 1, maxLength: 300 },
     },
     memory: {
       type: 'object',
@@ -151,22 +158,31 @@ export function parseStructuredChatResponse(text, userText) {
     const parsed = JSON.parse(rawText)
     const reply = typeof parsed?.reply === 'string' ? parsed.reply.trim() : ''
     if (!reply) throw new Error('PET_LOCAL_MODEL_EMPTY_REPLY')
+    if (!sanitizeSafeTraceText(reply, 600)) throw new Error('PET_LOCAL_MODEL_UNSAFE_REPLY')
 
     const rawMemoryCandidate = parsed?.memory ?? null
     const checked = validateMemoryCandidate(rawMemoryCandidate, userText)
+    const replyMessages = Array.isArray(parsed?.replyMessages)
+      && parsed.replyMessages.length >= 1
+      && parsed.replyMessages.length <= 3
+      && parsed.replyMessages.every((item) => typeof item === 'string' && item.trim().length >= 1 && item.trim().length <= 300 && sanitizeSafeTraceText(item, 300))
+      ? parsed.replyMessages.map((item) => item.trim())
+      : []
     return {
       text: reply,
+      replyMessages,
       memoryCandidate: checked.accepted ? checked.candidate : null,
       rawMemoryCandidate,
       memoryDecision: checked.reason,
       structured: true,
     }
   } catch (error) {
-    if (error?.message === 'PET_LOCAL_MODEL_EMPTY_REPLY') throw error
+    if (error?.message === 'PET_LOCAL_MODEL_EMPTY_REPLY' || error?.message === 'PET_LOCAL_MODEL_UNSAFE_REPLY') throw error
     // Chat stays usable if structured output is unexpectedly not honored.
     // Memory fails closed: never write from an unparsed response.
     return {
-      text: rawText,
+      text: sanitizeSafeTraceText(rawText, 600) || '花花刚才没整理好这句话，再问我一次吧。',
+      replyMessages: [],
       memoryCandidate: null,
       rawMemoryCandidate: null,
       memoryDecision: 'structured-parse-failed',

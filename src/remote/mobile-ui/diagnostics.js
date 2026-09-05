@@ -51,7 +51,7 @@
 
   function safeDetails(input = {}) {
     const details = {}
-    const stringFields = ['attachmentId', 'mime', 'tab', 'visibility', 'errorName', 'source']
+    const stringFields = ['attachmentId', 'turnId', 'mime', 'tab', 'visibility', 'errorName', 'source']
     for (const field of stringFields) {
       const value = safeString(input[field], 120)
       if (value) details[field] = value
@@ -62,7 +62,7 @@
       const value = safeBoolean(input[field])
       if (value !== null) details[field] = value
     }
-    for (const field of ['width', 'height', 'inputBytes', 'imageBytes', 'viewportWidth', 'viewportHeight', 'line', 'column']) {
+    for (const field of ['width', 'height', 'inputBytes', 'imageBytes', 'viewportWidth', 'viewportHeight', 'line', 'column', 'visualInspectionCount']) {
       const value = safeInteger(input[field], field.includes('Bytes') ? 20 * 1024 * 1024 : 20_000)
       if (value !== null) details[field] = value
     }

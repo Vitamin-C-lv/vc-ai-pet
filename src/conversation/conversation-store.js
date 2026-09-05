@@ -13,6 +13,9 @@ export const CONVERSATION_STORE_FILENAME = 'conversation-store.json'
 
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const MESSAGE_KINDS = new Set(['dialogue', 'activity', 'media_ref', 'final'])
+const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
+const MESSAGE_PROVENANCE = new Set(['confirmed', 'inferred'])
 const IMAGE_EXTENSION_BY_MIME = Object.freeze({
   'image/webp': 'webp',
   'image/jpeg': 'jpg',
@@ -44,6 +47,33 @@ function cleanText(value, maxLength = 1200) {
 function cleanId(value) {
   const id = String(value ?? '').trim()
   return /^[a-z0-9_-]{1,80}$/iu.test(id) ? id : null
+}
+
+function normalizeMessageKind(value) {
+  if (value === undefined || value === null || value === 'dialogue') return 'dialogue'
+  return MESSAGE_KINDS.has(value) ? value : 'activity'
+}
+
+function cleanActivityType(value) {
+  return ACTIVITY_TYPES.has(value) ? value : null
+}
+
+function cleanRelation(value) {
+  return value === 'current' || value === 'previous' ? value : null
+}
+
+function cleanProvenance(value) {
+  return MESSAGE_PROVENANCE.has(value) ? value : null
+}
+
+function cleanActivitySeq(value) {
+  const sequence = Number(value)
+  return Number.isInteger(sequence) && sequence >= 1 ? sequence : null
+}
+
+function cleanActivityAt(value) {
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null
 }
 
 function imageDimension(value, label) {
@@ -249,12 +279,28 @@ function normalizeState(value) {
       const attachment = copyAttachmentMetadata(message.attachment)
       if (attachment) attachmentMap.set(attachment.id, attachment)
       const reasoning = normalizeConversationReasoning(message.reasoning)
+      const turnId = cleanId(message.turnId)
+      const kind = normalizeMessageKind(message.kind)
+      const sourceAttachmentId = cleanId(message.sourceAttachmentId ?? (kind === 'media_ref' ? attachment?.id : null))
+      const activityType = cleanActivityType(message.activityType)
+      const relation = cleanRelation(message.relation)
+      const provenance = cleanProvenance(message.provenance)
+      const activitySeq = cleanActivitySeq(message.activitySeq)
+      const activityAt = cleanActivityAt(message.activityAt)
       return {
         id,
         role,
         text: cleanText(message.text),
         timestamp: finiteTimestamp(message.timestamp, 0),
         attachment: attachment ? clone(attachment) : null,
+        ...(turnId ? { turnId } : {}),
+        ...(kind !== 'dialogue' ? { kind } : {}),
+        ...(sourceAttachmentId ? { sourceAttachmentId } : {}),
+        ...(activityType ? { activityType } : {}),
+        ...(relation ? { relation } : {}),
+        ...(provenance ? { provenance } : {}),
+        ...(activitySeq ? { activitySeq } : {}),
+        ...(activityAt !== null ? { activityAt } : {}),
         ...(reasoning ? { reasoning } : {}),
       }
     }).filter(Boolean)
@@ -360,6 +406,14 @@ export class ConversationStore {
       text: message.text,
       timestamp: message.timestamp,
       attachment: message.attachment ? this.publicAttachment(message.attachment) : null,
+      ...(message.turnId ? { turnId: message.turnId } : {}),
+      ...(message.kind ? { kind: message.kind } : {}),
+      ...(message.sourceAttachmentId ? { sourceAttachmentId: message.sourceAttachmentId } : {}),
+      ...(message.activityType ? { activityType: message.activityType } : {}),
+      ...(message.relation ? { relation: message.relation } : {}),
+      ...(message.provenance ? { provenance: message.provenance } : {}),
+      ...(message.activitySeq ? { activitySeq: message.activitySeq } : {}),
+      ...(message.activityAt !== undefined ? { activityAt: message.activityAt } : {}),
       ...(message.reasoning ? { reasoning: clone(message.reasoning) } : {}),
     }))
   }
@@ -370,6 +424,31 @@ export class ConversationStore {
 
   async messages(limit = CONVERSATION_HISTORY_LIMIT) {
     return this.list(limit)
+  }
+
+  async semanticHistory(limit = this.maxMessages) {
+    const messages = await this.listForRecentVisualRecall(limit)
+    const semantic = messages.filter((message) => !['activity', 'media_ref'].includes(message.kind))
+    const projected = []
+    const finalByTurn = new Map()
+    for (const message of semantic) {
+      if (message.role !== 'assistant' || message.kind !== 'final' || !message.turnId) {
+        projected.push(message)
+        continue
+      }
+      const existing = finalByTurn.get(message.turnId)
+      if (!existing) {
+        const copy = clone(message)
+        finalByTurn.set(message.turnId, copy)
+        projected.push(copy)
+        continue
+      }
+      existing.text = [existing.text, message.text].filter(Boolean).join('\n').slice(0, 1200)
+      existing.timestamp = message.timestamp
+      existing.id = message.id
+      if (message.reasoning) existing.reasoning = clone(message.reasoning)
+    }
+    return projected
   }
 
   async saveAttachment({ image, thumbnail = null, width = null, height = null, thumbnailWidth = null, thumbnailHeight = null, timestamp = this.now(), requireThumbnail = false } = {}) {
@@ -472,7 +551,7 @@ export class ConversationStore {
     }
   }
 
-  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null } = {}) {
+  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null, turnId = null, kind = 'dialogue', sourceAttachmentId = null, activityType = null, relation = null, provenance = null, activitySeq = null, activityAt = null } = {}) {
     return this.#enqueue(async () => {
       await this.initialize()
       if (role !== 'user' && role !== 'assistant') throw storeError('PET_CONVERSATION_ROLE_INVALID')
@@ -480,16 +559,37 @@ export class ConversationStore {
       const normalizedAttachment = attachment ? copyAttachmentMetadata(attachment) : null
       if (attachment && !normalizedAttachment) throw storeError('PET_CONVERSATION_ATTACHMENT_INVALID')
       const normalizedReasoning = normalizeConversationReasoning(reasoning)
-      if (normalizedAttachment && !this.state.attachments.some((item) => item.id === normalizedAttachment.id)) {
-        this.state.attachments.push(normalizedAttachment)
+      const normalizedTurnId = cleanId(turnId)
+      const normalizedKind = normalizeMessageKind(kind)
+      const normalizedSourceAttachmentId = cleanId(sourceAttachmentId ?? (normalizedKind === 'media_ref' ? normalizedAttachment?.id : null))
+      const referencedAttachment = normalizedSourceAttachmentId
+        ? this.state.attachments.find((item) => item.id === normalizedSourceAttachmentId) ?? null
+        : null
+      if (normalizedKind === 'media_ref' && (!normalizedSourceAttachmentId || !this.state.attachments.some((item) => item.id === normalizedSourceAttachmentId) || (normalizedAttachment && normalizedAttachment.id !== normalizedSourceAttachmentId))) throw storeError('PET_CONVERSATION_MEDIA_REF_SOURCE_INVALID')
+      const messageAttachment = normalizedAttachment ?? referencedAttachment
+      if (messageAttachment && !this.state.attachments.some((item) => item.id === messageAttachment.id)) {
+        this.state.attachments.push(messageAttachment)
       }
+      const normalizedActivityType = cleanActivityType(activityType)
+      const normalizedRelation = cleanRelation(relation)
+      const normalizedProvenance = cleanProvenance(provenance)
+      const normalizedActivitySeq = cleanActivitySeq(activitySeq)
+      const normalizedActivityAt = cleanActivityAt(activityAt)
 
       const message = {
         id: messageId,
         role,
         text: cleanText(text),
         timestamp: finiteTimestamp(timestamp, this.now()),
-        attachment: normalizedAttachment,
+        attachment: messageAttachment,
+        ...(normalizedTurnId ? { turnId: normalizedTurnId } : {}),
+        ...(normalizedKind !== 'dialogue' ? { kind: normalizedKind } : {}),
+        ...(normalizedSourceAttachmentId ? { sourceAttachmentId: normalizedSourceAttachmentId } : {}),
+        ...(normalizedActivityType ? { activityType: normalizedActivityType } : {}),
+        ...(normalizedRelation ? { relation: normalizedRelation } : {}),
+        ...(normalizedProvenance ? { provenance: normalizedProvenance } : {}),
+        ...(normalizedActivitySeq ? { activitySeq: normalizedActivitySeq } : {}),
+        ...(normalizedActivityAt !== null ? { activityAt: normalizedActivityAt } : {}),
         ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       }
       this.state.messages.push(message)

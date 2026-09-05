@@ -224,11 +224,11 @@ function formatThinkingDuration(durationMs) {
   return `思考了 ${Math.floor(totalSeconds / 60)}分${totalSeconds % 60}秒`
 }
 
-function renderMessage({ role, text = '', attachment = null, reasoning = null } = {}) {
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
-  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}`
+  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}${kind === 'media_ref' ? ' media-ref-line' : kind === 'activity' ? ' activity-line' : ''}`
   const bubble = document.createElement('div')
   bubble.className = 'message-bubble'
 
@@ -246,14 +246,16 @@ function renderMessage({ role, text = '', attachment = null, reasoning = null } 
   }
 
   const thumbnailUrl = typeof attachment?.thumbnailUrl === 'string' ? attachment.thumbnailUrl : ''
-  if (thumbnailUrl) {
+  const localPreviewUrl = userMessage && /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/iu.test(thumbnailUrl) ? thumbnailUrl : ''
+  if (thumbnailUrl && (localPreviewUrl || isSameOriginAssetUrl(thumbnailUrl))) {
     const card = document.createElement('div')
     card.className = 'image-card'
     const image = document.createElement('img')
     image.src = thumbnailUrl
-    image.alt = userMessage ? '主人发送的图片' : '花花回复中的图片'
+    image.alt = userMessage ? '主人发送的图片' : '花花回看的图片'
     image.loading = 'lazy'
     image.decoding = 'async'
+    image.addEventListener('error', () => recordDiagnostic({ level: 'error', stage: 'image-load', code: 'IMAGE_LOAD_FAILURE', details: { hadImage: true, mime: attachment?.mimeType } }))
     card.append(image)
     bubble.append(card)
   }
@@ -270,8 +272,44 @@ function renderMessage({ role, text = '', attachment = null, reasoning = null } 
   return node
 }
 
+function isSameOriginAssetUrl(value) {
+  try {
+    const url = new URL(value, globalThis.location?.origin)
+    return url.origin === globalThis.location?.origin && url.pathname.startsWith('/conversation-assets/') && !url.search && !url.hash
+  } catch { return false }
+}
+
 function line(role, text, attachment = null, reasoning = null) {
   return renderMessage({ role, text, attachment, reasoning })
+}
+
+const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
+
+function renderTurnEvent(event) {
+  const payload = event?.payload ?? {}
+  if (event?.type === 'turn_started' || event?.type === 'thinking' || event?.type === 'turn_failed') return null
+  if (event?.type === 'visual_selected') {
+    removeThinkingMessage(document.querySelector('.thinking-message'))
+    return renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
+  }
+  if (event?.type === 'visual_image') {
+    removeThinkingMessage(document.querySelector('.thinking-message'))
+    return renderMessage({ role: 'assistant', kind: 'media_ref', text: payload.caption, attachment: payload.attachment })
+  }
+  if (event?.type === 'visual_observation') return renderMessage({ role: 'assistant', kind: 'activity', text: `👀 看到：${payload.summary ?? ''}` })
+  if (event?.type === 'visual_compare') return renderMessage({ role: 'assistant', kind: 'activity', text: `🔎 对照：${payload.summary ?? ''}` })
+  if (event?.type === 'memory_recall') return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
+  if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning)
+  if (event?.type === 'turn_completed') {
+    removeThinkingMessage(document.querySelector('.thinking-message'))
+    const node = document.createElement('article')
+    node.className = 'message pet-line turn-completed'
+    const meta = document.createElement('div')
+    meta.className = 'thinking-meta'
+    meta.textContent = `🐾 ${formatThinkingDuration(payload.reasoning?.durationMs ?? payload.durationMs)}`
+    node.append(meta); messages.append(node); return node
+  }
+  return null
 }
 
 function appendThinkingMessage({ vision = false } = {}) {
@@ -315,7 +353,11 @@ function renderHistory(history) {
     line('pet', '汪，在呀。')
     return
   }
-  history.forEach((message) => renderMessage(message))
+  history.forEach((message) => {
+    if (message.kind === 'activity') renderMessage({ ...message, role: 'assistant' })
+    else if (message.kind === 'media_ref') renderMessage({ ...message, role: 'assistant' })
+    else renderMessage(message)
+  })
 }
 
 function updateSendButton() {
@@ -497,6 +539,91 @@ async function action(action) {
   } catch { setOnline(false) }
 }
 
+function waitForTurnPoll() {
+  return new Promise((resolve) => setTimeout(resolve, 300))
+}
+
+async function runTurnProgress({ message, pendingImage, attachment, thinkingMessage }) {
+  const turnContext = {
+    stage: 'turn-start',
+    hadImage: Boolean(pendingImage),
+    attachmentId: attachment?.id,
+    ...(pendingImage ? imageDiagnosticDetails(pendingImage) : {}),
+  }
+  let started
+  try {
+    started = await fetchJsonDiagnostic('/api/pet/chat/start', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+    }, turnContext)
+  } catch (error) {
+    if (![404, 405].includes(Number(error?.httpStatus))) throw error
+    const legacy = await fetchJsonDiagnostic('/api/pet/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+    }, { ...turnContext, stage: 'chat' })
+    removeThinkingMessage(thinkingMessage)
+    const replies = Array.isArray(legacy.payload?.replyMessages) && legacy.payload.replyMessages.length ? legacy.payload.replyMessages : [legacy.payload?.text]
+    replies.filter(Boolean).forEach((text, index) => line('pet', text, null, index === replies.length - 1 ? legacy.payload?.reasoning : null))
+    return
+  }
+  const turnId = typeof started.payload?.turnId === 'string' ? started.payload.turnId : ''
+  if (!turnId) {
+    recordDiagnostic({ level: 'error', stage: 'turn-start', code: 'TURN_START_INVALID_RESPONSE', details: turnContext })
+    throw diagnosticError('TURN_START_INVALID_RESPONSE', 'turn unavailable')
+  }
+  let after = 0
+  let completed = false
+  const seen = new Set()
+  let assistantRendered = false
+  const deadline = Date.now() + 15 * 60 * 1000
+  while (!completed) {
+    const poll = await fetchJsonDiagnostic(`/api/pet/chat/turn/${encodeURIComponent(turnId)}?after=${after}`, {}, { stage: 'turn-poll', turnId, hadImage: Boolean(pendingImage), attachmentId: attachment?.id })
+    const payload = poll.payload
+    const events = Array.isArray(payload?.events) ? payload.events : []
+    const validStatus = ['running', 'done', 'error'].includes(payload?.status)
+    const lastSeq = Number(payload?.lastSeq)
+    if (payload?.ok !== true || payload.turnId !== turnId || !validStatus || !Number.isInteger(lastSeq) || lastSeq < after || lastSeq !== after + events.length) {
+      recordDiagnostic({ level: 'error', stage: 'turn-poll', code: 'TURN_POLL_INVALID_RESPONSE', details: { turnId, visualInspectionCount: events.length } })
+      throw diagnosticError('TURN_POLL_INVALID_RESPONSE', 'turn poll unavailable')
+    }
+    let expectedSeq = after + 1
+    for (const event of events) {
+      if (!TURN_EVENT_TYPES.has(event?.type)) {
+        recordDiagnostic({ level: 'error', stage: 'turn-poll', code: 'TURN_EVENT_UNKNOWN', details: { turnId } })
+        throw diagnosticError('TURN_EVENT_UNKNOWN', 'turn event unavailable')
+      }
+      if (!Number.isInteger(event?.seq) || event.seq !== expectedSeq || event.turnId !== turnId || seen.has(event.seq) || event.seq > lastSeq) {
+        recordDiagnostic({ level: 'error', stage: 'turn-poll', code: 'TURN_EVENT_INVALID', details: { turnId } })
+        throw diagnosticError('TURN_EVENT_INVALID', 'turn event unavailable')
+      }
+      seen.add(event.seq)
+      expectedSeq += 1
+      if (event.type === 'assistant_message') assistantRendered = true
+      renderTurnEvent(event)
+      scrollMessagesToBottom()
+    }
+    after = lastSeq
+    if (payload?.status === 'done') {
+      completed = true
+      if (!assistantRendered) {
+        const replies = Array.isArray(payload.result?.replyMessages) && payload.result.replyMessages.length ? payload.result.replyMessages : [payload.result?.text]
+        replies.filter(Boolean).forEach((text) => line('pet', text))
+      }
+    } else if (payload?.status === 'error') {
+      const failure = events.find((event) => event.type === 'turn_failed')?.payload ?? {}
+      recordDiagnostic({ level: 'error', stage: 'turn-poll', code: failure.code ?? 'TURN_FAILED', requestId: failure.requestId, details: { turnId, retryable: failure.retryable, visualInspectionCount: failure.visualInspectionCount } })
+      throw diagnosticError('TURN_FAILED', 'turn failed')
+    } else if (Date.now() < deadline) {
+      await waitForTurnPoll()
+    } else {
+      recordDiagnostic({ level: 'error', stage: 'turn-poll', code: 'TURN_POLL_TIMEOUT', details: { turnId, visualInspectionCount: seen.size } })
+      throw diagnosticError('TURN_POLL_TIMEOUT', 'turn poll timeout')
+    }
+  }
+  removeThinkingMessage(thinkingMessage)
+}
+
 function renderDiagnosticsPanel() {
   if (!diagnosticsOutput) return
   const events = diagnostics.list()
@@ -666,26 +793,7 @@ function bindDom() {
     scrollMessagesToBottom()
     try {
       const attachment = pendingImage ? await uploadImage(pendingImage) : null
-      const body = { message }
-      if (attachment) body.attachmentId = attachment.id
-      const chatContext = {
-        stage: 'chat',
-        hadImage: Boolean(pendingImage),
-        attachmentId: attachment?.id,
-        ...(pendingImage ? imageDiagnosticDetails(pendingImage) : {}),
-      }
-      const { response, payload: result, requestId, durationMs } = await fetchJsonDiagnostic('/api/pet/chat', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-      }, chatContext)
-      removeThinkingMessage(thinkingMessage)
-      if (result?.ok) line('pet', result.text, null, result.reasoning)
-      else {
-        recordDiagnostic({
-          level: 'warn', stage: 'chat', code: result?.reason ?? 'CHAT_UNAVAILABLE', httpStatus: response.status,
-          requestId, durationMs, details: chatContext,
-        })
-        line('pet', result?.petLine || '花花脑袋刚刚卡了一下……')
-      }
+      await runTurnProgress({ message, pendingImage, attachment, thinkingMessage })
       scrollMessagesToBottom()
     } catch {
       removeThinkingMessage(thinkingMessage)
