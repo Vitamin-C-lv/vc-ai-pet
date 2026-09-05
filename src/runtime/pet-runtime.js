@@ -21,6 +21,10 @@ import { createPetEnvironment } from '../client/pet-environment.js'
 import { normalizePetVisualConfig, resolvePetVisualState } from '../client/pet-visual-state.js'
 import { spriteForAnimation } from '../client/pet-animation.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input.js'
+import { VisualExperienceStore } from '../vision/visual-experience-store.js'
+import { visualTermsFor } from '../vision/visual-keywords.js'
+import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
+import { buildVisualDreamContext } from '../dream/visual-dream-context.js'
 
 const DREAM_MIN_NEW_MEMORIES = 8
 const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
@@ -100,6 +104,8 @@ export class PetRuntime {
     this.conversation = new RecentConversation({ maxTurns: 12 })
     this.conversationStore = new ConversationStore(this.sandbox.root)
     this.recentVisualResolver = new RecentVisualResolver()
+    this.visualExperience = new VisualExperienceStore(this.sandbox.root)
+    this.longTermVisualResolver = new LongTermVisualResolver({ experienceStore: this.visualExperience })
     this.turnManager = new PetTurnManager()
     this.turnOrchestrator = null
     this.conversationPersistenceReady = false
@@ -117,7 +123,13 @@ export class PetRuntime {
     assertPetPolicy()
     await this.sandbox.initialize()
     await this.conversationStore.initialize()
+    await this.visualExperience.initialize()
     this.conversationPersistenceReady = true
+    // Zero-inference backfill of the Visual Experience Index: walks raw user
+    // messages with attachments, indexes the owner's original wording, and
+    // checkpoints a restart-safe cursor. No model calls, no PetMemory writes,
+    // no Dream; original images stay untouched under ConversationStore.
+    await this.syncVisualExperiences()
     this.state = await this.sandbox.readJson('world', 'state.json', null)
     if (!this.state) this.state = createInitialState()
     this.identity = await ensurePetIdentity(this.sandbox, this.state)
@@ -129,17 +141,27 @@ export class PetRuntime {
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
     this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger })
-    this.turnOrchestrator = new PetTurnOrchestrator({ runtime: this })
+    this.turnOrchestrator = new PetTurnOrchestrator({
+      runtime: this,
+      longTermResolver: this.longTermVisualResolver,
+      experienceStore: this.visualExperience,
+    })
     this.memoryGate = new MemoryGate({ memory: this.memory })
+    const visualContextProvider = ({ query }) => buildVisualDreamContext({
+      experienceStore: this.visualExperience,
+      query,
+    })
     this.dreamEngine = new DreamEngine({
       memory: this.memory,
       brain: this.brain,
       gate: new DreamGate({ memory: this.memory }),
+      visualContextProvider,
     })
     this.reflectionEngine = new ReflectionEngine({
       memory: this.memory,
       brain: this.brain,
       gate: new ReflectionGate({ memory: this.memory }),
+      visualContextProvider,
     })
     this.dreamScheduler = new DreamScheduler({
       memory: this.memory,
@@ -375,6 +397,7 @@ export class PetRuntime {
       // Never expose the candidate/evidence or internal gate details to the
       // browser. Reasoning metadata is additive UI telemetry persisted only as
       // optional ConversationStore message metadata.
+      if (effectiveVisionImage) await this.syncVisualExperiences()
       return {
         ok: true,
         unavailable: false,
@@ -391,8 +414,31 @@ export class PetRuntime {
 
   async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null } = {}) {
     this.chatInFlight += 1
-    try { return await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment }) }
-    finally { this.chatInFlight -= 1 }
+    try {
+      // Self-healing incremental sync before resolution: any image message
+      // appended outside the runtime path must still be visible to Long-Term
+      // recall. Idempotent and checkpointed, no models involved.
+      await this.syncVisualExperiences()
+      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment })
+      // Incremental visual-experience sync after the turn's user message has
+      // been appended to the archive; idempotent and checkpointed, no models.
+      await this.syncVisualExperiences()
+      return result
+    } finally { this.chatInFlight -= 1 }
+  }
+
+  /**
+   * Incremental, restart-safe Visual Experience Index sync. Only archive rows
+   * after the stored backfill cursor are processed, so a normal greeting never
+   * rescans history and no model is ever involved.
+   */
+  async syncVisualExperiences() {
+    if (!this.conversationPersistenceReady || !this.visualExperience) return null
+    return this.visualExperience.syncFromArchive({
+      readBatch: (afterSequence, limit) => this.conversationStore.rawHistoryAfterSequence({ afterSequence, limit }),
+      readMaxSequence: () => this.conversationStore.rawHistoryMaxSequence(),
+      tokenizeText: (text, { boost }) => visualTermsFor(text, { boost }),
+    })
   }
 
   startChatTurn({ userText, image = null, attachment = null, attachmentId = null } = {}) {
@@ -411,6 +457,10 @@ export class PetRuntime {
       }
       const recalled = await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
       if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      // Long-Term Visual stage: only a conservative long-term visual trigger
+      // (以前/你还记得/上个月 + 视觉对象) reaches here; greetings and normal
+      // text never do. Resolver order stays CURRENT → RECENT → LONG-TERM.
+      if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       emit('turn_started', { mode: 'text' }); emit('thinking', {})
       const result = await this.chat(userText, null, null, { turnId })
       if (!result?.ok) return result
@@ -512,6 +562,7 @@ export class PetRuntime {
     this.conversation?.clear()
     this.conversationPersistenceReady = false
     this.conversationStore?.close()
+    this.visualExperience?.close()
     this.memory?.close()
   }
 }
