@@ -16,7 +16,7 @@ export const CONVERSATION_ARCHIVE_FILENAME = 'conversation-archive.db'
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const MESSAGE_KINDS = new Set(['dialogue', 'activity', 'media_ref', 'final'])
-const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
+const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'visual_recall', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
 const MESSAGE_PROVENANCE = new Set(['confirmed', 'inferred'])
 const IMAGE_EXTENSION_BY_MIME = Object.freeze({
   'image/webp': 'webp',
@@ -61,7 +61,7 @@ function cleanActivityType(value) {
 }
 
 function cleanRelation(value) {
-  return value === 'current' || value === 'previous' ? value : null
+  return value === 'current' || value === 'previous' || value === 'recalled' ? value : null
 }
 
 function cleanProvenance(value) {
@@ -435,6 +435,29 @@ export class ConversationStore {
     }
     return this.archive.prepare('SELECT payload FROM raw_messages WHERE sequence > ? ORDER BY sequence LIMIT ?')
       .all(after, count).map((row) => JSON.parse(row.payload))
+  }
+
+  /**
+   * Additive, sequence-cursor page for the Visual Experience Store backfill.
+   * Zero model calls are involved: the caller only walks raw user messages
+   * and indexes the owner's original wording. Each row carries its durable
+   * `archiveSequence` so the caller can checkpoint restart-safely.
+   */
+  async rawHistoryAfterSequence({ afterSequence = 0, limit = 200 } = {}) {
+    await this.initialize()
+    const after = Number.isInteger(afterSequence) && afterSequence >= 0 ? afterSequence : 0
+    const requested = Number(limit)
+    const count = Number.isFinite(requested) ? Math.max(0, Math.min(500, Math.floor(requested))) : 200
+    return this.archive.prepare('SELECT sequence, payload FROM raw_messages WHERE sequence > ? ORDER BY sequence LIMIT ?')
+      .all(after, count).map((row) => ({ archiveSequence: row.sequence, ...JSON.parse(row.payload) }))
+  }
+
+  /** Current archive sequence high-water mark (0 when the archive is empty). */
+  async rawHistoryMaxSequence() {
+    await this.initialize()
+    const row = this.archive.prepare('SELECT COALESCE(MAX(sequence), 0) AS n FROM raw_messages').get()
+    const sequence = Number(row?.n)
+    return Number.isFinite(sequence) ? sequence : 0
   }
 
   close() {
