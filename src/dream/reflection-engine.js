@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { evaluateDerivedEvidence, findSameEvidenceDerivation, isRawEvidenceRow } from '../memory/derived-evidence.js'
 import { normalizeProvenance } from '../memory/memory-provenance.js'
 import { validateDerivedMemorySemantics } from '../memory/semantic-stability.js'
+import { formatVisualExperienceSection, VISUAL_DREAM_CONTEXT_DECLARATION } from './visual-dream-context.js'
 
 const REFLECTION_LEVELS = new Set(['user', 'fact', 'lesson', 'topic'])
 const RAW_SOURCE_SESSION = 'vc-ai-pet'
@@ -64,6 +65,7 @@ export const REFLECTION_SYSTEM_PROMPT = [
   '每条 source_ids 必须引用本次输入中出现的完整 memory id，并且至少引用一条 NEW 原始 memory。',
   '不要把 Reflection 或 Dream derived memory 当成新的原始经历；不要输出聊天记录或工作总结。',
   '请严格返回 Reflection JSON schema，不要返回 Markdown、解释文字或代码围栏。',
+  'VISUAL EXPERIENCES 里的 INFERRED 观察不能当作 raw 证据；source_ids 只能引用 NEW/RELATED 的 memory id。',
 ].join('\n')
 
 export const REFLECTION_MEMORY_ADAPTER_METHODS = Object.freeze([
@@ -215,7 +217,8 @@ function formatMemorySection(label, rows) {
   return [label, entries.length > 0 ? entries.join('\n\n') : '(none)'].join('\n')
 }
 
-export function buildReflectionMessages({ newMemories = [], relatedMemories = [] } = {}) {
+export function buildReflectionMessages({ newMemories = [], relatedMemories = [], visualContext = null } = {}) {
+  const visualSection = typeof visualContext === 'string' ? visualContext : formatVisualExperienceSection(visualContext)
   return [
     { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
     {
@@ -223,6 +226,7 @@ export function buildReflectionMessages({ newMemories = [], relatedMemories = []
       content: [
         formatMemorySection('NEW RAW MEMORIES', newMemories),
         formatMemorySection('RELATED HISTORY', relatedMemories),
+        ...(visualSection ? [visualSection, VISUAL_DREAM_CONTEXT_DECLARATION] : []),
         '',
         '请只根据以上长期 memory 生成 JSON。',
       ].join('\n\n'),
@@ -283,6 +287,7 @@ export class ReflectionEngine {
     batchSize = REFLECTION_BATCH_SIZE,
     relatedLimit = REFLECTION_RELATED_LIMIT,
     maxDerivedPerBatch = REFLECTION_DERIVED_MAX_PER_BATCH,
+    visualContextProvider = null,
   } = {}) {
     this.memory = assertReflectionMemoryAdapter(memory)
     if (!brain || typeof brain.reflectionCompletion !== 'function') {
@@ -300,6 +305,7 @@ export class ReflectionEngine {
     this.batchSize = Math.min(batchSize, REFLECTION_BATCH_SIZE)
     this.relatedLimit = Math.min(relatedLimit, REFLECTION_RELATED_LIMIT)
     this.maxDerivedPerBatch = Math.min(maxDerivedPerBatch, REFLECTION_DERIVED_MAX_PER_BATCH)
+    this.visualContextProvider = visualContextProvider
     this.inFlight = false
   }
 
@@ -394,8 +400,10 @@ export class ReflectionEngine {
           availableSourceIds,
           sourceRows: [...batch, ...related],
         }
+        const visualContext = typeof this.visualContextProvider === 'function'
+          ? await this.visualContextProvider({ query, batchIds: [...batchIds] }) : null
         const completion = await this.brain.reflectionCompletion({
-          messages: buildReflectionMessages({ newMemories: batch, relatedMemories: related }),
+          messages: buildReflectionMessages({ newMemories: batch, relatedMemories: related, visualContext }),
           responseFormat: REFLECTION_RESPONSE_FORMAT,
         })
         if (!completion || completion.ok === false || completion.unavailable === true) {
