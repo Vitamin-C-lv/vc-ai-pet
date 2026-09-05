@@ -450,6 +450,25 @@ button:disabled {
   display: none;
 }
 
+.vm-recall .message-bubble {
+  max-width: min(92%, 360px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vm-recall.has-source .message-bubble::before {
+  content: '🖼️';
+  flex: 0 0 auto;
+  margin-right: 4px;
+}
+
+.vm-recall .message-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .media-ref-line .message-bubble {
   max-width: 70%;
   padding: 8px 10px;
