@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 import { DreamGate, validateDreamCandidate } from './dream-gate.js'
 import { createDreamCandidate, validateDreamCandidateSemantics } from './dream-candidate.js'
+import { formatVisualExperienceSection, VISUAL_DREAM_CONTEXT_DECLARATION } from './visual-dream-context.js'
 
 export const PET_DREAM_SOURCE_SESSION = 'vc-ai-pet:dream'
 export const PET_RAW_SOURCE_SESSION = 'vc-ai-pet'
@@ -115,6 +116,7 @@ export const DREAM_SYSTEM_PROMPT = [
   'related 的 reflection、旧 dream、旧 soul 只能作为背景，不能增加证据数或置信度；soul 必须有真实 raw 来源，其中至少一个是当前 NEW。',
   '不要因为单一事件生成固定的 soul 或人格判断；不要预设或硬编码任何人格形容词。',
   '请严格返回 Dream JSON schema，不要返回 Markdown、解释文字或代码围栏。',
+  'VISUAL EXPERIENCES 里的 INFERRED 观察不能当作 raw 证据；source_ids 只能引用 NEW/RELATED 的 memory id。',
 ].join('\n')
 
 /**
@@ -228,7 +230,8 @@ function formatMemorySection(label, rows) {
   return [label, entries.length > 0 ? entries.join('\n\n') : '(none)'].join('\n')
 }
 
-export function buildDreamMessages({ newMemories = [], relatedMemories = [] } = {}) {
+export function buildDreamMessages({ newMemories = [], relatedMemories = [], visualContext = null } = {}) {
+  const visualSection = typeof visualContext === 'string' ? visualContext : formatVisualExperienceSection(visualContext)
   return [
     {
       role: 'system',
@@ -239,6 +242,7 @@ export function buildDreamMessages({ newMemories = [], relatedMemories = [] } = 
       content: [
         formatMemorySection('NEW MEMORIES', newMemories),
         formatMemorySection('RELATED OLD MEMORIES', relatedMemories),
+        ...(visualSection ? [visualSection, VISUAL_DREAM_CONTEXT_DECLARATION] : []),
         '',
         '请只根据以上长期 memory 生成 JSON。',
       ].join('\n\n'),
@@ -306,6 +310,7 @@ export class DreamEngine {
     batchSize = DREAM_BATCH_SIZE,
     relatedLimit = DREAM_RELATED_LIMIT,
     maxDerivedPerBatch = DREAM_DERIVED_MAX_PER_BATCH,
+    visualContextProvider = null,
   } = {}) {
     this.memory = assertDreamMemoryAdapter(memory)
 
@@ -327,6 +332,7 @@ export class DreamEngine {
     this.batchSize = Math.min(batchSize, DREAM_BATCH_SIZE)
     this.relatedLimit = Math.min(relatedLimit, DREAM_RELATED_LIMIT)
     this.maxDerivedPerBatch = Math.min(maxDerivedPerBatch, DREAM_DERIVED_MAX_PER_BATCH)
+    this.visualContextProvider = visualContextProvider
     this.inFlight = false
   }
 
@@ -458,9 +464,12 @@ export class DreamEngine {
           rawNewSourceIds,
           sourceRows: [...batch, ...related],
         }
+        const visualContext = typeof this.visualContextProvider === 'function'
+          ? await this.visualContextProvider({ query, batchIds: [...batchIds] }) : null
         const messages = buildDreamMessages({
           newMemories: batch,
           relatedMemories: related,
+          visualContext,
         })
 
         const completion = await this.brain.dreamCompletion({
