@@ -1,5 +1,20 @@
 import { createTurnId, PetTurnEvents } from './pet-turn-events.js'
 
+function failureDiagnosticFields(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== 'object') return {}
+  const fields = {}
+  if (typeof diagnostic.stage === 'string') fields.errorStage = diagnostic.stage
+  if (Number.isInteger(diagnostic.inspectionOrdinal)) fields.inspectionOrdinal = diagnostic.inspectionOrdinal
+  for (const [source, target, max] of [
+    ['currentVisualId', 'currentVisualId', 16],
+    ['nextVisualId', 'nextVisualId', 16],
+    ['attachmentId', 'attachmentId', 80],
+  ]) {
+    if (typeof diagnostic[source] === 'string' && diagnostic[source].trim()) fields[target] = diagnostic[source].trim().slice(0, max)
+  }
+  return fields
+}
+
 export class PetTurnManager {
   constructor({ maxTurns = 32, ttlMs = 15 * 60 * 1000, now = () => Date.now() } = {}) {
     if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 32) throw new TypeError('PET_TURN_MANAGER_MAX_INVALID')
@@ -34,7 +49,13 @@ export class PetTurnManager {
         if (result?.ok === false) {
           turn.status = 'error'
           turn.terminalAt = this.now()
-          turn.error = { code: String(result.reason ?? 'TURN_FAILED'), requestId: result.requestId ?? null, retryable: result.unavailable === true, visualInspectionCount: result.inspections?.length ?? 0 }
+          turn.error = {
+            code: String(result.reason ?? 'TURN_FAILED'),
+            requestId: result.requestId ?? null,
+            retryable: result.unavailable === true,
+            visualInspectionCount: result.inspections?.length ?? 0,
+            ...failureDiagnosticFields(result.diagnostic),
+          }
           if (!events.terminal) events.emit('turn_failed', turn.error)
           return
         }

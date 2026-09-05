@@ -8,8 +8,8 @@ import { detectVisualIntent, RecentVisualResolver } from '../src/conversation/re
 import { PetTurnEvents } from '../src/runtime/pet-turn-events.js'
 import { PetTurnManager } from '../src/runtime/pet-turn-manager.js'
 import { PetTurnOrchestrator } from '../src/runtime/pet-turn-orchestrator.js'
-import { MAX_VISUAL_INSPECTIONS_PER_TURN } from '../src/vision/visual-working-session.js'
-import { LocalBrain, validateVisualStepResponse } from '../src/brain/local-brain.js'
+import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../src/vision/visual-working-session.js'
+import { LocalBrain, PET_VISUAL_STEP_MAX_TOKENS, validateVisualStepResponse } from '../src/brain/local-brain.js'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
 
 const root = await mkdtemp(join(tmpdir(), 'vc-ai-pet-turn-orchestrator-'))
@@ -95,11 +95,81 @@ assert.equal(capped.calls.length, 5)
 assert.equal(cappedResult.capped, true)
 assert.match(cappedResult.text, /来回看了好几遍/u)
 
+const roundTripSteps = [
+  { ok: true, observation: 'A 看到了。', action: 'inspect', nextVisualId: 'V1', focus: '', replyMessages: [] },
+  { ok: true, observation: 'B 看到了。', action: 'inspect', nextVisualId: 'V0', focus: '', replyMessages: [] },
+  { ok: true, observation: 'A 再确认了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['确认啦。'] },
+]
+const roundTripCalls = []
+const roundTrip = await new VisualWorkingSession({
+  turnId: 'turn-round-trip',
+  userText: '再确认一下这两张',
+  candidatePool: [
+    { visualId: 'V0', attachmentId: attachmentA.id, relation: 'current', userText: '' },
+    { visualId: 'V1', attachmentId: attachmentB.id, relation: 'previous', userText: '' },
+  ],
+  conversationStore: store,
+  brain: { async visualStep(request) { roundTripCalls.push(request); return roundTripSteps.shift() } },
+  emit: () => {},
+}).run('V0')
+assert.equal(roundTrip.ok, true)
+assert.deepEqual(roundTripCalls.map((call) => call.image.dataUrl), [imageA, imageB, imageA])
+
+const invalidTarget = await new VisualWorkingSession({
+  turnId: 'turn-invalid-target',
+  userText: '找不同',
+  candidatePool: [{ visualId: 'V0', attachmentId: attachmentB.id, relation: 'current', userText: '' }],
+  conversationStore: store,
+  brain: { async visualStep() { return { ok: true, observation: '看到了。', action: 'inspect', nextVisualId: 'V9', focus: '', replyMessages: [] } } },
+  emit: () => {},
+}).run('V0')
+assert.equal(invalidTarget.ok, false)
+assert.equal(invalidTarget.reason, 'invalid-visual-inspection')
+assert.deepEqual(invalidTarget.diagnostic, {
+  stage: 'protocol',
+  errorCode: 'invalid-visual-inspection',
+  requestId: null,
+  retryable: false,
+  inspectionOrdinal: 1,
+  currentVisualId: 'V0',
+  nextVisualId: 'V9',
+  attachmentId: attachmentB.id,
+})
+
+const missingAsset = await new VisualWorkingSession({
+  turnId: 'turn-missing-asset',
+  userText: '这是什么',
+  candidatePool: [{ visualId: 'V0', attachmentId: 'missing-asset', relation: 'current', userText: '' }],
+  conversationStore: { async readAttachmentDataUrl() { return null } },
+  brain: { async visualStep() { throw new Error('must not inspect missing asset') } },
+  emit: () => {},
+}).run('V0')
+assert.equal(missingAsset.ok, false)
+assert.equal(missingAsset.reason, 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND')
+assert.equal(missingAsset.diagnostic.stage, 'asset')
+assert.equal(missingAsset.diagnostic.inspectionOrdinal, 1)
+
 const manager = new PetTurnManager({ now: () => 1000 })
 const started = manager.start(async ({ emit }) => { emit('turn_started', { mode: 'text' }); return { ok: true, text: '好呀' } })
 await new Promise((resolve) => setTimeout(resolve, 0))
 assert.equal(manager.poll(started.turnId, 0).status, 'done')
 assert.equal(manager.poll(started.turnId, 0).result.text, '好呀')
+
+const diagnosticManager = new PetTurnManager({ now: () => 1000 })
+const diagnosticStart = diagnosticManager.start(async () => ({
+  ok: false,
+  reason: 'invalid-visual-inspection',
+  inspections: [{ visualId: 'V0', attachmentId: attachmentB.id }],
+  diagnostic: { stage: 'protocol', inspectionOrdinal: 1, currentVisualId: 'V0', nextVisualId: 'V9', attachmentId: attachmentB.id },
+}))
+await new Promise((resolve) => setTimeout(resolve, 0))
+const diagnosticPoll = diagnosticManager.poll(diagnosticStart.turnId, 0)
+const diagnosticFailure = diagnosticPoll.events.find((event) => event.type === 'turn_failed')?.payload
+assert.equal(diagnosticFailure.errorStage, 'protocol')
+assert.equal(diagnosticFailure.inspectionOrdinal, 1)
+assert.equal(diagnosticFailure.currentVisualId, 'V0')
+assert.equal(diagnosticFailure.nextVisualId, 'V9')
+assert.equal(diagnosticFailure.attachmentId, attachmentB.id)
 
 const eventSnapshot = compareEvents.after(0)
 eventSnapshot[0].payload.mode = 'tampered'
@@ -142,6 +212,8 @@ const visualBrain = new LocalBrain({
 const visualStep = await visualBrain.visualStep({ userText: '这张和上一张有什么区别', image: { dataUrl: imageA }, candidatePool: [{ visualId: 'V0', relation: 'current', userText: '' }, { visualId: 'V1', relation: 'previous', userText: '' }] })
 assert.equal(visualStep.action, 'inspect')
 assert.equal(brainRequests.length, 1)
+assert.equal(PET_VISUAL_STEP_MAX_TOKENS, 4096)
+assert.equal(brainRequests[0].maxTokens, PET_VISUAL_STEP_MAX_TOKENS)
 assert.equal(brainRequests[0].messages.at(-1).content.filter((part) => part.type === 'image_url').length, 1)
 assert.doesNotMatch(JSON.stringify(brainRequests[0].messages.slice(0, -1)), /data:image[^"']+/u)
 assert.equal(validateVisualStepResponse({ observation: '我先推理一下：secret', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['不安全'] }).ok, false)

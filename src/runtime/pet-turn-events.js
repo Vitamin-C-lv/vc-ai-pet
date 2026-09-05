@@ -27,7 +27,21 @@ function publicPayload(type, payload = {}) {
   if (type === 'memory_recall') return { summary: sanitizeSafeTraceText(payload.summary, 180), provenance: payload.provenance === 'inferred' ? 'inferred' : 'confirmed' }
   if (type === 'assistant_message') return { text: sanitizeSafeTraceText(payload.text, 300) }
   if (type === 'turn_completed') return { durationMs: Number.isFinite(Number(payload.durationMs)) ? Math.max(0, Math.round(Number(payload.durationMs))) : 0, ...(safeReasoning(payload.reasoning) ? { reasoning: safeReasoning(payload.reasoning) } : {}) }
-  if (type === 'turn_failed') return { code: text(payload.code, 120) || 'TURN_FAILED', ...(text(payload.requestId, 120) ? { requestId: text(payload.requestId, 120) } : {}), retryable: payload.retryable === true, visualInspectionCount: Number.isInteger(payload.visualInspectionCount) ? Math.max(0, Math.min(5, payload.visualInspectionCount)) : 0 }
+  if (type === 'turn_failed') {
+    const errorStage = ['asset', 'local-brain', 'structured-output', 'protocol'].includes(payload.errorStage) ? payload.errorStage : null
+    const inspectionOrdinal = Number.isInteger(payload.inspectionOrdinal) ? Math.max(0, Math.min(5, payload.inspectionOrdinal)) : null
+    return {
+      code: text(payload.code, 120) || 'TURN_FAILED',
+      ...(text(payload.requestId, 120) ? { requestId: text(payload.requestId, 120) } : {}),
+      retryable: payload.retryable === true,
+      visualInspectionCount: Number.isInteger(payload.visualInspectionCount) ? Math.max(0, Math.min(5, payload.visualInspectionCount)) : 0,
+      ...(errorStage ? { errorStage } : {}),
+      ...(inspectionOrdinal !== null ? { inspectionOrdinal } : {}),
+      ...(text(payload.currentVisualId, 16) ? { currentVisualId: text(payload.currentVisualId, 16) } : {}),
+      ...(text(payload.nextVisualId, 16) ? { nextVisualId: text(payload.nextVisualId, 16) } : {}),
+      ...(text(payload.attachmentId, 80) ? { attachmentId: text(payload.attachmentId, 80) } : {}),
+    }
+  }
   return {}
 }
 

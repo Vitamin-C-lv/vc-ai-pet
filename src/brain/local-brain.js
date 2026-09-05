@@ -20,10 +20,26 @@ export const PET_VISUAL_STEP_RESPONSE_SCHEMA = Object.freeze({
   required: ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages'],
 })
 
+// The visual profile reserves 2,048 tokens for Qwen's hidden reasoning. The
+// previous 768-token cap could therefore end with finish_reason=length before
+// the public JSON was emitted, which surfaced as PET_LOCAL_BRAIN_BAD_RESPONSE.
+export const PET_VISUAL_STEP_MAX_TOKENS = 4_096
+
 export const LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS = Object.freeze([250, 500, 1000])
 
 function invalidVisualStep(reason) {
   return { ok: false, reason }
+}
+
+function visualStepContent(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.map((part) => {
+    if (typeof part === 'string') return part
+    if (part && typeof part === 'object' && ['text', 'input_text'].includes(part.type)) return String(part.text ?? '')
+    return ''
+  }).join('')
 }
 
 export function validateVisualStepResponse(value, { candidateIds = [], forceAnswer = false } = {}) {
@@ -127,12 +143,12 @@ export class LocalBrain {
     let requestId = null
     try {
       const response = await chatWithBoundedQueueRetry(this.client, {
-        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: 0.45, topP: 0.85, maxTokens: 768,
+        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: 0.45, topP: 0.85, maxTokens: PET_VISUAL_STEP_MAX_TOKENS,
         responseFormat: { type: 'json_object', schema: PET_VISUAL_STEP_RESPONSE_SCHEMA },
       })
       const { payload } = response
       requestId = response.requestId ?? null
-      const raw = payload?.choices?.[0]?.message?.content
+      const raw = visualStepContent(payload?.choices?.[0]?.message)
       if (typeof raw !== 'string' || !raw.trim()) throw new LocalBrainApiError('visual step missing content', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId })
       let parsed
       try { parsed = JSON.parse(raw) } catch { throw new LocalBrainApiError('visual step invalid json', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId }) }
