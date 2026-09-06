@@ -17,11 +17,14 @@ export function cjkTerms(text) {
     for (const character of run) {
       if (!CJK_STOP_CHARACTERS.has(character)) terms.set(character, 1)
     }
-    for (let index = 0; index + 1 < run.length; index += 1) {
-      const term = run.slice(index, index + 2)
-      const [left, right] = [...term]
-      if (CJK_STOP_CHARACTERS.has(left) && CJK_STOP_CHARACTERS.has(right)) continue
-      terms.set(term, 3)
+    for (let n = 2; n <= 4; n += 1) {
+      const weight = 3 ** (n - 1)
+      for (let index = 0; index + n <= run.length; index += 1) {
+        const term = run.slice(index, index + n)
+        const characters = [...term]
+        if (characters.every((character) => CJK_STOP_CHARACTERS.has(character))) continue
+        terms.set(term, weight)
+      }
     }
   }
   return terms
@@ -65,6 +68,8 @@ export const GENERIC_RECALL_TERMS = new Set([
   '给', '发', '记', '得', '之', '前', '还', '请', '帮', '看', '张', '图', '片',
   '记得', '之前', '前给', '以前', '给你', '你看', '看的', '图片', '照片',
   '那张', '这张', '一张', '第一', '第二', '上次', '发过', '看过', '给我', '发给',
+  '很多', '这个', '里面', '这里', '画面', '看到', '东西', '内容', '很', '多', '内', '里',
+  '画', '照', '有',
 ])
 
 export function suppressGenericTerms(terms) {
@@ -74,4 +79,47 @@ export function suppressGenericTerms(terms) {
 
 export function contentQueryTerms(text) {
   return suppressGenericTerms(visualTermsFor(text, { boost: 1 }))
+}
+
+// A stop character can still be part of a meaningful compound (花 in 无花果).
+// Phrase quality therefore rejects boilerplate and all-stop phrases, while
+// allowing a semantic compound to retain its full raw substring.
+const GENERIC_PHRASE_CHARACTERS = new Set([
+  ...CJK_STOP_CHARACTERS,
+  '很', '多', '内', '里', '画', '看', '张', '照', '片', '有',
+])
+GENERIC_PHRASE_CHARACTERS.delete('花')
+
+function highInformationCjkPhrases(text) {
+  const phrases = new Set()
+  const runs = cleanVisualText(text).match(/[\u3400-\u9fff]+/gu) ?? []
+  for (const run of runs) {
+    for (let n = 4; n >= 3; n -= 1) {
+      for (let index = 0; index + n <= run.length; index += 1) {
+        const phrase = run.slice(index, index + n)
+        if (GENERIC_RECALL_TERMS.has(phrase)) continue
+        const characters = [...phrase]
+        if (characters.every((character) => CJK_STOP_CHARACTERS.has(character))) continue
+        const contentCharacters = characters.filter((character) => !GENERIC_PHRASE_CHARACTERS.has(character))
+        if (contentCharacters.length < 3) continue
+        phrases.add(phrase)
+      }
+    }
+  }
+  return [...phrases]
+}
+
+export function ownerExactPhrases(queryText) {
+  return highInformationCjkPhrases(queryText)
+}
+
+export function ownerExactPhraseMatches(queryText, userText) {
+  const ownerText = cleanVisualText(userText)
+  if (!ownerText) return []
+  return ownerExactPhrases(queryText)
+    .filter((phrase) => ownerText.includes(phrase))
+}
+
+export function ownerExactPhraseBonus(queryText, userText) {
+  return ownerExactPhraseMatches(queryText, userText).length * 50
 }

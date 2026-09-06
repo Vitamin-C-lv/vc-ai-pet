@@ -9,6 +9,7 @@ const VISUAL_OBJECT_PATTERN = /(?:照片|图片|图|植物|猫|狗|花|宠物|�
 // without a visual cue remains excluded.
 const ELLIPSIS_VISUAL_PLACEHOLDER_PATTERN = /^(?:之前很久以前|很久以前)(?:[…]{2,}|\.{3,})$/u
 const IMMEDIATE_EXCLUSION_PATTERN = /(刚才|刚刚|刚发|刚给你看|这张|这碗|这盘|这个|上一张|前一张|现在)/u
+export const DEFAULT_LONG_TERM_SCORE_MARGIN = 10
 
 export function detectLongTermVisualIntent(userText) {
   const text = String(userText ?? '').normalize('NFKC').trim()
@@ -31,6 +32,7 @@ function metadataOnly(candidate) {
     userText: candidate?.userText,
     occurredAt: candidate?.occurredAt,
     score: candidate?.score,
+    scoreBreakdown: candidate?.scoreBreakdown ?? null,
     provenanceHints: {
       userTextTermMatches: matchedTerms.filter(({ sourceKind }) => sourceKind === 'user_text').length,
       observationTermMatches: matchedTerms.filter(({ sourceKind }) => sourceKind === 'observation').length,
@@ -39,10 +41,11 @@ function metadataOnly(candidate) {
 }
 
 export class LongTermVisualResolver {
-  constructor({ experienceStore, candidateLimit = 8, minScore = 1 } = {}) {
+  constructor({ experienceStore, candidateLimit = 8, minScore = 1, margin = DEFAULT_LONG_TERM_SCORE_MARGIN } = {}) {
     this.experienceStore = experienceStore
     this.candidateLimit = candidateLimit
     this.minScore = minScore
+    this.margin = Number.isFinite(Number(margin)) ? Number(margin) : DEFAULT_LONG_TERM_SCORE_MARGIN
   }
 
   async resolve(userText, { limit = this.candidateLimit } = {}) {
@@ -50,13 +53,22 @@ export class LongTermVisualResolver {
     if (!detectLongTermVisualIntent(userText)) return empty
 
     const queryTerms = contentQueryTerms(userText)
-    const rows = await this.experienceStore.searchByTerms(queryTerms, { limit, minScore: this.minScore })
+    const rows = await this.experienceStore.searchByTerms(queryTerms, {
+      limit,
+      minScore: this.minScore,
+      queryText: userText,
+    })
     const candidates = (Array.isArray(rows) ? rows : []).map(metadataOnly)
     const top = candidates[0]
     if (!top || top.score < this.minScore) return empty
 
+    const breakdown = top.scoreBreakdown
+    if (breakdown && breakdown.owner_text_exact <= 0 && breakdown.owner_text_ngram <= 0 && breakdown.observation_ngram <= 0) {
+      return { status: 'none', candidates, winner: null }
+    }
+
     const second = candidates[1]
-    if (second && second.score === top.score) {
+    if (second && top.score - second.score < this.margin) {
       return { status: 'ambiguous', candidates, winner: null }
     }
     return { status: 'matched', candidates, winner: top }

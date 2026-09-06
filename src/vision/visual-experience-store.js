@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { chmod, mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import {
+  GENERIC_RECALL_TERMS,
+  ownerExactPhrases,
+  ownerExactPhraseMatches,
+} from './visual-keywords.js'
 
 export const VISUAL_EXPERIENCE_DB_FILENAME = 'visual-experience.db'
 export const VISUAL_EVENT_KINDS = Object.freeze(['inspection', 'revisit', 'comparison', 'observation'])
@@ -67,6 +72,106 @@ function boundedLimit(value, fallback, maximum = 500) {
   const number = Number(value)
   if (!Number.isFinite(number)) return fallback
   return Math.max(0, Math.min(maximum, Math.floor(number)))
+}
+
+function termWidth(term) {
+  return [...String(term ?? '')].length
+}
+
+function scoreCandidate(row, matches, queryWeights, queryText) {
+  const scoreBreakdown = {
+    owner_text_exact: 0,
+    owner_text_ngram: 0,
+    owner_text_single_char: 0,
+    observation_ngram: 0,
+    observation_single_char: 0,
+    generic_terms: 0,
+  }
+  const matchedTerms = []
+  const contributionBuckets = new Map([
+    ['owner_text_ngram', []],
+    ['owner_text_single_char', []],
+    ['observation_ngram', []],
+    ['observation_single_char', []],
+  ])
+
+  const semanticMatches = new Map()
+  for (const match of matches) {
+    const existing = semanticMatches.get(match.term)
+    const sameSourceStronger = existing && match.sourceKind === existing.sourceKind && match.weight > existing.weight
+    if (!existing || (match.sourceKind === 'user_text' && existing.sourceKind !== 'user_text') || sameSourceStronger) {
+      semanticMatches.set(match.term, match)
+    }
+  }
+  for (const match of semanticMatches.values()) {
+    const queryWeight = queryWeights.get(match.term) ?? 0
+    const storedWeight = Number(match.weight)
+    const overlap = Math.min(queryWeight, Number.isFinite(storedWeight) ? storedWeight : 0)
+    const generic = GENERIC_RECALL_TERMS.has(match.term)
+    const owner = match.sourceKind === 'user_text'
+    const single = termWidth(match.term) === 1
+    let bucket = null
+    let contribution = 0
+    if (!generic && overlap > 0) {
+      if (owner && single) {
+        bucket = 'owner_text_single_char'
+        contribution = overlap * 0.25
+      } else if (owner) {
+        bucket = 'owner_text_ngram'
+        contribution = overlap * 3
+      } else if (single) {
+        bucket = 'observation_single_char'
+        contribution = overlap
+      } else {
+        bucket = 'observation_ngram'
+        contribution = overlap
+      }
+    }
+    const result = {
+      term: match.term,
+      weight: match.weight,
+      sourceKind: match.sourceKind,
+      sourceRef: match.sourceRef,
+      queryWeight,
+      contribution,
+    }
+    matchedTerms.push(result)
+    if (bucket) contributionBuckets.get(bucket).push(result)
+  }
+
+  const caps = {
+    owner_text_ngram: 60,
+    owner_text_single_char: 3,
+    observation_ngram: 12,
+    observation_single_char: 2,
+  }
+  for (const [bucket, entries] of contributionBuckets) {
+    let remaining = caps[bucket]
+    for (const entry of entries.sort((left, right) => right.contribution - left.contribution || left.term.localeCompare(right.term))) {
+      const contribution = Math.min(entry.contribution, Math.max(0, remaining))
+      entry.contribution = contribution
+      scoreBreakdown[bucket] += contribution
+      remaining -= contribution
+    }
+  }
+
+  const exactPhrases = ownerExactPhraseMatches(queryText, row.user_text)
+  for (const phrase of exactPhrases) {
+    const contribution = 50
+    scoreBreakdown.owner_text_exact += contribution
+    matchedTerms.push({
+      term: phrase,
+      weight: contribution,
+      sourceKind: 'user_text',
+      sourceRef: row.source_message_id,
+      queryWeight: contribution,
+      contribution,
+      matchKind: 'exact_phrase',
+    })
+  }
+
+  const score = Object.values(scoreBreakdown).reduce((total, value) => total + value, 0)
+  return { score, matchedTerms, scoreBreakdown }
 }
 
 export class VisualExperienceStore {
@@ -442,52 +547,72 @@ export class VisualExperienceStore {
     return Number(this.db.prepare('SELECT COUNT(*) AS count FROM visual_experiences').get().count)
   }
 
-  async searchByTerms(queryTerms, { limit = 10, minScore = 1 } = {}) {
+  async searchByTerms(queryTerms, { limit = 10, minScore = 1, queryText = null } = {}) {
     await this.initialize()
     const count = boundedLimit(limit, 10, 100)
     if (count === 0 || !Array.isArray(queryTerms)) return []
     const terms = []
-    const seen = new Set()
+    const queryWeights = new Map()
     for (const entry of queryTerms) {
       const term = cleanTerm(entry?.term)
-      if (term && !seen.has(term)) {
-        seen.add(term)
+      const weight = Number(entry?.weight)
+      if (term && !queryWeights.has(term)) {
         terms.push(term)
+        queryWeights.set(term, Number.isFinite(weight) && weight > 0 ? weight : 1)
+      } else if (term && Number.isFinite(weight) && weight > (queryWeights.get(term) ?? 0)) {
+        queryWeights.set(term, weight)
       }
     }
-    if (terms.length === 0) return []
+    const exactPhrases = ownerExactPhrases(queryText)
+    if (terms.length === 0 && exactPhrases.length === 0) return []
     const threshold = Number.isFinite(Number(minScore)) ? Number(minScore) : 1
-    const placeholders = terms.map(() => '?').join(', ')
-    const rows = this.db.prepare(`
-      SELECT e.*, t.term, t.source_kind, t.weight
-      FROM visual_experiences e
-      JOIN visual_terms t ON t.experience_id = e.experience_id
-      WHERE t.term IN (${placeholders})
-    `).all(...terms)
     const grouped = new Map()
-    for (const row of rows) {
+    const addRow = (row) => {
       let entry = grouped.get(row.experience_id)
       if (!entry) {
         entry = { row, matches: new Map() }
         grouped.set(row.experience_id, entry)
       }
-      const existing = entry.matches.get(row.term)
+      if (!row.term) return
+      const key = `${row.source_kind}:${row.term}`
+      const existing = entry.matches.get(key)
       if (!existing || row.weight > existing.weight) {
-        entry.matches.set(row.term, { term: row.term, weight: row.weight, sourceKind: row.source_kind })
+        entry.matches.set(key, {
+          term: row.term,
+          weight: row.weight,
+          sourceKind: row.source_kind,
+          sourceRef: row.source_ref,
+        })
       }
+    }
+    if (terms.length > 0) {
+      const placeholders = terms.map(() => '?').join(', ')
+      const rows = this.db.prepare(`
+        SELECT e.*, t.term, t.source_kind, t.source_ref, t.weight
+        FROM visual_experiences e
+        JOIN visual_terms t ON t.experience_id = e.experience_id
+        WHERE t.term IN (${placeholders})
+      `).all(...terms)
+      for (const row of rows) addRow(row)
+    }
+    if (exactPhrases.length > 0) {
+      const rows = this.db.prepare(`
+        SELECT e.*
+        FROM visual_experiences e
+        WHERE e.user_text LIKE '%' || ? || '%' ${exactPhrases.slice(1).map(() => 'OR e.user_text LIKE \'%\' || ? || \'%\'').join(' ')}
+      `).all(...exactPhrases)
+      for (const row of rows) addRow(row)
     }
     return [...grouped.values()]
       .map(({ row, matches }) => {
-        const matchedTerms = terms.filter((term) => matches.has(term)).map((term) => matches.get(term))
-        const score = matchedTerms.reduce((total, match) => total + match.weight, 0)
+        const scored = scoreCandidate(row, [...matches.values()], queryWeights, queryText)
         return {
           experienceId: row.experience_id,
           attachmentId: row.attachment_id,
           sourceMessageId: row.source_message_id,
           userText: row.user_text,
           occurredAt: row.occurred_at,
-          score,
-          matchedTerms,
+          ...scored,
         }
       })
       .filter((entry) => entry.score >= threshold)
