@@ -58,7 +58,7 @@ const events = [
   { type: 'visual_recall', payload: { sourceAttachmentId: 'attachment-old', caption: '🐾 花花想起以前好像见过……', rawPrompt: 'system prompt' } },
   { type: 'visual_selected', payload: { relation: 'recalled', caption: '↩️ 花花翻到以前的一张照片' } },
   { type: 'visual_image', payload: { caption: '历史照片', attachment: { thumbnailUrl: '/conversation-assets/attachment-old/thumb.webp' } } },
-  { type: 'visual_observation', payload: { summary: '👀 看到一盆绿叶植物' } },
+  { type: 'visual_observation', payload: { summary: '👀 花花重新看了看' } },
   { type: 'assistant_message', payload: { text: '我记得这盆植物了。', reasoning_content: '不要显示这段 CoT' } },
   { type: 'turn_completed', payload: {} },
 ]
@@ -72,11 +72,15 @@ assert.match(rendered, /vm-recall/u)
 assert.match(rendered, /花花想起以前好像见过/u)
 assert.match(rendered, /花花翻到以前的一张照片/u)
 assert.match(rendered, /conversation-assets\/attachment-old\/thumb\.webp/u)
-assert.match(rendered, /看到一盆绿叶植物/u)
+assert.match(rendered, /👀 花花重新看了看/u)
 assert.match(rendered, /我记得这盆植物了/u)
 assert.doesNotMatch(rendered, /我先推理一下：system prompt/u)
 assert.doesNotMatch(rendered, /不要显示这段 CoT/u)
 assert.match(css, /\.vm-recall\s+\.message-bubble/u)
+
+messages.children.length = 0
+context.__renderTurnEvent({ type: 'visual_observation', payload: { summary: '一盆绿叶植物' } })
+assert.match(messages.outerHTML, /👀 看到：一盆绿叶植物/u)
 
 messages.children.length = 0
 context.__renderTurnEvent({ type: 'visual_selected', payload: { relation: 'previous', caption: '↩️ 上一张照片' } })

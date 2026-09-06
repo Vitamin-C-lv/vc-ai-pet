@@ -55,6 +55,8 @@ export class VisualWorkingSession {
     this.startedAt = this.now()
     this.observations = []
     this.inspections = []
+    this.recalledSession = this.candidatePool.some((candidate) => candidate?.relation === 'recalled')
+    this.recalledObservationTraceShown = false
     this.prematureAnswersBlocked = 0
     this.prematureReplyMessagesDiscarded = 0
   }
@@ -220,8 +222,15 @@ export class VisualWorkingSession {
       if (summary) {
         const observation = { visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary }
         this.observations.push(observation)
-        const observationEvent = this.emit('visual_observation', { summary, focus: safeFocus })
-        await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: `看到：${summary}` })
+        // Keep the complete safe summary for persistence and the visual ledger;
+        // only the public activity projection is compacted for recalled sessions.
+        const compactRecalledTrace = this.recalledSession && !this.comparison
+        if (!compactRecalledTrace || !this.recalledObservationTraceShown) {
+          const traceText = compactRecalledTrace ? '👀 花花重新看了看' : `看到：${summary}`
+          const observationEvent = this.emit('visual_observation', { summary: compactRecalledTrace ? traceText : summary, focus: safeFocus })
+          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })
+          if (compactRecalledTrace) this.recalledObservationTraceShown = true
+        }
         if (this.inspections.length >= 1 && this.inspections.some((item) => item.attachmentId !== candidate.attachmentId)) {
           const compareEvent = this.emit('visual_compare', { summary, focus: safeFocus })
           await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_compare', activitySeq: compareEvent?.seq, activityAt: compareEvent?.at, turnId: this.turnId, text: `对照：${summary}` })
@@ -254,7 +263,8 @@ export class VisualWorkingSession {
       if (action === 'answer') {
         if (!forcedFinal && (step.nextVisualId || replyMessages.length === 0)) return visualFailure({ reason: 'invalid-visual-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
         if (forcedFinal && replyMessages.length === 0) { final = null; break }
-        final = { ...step, action: 'answer', nextVisualId: '', replyMessages }
+        const presentationReplyMessages = this.recalledSession && !this.comparison ? replyMessages.slice(0, 1) : replyMessages
+        final = { ...step, action: 'answer', nextVisualId: '', replyMessages: presentationReplyMessages }
         break
       }
       if (action !== 'inspect' || typeof step.nextVisualId !== 'string') {

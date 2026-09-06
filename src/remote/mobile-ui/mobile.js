@@ -374,7 +374,11 @@ function renderTurnEvent(event) {
     removeThinkingMessage(document.querySelector('.thinking-message'))
     return renderMessage({ role: 'assistant', kind: 'media_ref', text: payload.caption, attachment: payload.attachment })
   }
-  if (event?.type === 'visual_observation') return renderMessage({ role: 'assistant', kind: 'activity', text: `👀 看到：${payload.summary ?? ''}` })
+  if (event?.type === 'visual_observation') {
+    const summary = typeof payload.summary === 'string' ? payload.summary : ''
+    const recalledTrace = payload.relation === 'recalled' || payload.recalled === true || summary === '👀 花花重新看了看' || summary === '花花重新看了看'
+    return renderMessage({ role: 'assistant', kind: 'activity', text: recalledTrace ? (summary.startsWith('👀') ? summary : `👀 ${summary}`) : `👀 看到：${summary}` })
+  }
   if (event?.type === 'visual_compare') return renderMessage({ role: 'assistant', kind: 'activity', text: `🔎 对照：${payload.summary ?? ''}` })
   if (event?.type === 'memory_recall') return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
   if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning)
