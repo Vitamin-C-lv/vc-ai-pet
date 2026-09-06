@@ -314,6 +314,12 @@ export class PetRuntime {
   async chat(userText, image = null, attachment = null, { turnId = createTurnId() } = {}) {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
+    // D-022: explicit long-term visual references take priority over the recent
+    // resolver's generic-boilerplate overlapScore, so they always reach the
+    // long-term resolver instead of being short-circuited to a wrong recent image.
+    if (!currentVisionImage && this.conversationPersistenceReady && detectLongTermVisualIntent(ownerText)) {
+      return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null })
+    }
     const recalled = !currentVisionImage && this.conversationPersistenceReady
       ? await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
       : null
@@ -322,14 +328,11 @@ export class PetRuntime {
       if (currentVisionImage && !currentAttachment) currentAttachment = await this.conversationStore.saveAttachment({ image: currentVisionImage })
       return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: currentAttachment })
     }
-    // Long-Term Visual stage (full trigger, then elliptical follow-up within
-    // an active recall context). A follow-up is only routed to Vision when its
-    // pre-resolve actually finds candidates; otherwise the recall context is
-    // dropped and the turn falls through to ordinary text.
+    // Long-Term Visual stage (elliptical follow-up within an active recall
+    // context). A follow-up is only routed to Vision when its pre-resolve
+    // actually finds candidates; otherwise the recall context is dropped and
+    // the turn falls through to ordinary text.
     if (!currentVisionImage && this.conversationPersistenceReady) {
-      if (detectLongTermVisualIntent(ownerText)) {
-        return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null })
-      }
       const followUp = this.turnOrchestrator.planFollowUp(ownerText)
       if (followUp) {
         const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
@@ -494,12 +497,12 @@ export class PetRuntime {
         const currentAttachment = attachment ?? await this.conversationStore.saveAttachment({ image: normalized })
         return this.runVisualTurn({ turnId, emit, userText, attachment: currentAttachment })
       }
+      // D-022: explicit long-term visual references take priority over the recent
+      // resolver's generic-boilerplate overlapScore, so they reach the long-term
+      // resolver instead of being short-circuited to a wrong recent image.
+      if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       const recalled = await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
       if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      // Long-Term Visual stage: only a conservative long-term visual trigger
-      // (以前/你还记得/上个月 + 视觉对象) reaches here; greetings and normal
-      // text never do. Resolver order stays CURRENT → RECENT → LONG-TERM.
-      if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       const followUp = this.turnOrchestrator.planFollowUp(userText)
       if (followUp) {
         const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })

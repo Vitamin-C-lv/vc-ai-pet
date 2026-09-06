@@ -1,6 +1,49 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=VC_AI_PET_VISUAL_MEMORY_PHASE1_1_READY_FOR_PRODUCTION_DEPLOYMENT
+Status: FINAL_STATUS=VC_AI_PET_VISUAL_MEMORY_PHASE1_2_READY_FOR_PRODUCTION_DEPLOYMENT
+
+## 2026-09-07 — Visual Memory Phase 1.2（Long-Term Retrieval Precision + Activity Trace Compact）
+
+修复 Android 真机长期视觉复验再次失败：真实根因不是 observation term pollution，
+而是 Recent resolver 的 generic boilerplate overlapScore 短路了长期 resolver。
+另加中文 2-4 gram、owner exact phrase bonus、observation 归一化/封顶、semantic margin，
+以及长期 recall UI 压缩（不再大段 dump observation、final 默认 1 bubble）。
+详见 [Phase 1.2 工程日志](docs/DEVLOG_VISUAL_MEMORY_PHASE1_2.md)。
+
+```text
+BASE_COMMIT=bfe99edbcdd690465127715379aecdd2063d5eff
+BRANCH=feat/visual-memory-phase1.2
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-vm-1.2
+REAL_FAILURE_SELECTED_ATTACHMENT=2c910ee2-fc52-48eb-90b0-eb5456b7af35 (Tom&Jerry)
+CORRECT_FIG_ATTACHMENT=047fba61-b59e-46f5-a36e-e10c9143d5c8
+ROOT_CAUSE=RECENT_BOILERPLATE_OVERLAP_SHORT_CIRCUITS_LONG_TERM
+OWNER_EXACT_PHRASE_BONUS=+50/phrase
+CHINESE_2_4_GRAM=single=1/bigram=3/trigram=9/4gram=27
+SINGLE_CHAR_WEIGHT=0.25 (owner) / 1 (observation)
+OBSERVATION_SCORE_NORMALIZED=dedup+bounded
+OBSERVATION_SCORE_CAP=ngram=12/single=2
+SEMANTIC_MARGIN=abs floor 10 OR relative >=2x
+FIG_TOP1=047fba61-b59e-46f5-a36e-e10c9143d5c8
+FIG_TOP1_SCORE=50.5
+FIG_TOP2_SCORE=1
+FIG_MARGIN=49.5
+FIG_RESOLUTION=matched
+SHINCHAN_RECALL=matched (winner=bb87fc0c, score 11)
+SHINCHAN_RELEVANT_AMBIGUITY=allowed for close related images
+UNRELATED_IMAGE_WINNER=NO
+OBSERVATION_ONLY_LEGACY_RECALL=PASS (蜡笔小新 via observation)
+LONG_TERM_ACTIVITY_MAX_VISIBLE_STEPS=recall + image + short re-look + final
+FULL_OBSERVATION_VISIBLE_TO_USER=NO
+FULL_OBSERVATION_STILL_PERSISTED=YES (inferred event)
+LONG_TERM_FINAL_BUBBLES=1 (max 2)
+RECENT_VISUAL_REGRESSION=PASS
+MULTI_VISUAL_A_B_A=PASS
+FIVE_INSPECTION_CAP=PASS
+DEFERRED_TIMESTAMP_LEAK=PRESERVED
+PRODUCTION_DATA_MODIFIED=NO
+PRODUCTION_CHAT_CREATED=NO
+PRODUCTION_DEPLOYED=NO
+```
 
 ## 2026-09-06 — Visual Memory Phase 1.1（legacy semantic index + recall routing fix）
 

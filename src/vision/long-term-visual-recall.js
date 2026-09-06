@@ -68,7 +68,11 @@ export class LongTermVisualResolver {
     }
 
     const second = candidates[1]
-    if (second && top.score - second.score < this.margin) {
+    // D-027: matched requires a semantic margin. A winner must either clear an
+    // absolute floor or dominate the runner-up relatively (>=2x), so a clear
+    // winner (e.g. Shinchan 11 vs unrelated 1.25) is not downgraded to
+    // ambiguous merely because its absolute gap is below the floor.
+    if (second && top.score - second.score < this.margin && top.score < second.score * 2) {
       return { status: 'ambiguous', candidates, winner: null }
     }
     return { status: 'matched', candidates, winner: top }

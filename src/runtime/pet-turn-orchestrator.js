@@ -45,10 +45,13 @@ export class PetTurnOrchestrator {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
     }
     const longTermQuery = followUp?.query ?? userText
-    const longTermIntent = !attachment && !resolved?.matched
+    // D-022: an explicit long-term visual reference always reaches the long-term
+    // resolver, even when the recent resolver produced a generic-boilerplate
+    // match; only the recent-only historical path still defers to resolved.matched.
+    const longTermIntent = !attachment
       ? (followUp ? { mode: 'long-term-visual' } : detectLongTermVisualIntent(userText))
       : null
-    if (!attachment && !resolved?.matched && (intent === 'historical_visual' || longTermIntent)) {
+    if (!attachment && (longTermIntent || (intent === 'historical_visual' && !resolved?.matched))) {
       return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store, messages, pool })
     }
     if (pool.length === 0) return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
