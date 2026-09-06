@@ -300,6 +300,23 @@ export class PetRuntime {
       if (currentVisionImage && !currentAttachment) currentAttachment = await this.conversationStore.saveAttachment({ image: currentVisionImage })
       return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: currentAttachment })
     }
+    // Long-Term Visual stage (full trigger, then elliptical follow-up within
+    // an active recall context). A follow-up is only routed to Vision when its
+    // pre-resolve actually finds candidates; otherwise the recall context is
+    // dropped and the turn falls through to ordinary text.
+    if (!currentVisionImage && this.conversationPersistenceReady) {
+      if (detectLongTermVisualIntent(ownerText)) {
+        return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null })
+      }
+      const followUp = this.turnOrchestrator.planFollowUp(ownerText)
+      if (followUp) {
+        const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
+        if (preResolve.status !== 'none') {
+          return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null, followUp: { query: followUp.query, preResolve } })
+        }
+        this.turnOrchestrator.clearVisualRecallContext()
+      }
+    }
     this.chatInFlight += 1
 
     try {
@@ -412,14 +429,14 @@ export class PetRuntime {
     }
   }
 
-  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null } = {}) {
+  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null } = {}) {
     this.chatInFlight += 1
     try {
       // Self-healing incremental sync before resolution: any image message
       // appended outside the runtime path must still be visible to Long-Term
       // recall. Idempotent and checkpointed, no models involved.
       await this.syncVisualExperiences()
-      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment })
+      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment, followUp })
       // Incremental visual-experience sync after the turn's user message has
       // been appended to the archive; idempotent and checkpointed, no models.
       await this.syncVisualExperiences()
@@ -461,6 +478,14 @@ export class PetRuntime {
       // (以前/你还记得/上个月 + 视觉对象) reaches here; greetings and normal
       // text never do. Resolver order stays CURRENT → RECENT → LONG-TERM.
       if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      const followUp = this.turnOrchestrator.planFollowUp(userText)
+      if (followUp) {
+        const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
+        if (preResolve.status !== 'none') {
+          return this.runVisualTurn({ turnId, emit, userText, attachment: null, followUp: { query: followUp.query, preResolve } })
+        }
+        this.turnOrchestrator.clearVisualRecallContext()
+      }
       emit('turn_started', { mode: 'text' }); emit('thinking', {})
       const result = await this.chat(userText, null, null, { turnId })
       if (!result?.ok) return result
