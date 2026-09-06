@@ -23,6 +23,7 @@ import { spriteForAnimation } from '../client/pet-animation.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input.js'
 import { VisualExperienceStore } from '../vision/visual-experience-store.js'
 import { visualTermsFor } from '../vision/visual-keywords.js'
+import { importLegacyObservations } from '../vision/legacy-observation-importer.js'
 import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
 import { buildVisualDreamContext } from '../dream/visual-dream-context.js'
 
@@ -130,6 +131,27 @@ export class PetRuntime {
     // checkpoints a restart-safe cursor. No model calls, no PetMemory writes,
     // no Dream; original images stay untouched under ConversationStore.
     await this.syncVisualExperiences()
+    try {
+      const migration = await importLegacyObservations({
+        store: this.visualExperience,
+        readBatch: (afterSequence, limit) => this.conversationStore.rawHistoryAfterSequence({ afterSequence, limit }),
+        readMaxSequence: () => this.conversationStore.rawHistoryMaxSequence(),
+        tokenizeText: (text, { boost }) => visualTermsFor(text, { boost }),
+      })
+      this.logger?.info?.(
+        `vc-ai-pet: legacy observation migration completed `
+        + `total=${migration.total} mapped=${migration.mapped} `
+        + `skippedAmbiguous=${migration.skippedAmbiguous} `
+        + `skippedNoAttachment=${migration.skippedNoAttachment} `
+        + `skippedNoExperience=${migration.skippedNoExperience} `
+        + `modelCalls=${migration.modelCalls}`,
+      )
+    } catch (error) {
+      const code = String(error?.code ?? error?.name ?? 'UNKNOWN')
+        .replace(/[^A-Z0-9_-]/giu, '_')
+        .slice(0, 80) || 'UNKNOWN'
+      this.logger?.warn?.(`vc-ai-pet: legacy observation migration failed code=${code}`)
+    }
     this.state = await this.sandbox.readJson('world', 'state.json', null)
     if (!this.state) this.state = createInitialState()
     this.identity = await ensurePetIdentity(this.sandbox, this.state)

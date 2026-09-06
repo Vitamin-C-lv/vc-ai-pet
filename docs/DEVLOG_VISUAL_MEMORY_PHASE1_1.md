@@ -87,6 +87,31 @@ matched→clear、ambiguous→record、none(且 followUp)→clear；暴露
 - `test/v0.4-visual-memory-acceptance-1.1.mjs`（生产副本迁移 + 无花果/蜡笔小新 dry-run）
 - 回归全绿：Phase 1 全部 v0.4 测试、`npm run smoke`（含 client build/verify）、`npm run test:long-life`。
 
+## Production Wiring Closure
+
+`ff91c7c` 已实现并测试 `importLegacyObservations()`，但此前的
+`PetRuntime.initialize()` 只执行 `syncVisualExperiences()`，没有进入 legacy
+observation importer；原有 importer 测试直接调用函数，因此没有覆盖真实生产初始化路径。
+
+本次只做最小 source wiring：在 ConversationStore 与 VisualExperienceStore
+初始化、`syncVisualExperiences()` 完成之后，使用同一组 archive reader 和
+`visualTermsFor(..., { boost })` 接入 `importLegacyObservations()`。初始化迁移仍为
+zero-model-call，legacy observation 继续使用 `source_kind=observation`、
+`evidence=inferred`、`boost=1`，并依赖既有 cursor、deterministic event id 与去重逻辑。
+
+若 migration 整体出现异常，runtime 只通过安全 diagnostics logger 输出受限 error
+code，不暴露 prompt、图片数据或模型内部内容；成功结果则明确记录 total、mapped、
+各类 skipped 数量与 modelCalls，避免把失败伪装成完成或把 ambiguous skip 伪装成失败。
+
+新增 `test/v0.4-visual-memory-runtime-init.mjs`，只通过
+`new PetRuntime(...).initialize()` 验证：
+
+- sync 在 legacy import 之前执行；
+- 首次初始化导入 observation、重启不重复；
+- 新 archive activity 只被增量导入；
+- ambiguous comparison 被记录为 completed/skipped；
+- importer 异常被记录为 failed，且不使 runtime 初始化崩溃。
+
 ## 状态
 
 `FINAL_STATUS=READY_FOR_PRODUCTION_DEPLOYMENT`
