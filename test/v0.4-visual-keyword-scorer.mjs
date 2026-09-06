@@ -4,6 +4,7 @@ import {
   GENERIC_RECALL_TERMS,
   cjkTerms,
   contentQueryTerms,
+  ownerExactPhraseBonus,
   suppressGenericTerms,
   visualTermsFor,
 } from '../src/vision/visual-keywords.js'
@@ -17,6 +18,9 @@ for (const term of ['花果', '无花', '小新', '蜡笔']) {
 for (const term of ['看看', '这张']) {
   assert.equal(cjkTerms(term).has(term), false, `${term} should be filtered when both sides are stop`)
 }
+assert.equal(cjkTerms('无花果').get('无花果'), 9)
+assert.equal(cjkTerms('蜡笔小新').get('蜡笔小新'), 27)
+assert.equal(cjkTerms('蜡笔小新').get('小新'), 3)
 
 const forbiddenContentTerms = ['无', '果', '盆', '蜡', '笔', '小', '新', '花果', '无花', '蜡笔', '笔小', '小新', '盆无']
 for (const term of forbiddenContentTerms) {
@@ -36,6 +40,8 @@ for (const term of ['无', '果', '盆', '盆无', '花果']) {
 const shinchanQuery = '你还记得我之前给你看的蜡笔小新吗'
 const shinchanTermMap = asMap(contentQueryTerms(shinchanQuery))
 for (const term of ['蜡笔', '笔小', '小新']) assert.equal(shinchanTermMap.get(term), 3)
+for (const term of ['蜡笔小', '笔小新']) assert.equal(shinchanTermMap.get(term), 9)
+assert.equal(shinchanTermMap.get('蜡笔小新'), 27)
 
 const makeCandidate = (experienceId, terms) => ({
   experienceId,
@@ -107,4 +113,6 @@ assert.equal(lastBreakdown.candidates.find(({ experienceId }) => experienceId ==
 console.log('SHINCHAN_SCORE_BREAKDOWN=' + JSON.stringify(lastBreakdown))
 
 assert.deepEqual(suppressGenericTerms(visualTermsFor('给发无花果')), contentQueryTerms('给发无花果'))
+assert.ok(ownerExactPhraseBonus('你记得我之前给你发的那盆无花果吗 有很多无花果', '你看，无花果到了') > 0)
+assert.equal(ownerExactPhraseBonus('…蜡笔小新…', '看好哦这是第一张图片'), 0)
 console.log('VISUAL_KEYWORD_SCORER=PASS')
