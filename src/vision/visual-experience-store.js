@@ -310,7 +310,7 @@ export class VisualExperienceStore {
     return count
   }
 
-  async recordEvent({ experienceId, turnId = null, kind, occurredAt = this.now(), focus = null, summary = null, relatedExperienceId = null, evidence = 'inferred', terms = [] } = {}) {
+  async recordEvent({ experienceId, turnId = null, kind, occurredAt = this.now(), focus = null, summary = null, relatedExperienceId = null, evidence = 'inferred', terms = [], eventId = null } = {}) {
     await this.initialize()
     if (!EVENT_KINDS.has(kind)) throw new TypeError('PET_VISUAL_EXPERIENCE_EVENT_KIND_INVALID')
     if (!EVIDENCE_KINDS.has(evidence)) throw new TypeError('PET_VISUAL_EXPERIENCE_EVIDENCE_INVALID')
@@ -323,16 +323,18 @@ export class VisualExperienceStore {
     if (kind === 'observation' && !cleanedSummary) throw new TypeError('PET_VISUAL_EXPERIENCE_OBSERVATION_SUMMARY_REQUIRED')
     if (kind === 'comparison' && !String(relatedExperienceId ?? '').trim()) throw new TypeError('PET_VISUAL_EXPERIENCE_COMPARISON_TARGET_REQUIRED')
 
-    const eventId = this.#newId('event')
+    const requestedEventId = eventId === null || eventId === undefined ? null : String(eventId).trim()
+    if (eventId !== null && eventId !== undefined && !requestedEventId) throw new TypeError('PET_VISUAL_EXPERIENCE_EVENT_ID_INVALID')
+    const persistedEventId = requestedEventId ?? this.#newId('event')
     const occurred = timestamp(occurredAt, this.now())
     this.db.exec('BEGIN')
     try {
-      this.db.prepare(`
-        INSERT INTO visual_events(
+      const insertResult = this.db.prepare(`
+        INSERT OR IGNORE INTO visual_events(
           event_id, experience_id, turn_id, kind, occurred_at, focus, summary, related_experience_id, evidence
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        eventId,
+        persistedEventId,
         experienceKey,
         turnId === null || turnId === undefined ? null : String(turnId),
         kind,
@@ -342,6 +344,10 @@ export class VisualExperienceStore {
         relatedExperienceId === null || relatedExperienceId === undefined ? null : String(relatedExperienceId),
         evidence,
       )
+      if (insertResult.changes !== 1) {
+        this.db.exec('COMMIT')
+        return rowToEvent(this.db.prepare('SELECT * FROM visual_events WHERE event_id = ?').get(persistedEventId))
+      }
       if (kind === 'inspection' || kind === 'revisit') {
         this.db.prepare(`
           UPDATE visual_experiences
@@ -350,7 +356,7 @@ export class VisualExperienceStore {
         `).run(occurred, experienceKey)
       }
       if (Array.isArray(terms) && terms.length > 0) {
-        await this.indexTerms(experienceKey, terms, { sourceKind: 'observation', sourceRef: eventId })
+        await this.indexTerms(experienceKey, terms, { sourceKind: 'observation', sourceRef: persistedEventId })
       }
       this.db.exec('COMMIT')
     } catch (error) {
@@ -358,7 +364,25 @@ export class VisualExperienceStore {
       throw error
     }
 
-    return rowToEvent(this.db.prepare('SELECT * FROM visual_events WHERE event_id = ?').get(eventId))
+    return rowToEvent(this.db.prepare('SELECT * FROM visual_events WHERE event_id = ?').get(persistedEventId))
+  }
+
+  async getSyncState(key) {
+    await this.initialize()
+    const stateKey = String(key ?? '').trim()
+    if (!stateKey) throw new TypeError('PET_VISUAL_EXPERIENCE_SYNC_STATE_KEY_INVALID')
+    return this.db.prepare('SELECT value FROM visual_sync_state WHERE key = ?').get(stateKey)?.value ?? null
+  }
+
+  async setSyncState(key, value) {
+    await this.initialize()
+    const stateKey = String(key ?? '').trim()
+    if (!stateKey) throw new TypeError('PET_VISUAL_EXPERIENCE_SYNC_STATE_KEY_INVALID')
+    if (value === null || value === undefined) throw new TypeError('PET_VISUAL_EXPERIENCE_SYNC_STATE_VALUE_INVALID')
+    this.db.prepare(`
+      INSERT INTO visual_sync_state(key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(stateKey, String(value))
   }
 
   async findExperienceById(experienceId) {
