@@ -2,6 +2,7 @@ import { buildVisualCandidatePool, detectVisualIntent, isImmediatePreviousVisual
 import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
 import { VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
+import { detectEllipticalFollowUp, VisualRecallContext } from './visual-recall-context.js'
 
 function buildPrimaryComparisonPair(pool, intent) {
   if (intent !== 'comparison' || !Array.isArray(pool)) return []
@@ -11,17 +12,19 @@ function buildPrimaryComparisonPair(pool, intent) {
 }
 
 export class PetTurnOrchestrator {
-  constructor({ runtime, resolver = new RecentVisualResolver(), longTermResolver = null, experienceStore = null, now = () => Date.now() } = {}) {
+  constructor({ runtime, resolver = new RecentVisualResolver(), longTermResolver = null, experienceStore = null, recallContext = null, now = () => Date.now() } = {}) {
     this.runtime = runtime
     this.resolver = resolver
     this.longTermResolver = longTermResolver
     this.experienceStore = experienceStore
+    this.recallContext = recallContext ?? new VisualRecallContext({ now })
     this.now = now
   }
 
-  async runVisual({ turnId, emit, userText, attachment }) {
+  async runVisual({ turnId, emit, userText, attachment, followUp = null }) {
     const startedAt = this.now()
     const store = this.runtime.conversationStore
+    if (attachment) this.recallContext.clear()
     const messages = typeof store.listForRecentVisualRecall === 'function'
       ? await store.listForRecentVisualRecall()
       : typeof store.list === 'function'
@@ -41,11 +44,12 @@ export class PetTurnOrchestrator {
     if (intent === 'ambiguous' || unresolvedHistoricalReference || (intent === 'comparison' && comparisonPair.length < 2)) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
     }
+    const longTermQuery = followUp?.query ?? userText
     const longTermIntent = !attachment && !resolved?.matched
-      ? detectLongTermVisualIntent(userText)
+      ? (followUp ? { mode: 'long-term-visual' } : detectLongTermVisualIntent(userText))
       : null
     if (!attachment && !resolved?.matched && (intent === 'historical_visual' || longTermIntent)) {
-      return this.#runLongTermVisual({ turnId, emit, userText, startedAt, store, messages, pool })
+      return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store, messages, pool })
     }
     if (pool.length === 0) return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
     const resolvedVisual = pool.find((candidate) => candidate.attachmentId === resolved?.attachmentId)?.visualId
@@ -74,6 +78,22 @@ export class PetTurnOrchestrator {
     return this.#finishVisualResult({ turnId, emit, userText, attachment, startedAt, result })
   }
 
+  recallContextActive() {
+    return this.recallContext.active()
+  }
+
+  planFollowUp(userText) {
+    if (!this.recallContext.active()) return null
+    const detected = detectEllipticalFollowUp(userText)
+    if (!detected) return null
+    const query = this.recallContext.buildFollowUpQuery({ ...detected, text: userText })
+    return query ? { kind: detected.kind, query } : null
+  }
+
+  clearVisualRecallContext() {
+    this.recallContext.clear()
+  }
+
   async #appendMemoryRecall({ turnId, emit, userText, store }) {
     const recalledCandidates = String(userText ?? '').trim()
       ? (this.runtime.memory?.recall?.(userText, 2, { bumpHits: false }) ?? [])
@@ -94,18 +114,22 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #runLongTermVisual({ turnId, emit, userText, startedAt, store, pool }) {
-    if (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function') {
+  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, startedAt, store, pool }) {
+    if (!followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
-    const result = await this.longTermResolver.resolve(userText, { limit: 8 })
+    if (followUp) this.recallContext.consume(userText)
+    const result = followUp?.preResolve ?? await this.longTermResolver.resolve(resolveQuery, { limit: 8 })
     if (result?.status === 'ambiguous') {
+      this.recallContext.record({ mode: 'visual_recall_ambiguous', query: resolveQuery, result })
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
     if (result?.status !== 'matched' || !result.winner) {
+      this.recallContext.clear()
       return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
     }
 
+    this.recallContext.clear()
     const winner = result.winner
     const attachmentId = winner.attachmentId
     const metadata = typeof store.attachment === 'function' ? await store.attachment(attachmentId) : null
