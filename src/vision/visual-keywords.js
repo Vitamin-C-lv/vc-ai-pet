@@ -19,7 +19,8 @@ export function cjkTerms(text) {
     }
     for (let index = 0; index + 1 < run.length; index += 1) {
       const term = run.slice(index, index + 2)
-      if ([...term].some((character) => CJK_STOP_CHARACTERS.has(character))) continue
+      const [left, right] = [...term]
+      if (CJK_STOP_CHARACTERS.has(left) && CJK_STOP_CHARACTERS.has(right)) continue
       terms.set(term, 3)
     }
   }
@@ -56,4 +57,21 @@ export function visualTermsFor(text, { boost = 1, sourceKind = null, sourceRef =
     sourceKind,
     sourceRef,
   }))
+}
+
+// Routing boilerplate is useful for detecting a visual request, but it is not
+// useful evidence for choosing among long-term visual experiences.
+export const GENERIC_RECALL_TERMS = new Set([
+  '给', '发', '记', '得', '之', '前', '还', '请', '帮', '看', '张', '图', '片',
+  '记得', '之前', '前给', '以前', '给你', '你看', '看的', '图片', '照片',
+  '那张', '这张', '一张', '第一', '第二', '上次', '发过', '看过', '给我', '发给',
+])
+
+export function suppressGenericTerms(terms) {
+  if (!Array.isArray(terms)) return []
+  return terms.filter(({ term }) => !GENERIC_RECALL_TERMS.has(term))
+}
+
+export function contentQueryTerms(text) {
+  return suppressGenericTerms(visualTermsFor(text, { boost: 1 }))
 }

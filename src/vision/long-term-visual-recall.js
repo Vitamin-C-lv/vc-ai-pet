@@ -1,4 +1,4 @@
-import { visualTermsFor } from './visual-keywords.js'
+import { contentQueryTerms } from './visual-keywords.js'
 
 const LONG_TERM_TIME_PATTERN = /(以前|之前|过去|曾经|那时候|从前|上次|上回|上个月|上礼拜|上月|好久|很久|早先|最初|最早)/u
 const REMEMBER_VISUAL_REFERENCE_PATTERN = /记得[^\n，。！？!?]{0,24}(?:那张|那盆|那碗|那只|那盘|那棵|照片|图片|图|照片)/u
@@ -49,7 +49,7 @@ export class LongTermVisualResolver {
     const empty = { status: 'none', candidates: [], winner: null }
     if (!detectLongTermVisualIntent(userText)) return empty
 
-    const queryTerms = visualTermsFor(userText)
+    const queryTerms = contentQueryTerms(userText)
     const rows = await this.experienceStore.searchByTerms(queryTerms, { limit, minScore: this.minScore })
     const candidates = (Array.isArray(rows) ? rows : []).map(metadataOnly)
     const top = candidates[0]
