@@ -2,7 +2,7 @@ import { buildVisualCandidatePool, detectVisualIntent, isImmediatePreviousVisual
 import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
 import { VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
-import { detectEllipticalFollowUp, VisualRecallContext } from './visual-recall-context.js'
+import { detectContextualVisualRecallFollowUp, VisualRecallContext } from './visual-recall-context.js'
 
 function buildPrimaryComparisonPair(pool, intent) {
   if (intent !== 'comparison' || !Array.isArray(pool)) return []
@@ -42,7 +42,14 @@ export class PetTurnOrchestrator {
       && !resolved?.matched
       && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
     if (intent === 'ambiguous' || unresolvedHistoricalReference || (intent === 'comparison' && comparisonPair.length < 2)) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
+      return this.#finishAmbiguous({
+        turnId,
+        emit,
+        userText,
+        attachment,
+        startedAt,
+        recordRecallContext: !attachment && (intent === 'ambiguous' || unresolvedHistoricalReference),
+      })
     }
     const longTermQuery = followUp?.query ?? userText
     // D-022: an explicit long-term visual reference always reaches the long-term
@@ -54,7 +61,16 @@ export class PetTurnOrchestrator {
     if (!attachment && (longTermIntent || (intent === 'historical_visual' && !resolved?.matched))) {
       return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store, messages, pool })
     }
-    if (pool.length === 0) return this.#finishAmbiguous({ turnId, emit, userText, attachment, startedAt })
+    if (pool.length === 0) {
+      return this.#finishAmbiguous({
+        turnId,
+        emit,
+        userText,
+        attachment,
+        startedAt,
+        recordRecallContext: !attachment && intent === 'ambiguous',
+      })
+    }
     const resolvedVisual = pool.find((candidate) => candidate.attachmentId === resolved?.attachmentId)?.visualId
     const preferResolvedHistorical = resolvedVisual && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
     const first = preferResolvedHistorical
@@ -87,10 +103,18 @@ export class PetTurnOrchestrator {
 
   planFollowUp(userText) {
     if (!this.recallContext.active()) return null
-    const detected = detectEllipticalFollowUp(userText)
+    const detected = detectContextualVisualRecallFollowUp(userText)
     if (!detected) return null
     const query = this.recallContext.buildFollowUpQuery({ ...detected, text: userText })
-    return query ? { kind: detected.kind, query } : null
+    if (!query) return null
+    return {
+      kind: detected.kind,
+      query,
+      subject: detected.subject,
+      subjectCorrection: detected.subjectCorrection === true,
+      clarification: detected.clarification === true,
+      retryOnNone: detected.subjectCorrection === true || detected.clarification === true,
+    }
   }
 
   clearVisualRecallContext() {
@@ -121,18 +145,47 @@ export class PetTurnOrchestrator {
     if (!followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
-    if (followUp) this.recallContext.consume(userText)
+    if (followUp) this.recallContext.consume({ ...followUp, text: userText })
+    const contextUses = this.recallContext.snapshot()?.uses ?? 0
     const result = followUp?.preResolve ?? await this.longTermResolver.resolve(resolveQuery, { limit: 8 })
     if (result?.status === 'ambiguous') {
-      this.recallContext.record({ mode: 'visual_recall_ambiguous', query: resolveQuery, result })
+      this.recallContext.record({
+        mode: 'visual_recall_ambiguous',
+        query: resolveQuery,
+        result,
+        subjectCorrection: followUp?.subjectCorrection ? followUp.subject : null,
+        clarificationRequested: true,
+        uses: contextUses,
+      })
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
     if (result?.status !== 'matched' || !result.winner) {
-      this.recallContext.clear()
+      if (followUp?.retryOnNone === true) {
+        this.recallContext.record({
+          mode: 'visual_recall_ambiguous',
+          query: resolveQuery,
+          result,
+          subjectCorrection: followUp?.subjectCorrection ? followUp.subject : null,
+          clarificationRequested: followUp?.clarification === true || followUp?.subjectCorrection === true,
+          uses: contextUses,
+        })
+      } else {
+        this.recallContext.clear()
+      }
       return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
     }
 
-    this.recallContext.clear()
+    if (followUp?.clarification === true) {
+      this.recallContext.record({
+        mode: 'long_term_visual_recall',
+        query: resolveQuery,
+        result,
+        clarificationRequested: false,
+        uses: contextUses,
+      })
+    } else {
+      this.recallContext.clear()
+    }
     const winner = result.winner
     const attachmentId = winner.attachmentId
     const metadata = typeof store.attachment === 'function' ? await store.attachment(attachmentId) : null
@@ -210,9 +263,17 @@ export class PetTurnOrchestrator {
     return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
   }
 
-  async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt }) {
+  async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt, recordRecallContext = false }) {
     const text = '主人说的是哪一张呀？花花怕认错，能再说得具体一点吗？'
     const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
+    if (recordRecallContext) {
+      this.recallContext.record({
+        mode: 'visual_recall_ambiguous',
+        query: userText,
+        result: { status: 'ambiguous' },
+        clarificationRequested: true,
+      })
+    }
     await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, attachment, turnId })
     await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
     this.runtime.conversation.append(attachment ? `[主人发送了一张图片] ${userText}` : userText, text)

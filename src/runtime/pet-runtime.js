@@ -311,6 +311,13 @@ export class PetRuntime {
     return { kind: feedback.kind, until: Number(feedback.at) + duration }
   }
 
+  #shouldRouteVisualFollowUp(followUp, preResolve) {
+    const status = preResolve?.status
+    return status === 'matched'
+      || status === 'ambiguous'
+      || followUp?.retryOnNone === true
+  }
+
   async chat(userText, image = null, attachment = null, { turnId = createTurnId() } = {}) {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
@@ -329,15 +336,15 @@ export class PetRuntime {
       return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: currentAttachment })
     }
     // Long-Term Visual stage (elliptical follow-up within an active recall
-    // context). A follow-up is only routed to Vision when its pre-resolve
-    // actually finds candidates; otherwise the recall context is dropped and
-    // the turn falls through to ordinary text.
+    // context). A normal topic shift needs a long-term candidate first;
+    // clarification and subject-correction turns are retrieval retries even
+    // when the retry currently has no candidate.
     if (!currentVisionImage && this.conversationPersistenceReady) {
       const followUp = this.turnOrchestrator.planFollowUp(ownerText)
       if (followUp) {
         const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
-        if (preResolve.status !== 'none') {
-          return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null, followUp: { query: followUp.query, preResolve } })
+        if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
+          return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null, followUp: { ...followUp, preResolve } })
         }
         this.turnOrchestrator.clearVisualRecallContext()
       }
@@ -506,8 +513,8 @@ export class PetRuntime {
       const followUp = this.turnOrchestrator.planFollowUp(userText)
       if (followUp) {
         const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
-        if (preResolve.status !== 'none') {
-          return this.runVisualTurn({ turnId, emit, userText, attachment: null, followUp: { query: followUp.query, preResolve } })
+        if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
+          return this.runVisualTurn({ turnId, emit, userText, attachment: null, followUp: { ...followUp, preResolve } })
         }
         this.turnOrchestrator.clearVisualRecallContext()
       }
