@@ -13,7 +13,7 @@ Android APK
 
 ## 连接
 
-首次启动会显示可编辑的电脑地址，预填 `192.168.1.129:17870`。保存到 `SharedPreferences` 的只有 `host:port`，键名为 `pet_host`，不保存账号或密码。
+首次启动会显示可编辑的电脑地址，预填 `192.168.1.175:17870`。保存到 `SharedPreferences` 的只有 `host:port`，键名为 `pet_host`，不保存账号或密码。已有 `pet_host` preference 会继续保留，不会被新的默认值覆盖。
 
 默认端口是 `17870`。允许的地址是 `localhost`、`127.0.0.1`、私有 IPv4 网段 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`，以及手工输入的 `*.local` 主机名。地址会规范化为 `http://host:port/`。WebView 主导航只允许当前配置的 HTTP origin；公网、HTTPS、`file:`、`content:`、`intent:`、`javascript:` 和 `data:` 导航都会被拦截。
 

@@ -206,7 +206,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val DEFAULT_HOST = "192.168.1.129:17870"
+        private const val DEFAULT_HOST = "192.168.1.175:17870"
         private const val PREFERENCES_NAME = "pet_connection"
         private const val PREFERENCE_HOST = "pet_host"
         private val IMAGE_MIME_TYPES = arrayOf(
