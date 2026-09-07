@@ -179,8 +179,8 @@ try {
   assert.match(mobileJs, /\/api\/pet\/upload/u)
   assert.match(mobileJs, /attachmentId/u)
   assert.match(mobileJs, /image-card/u)
-  assert.match(mobileJs, /const localAttachment = pendingImage\s+\? \{ thumbnailUrl: pendingImage\.thumbnailDataUrl \}\s+: null\s+line\('user', message, localAttachment\)/u)
-  assert.match(mobileJs, /const thinkingMessage = appendThinkingMessage\(\{ vision: Boolean\(pendingImage\) \}\)/u)
+  assert.match(mobileJs, /const localAttachment = state\.pendingImage\s+\? \{ thumbnailUrl: state\.pendingImage\.thumbnailDataUrl \}\s+: null\s+const optimisticUserNode = line\('user', state\.message, localAttachment\)/u)
+  assert.match(mobileJs, /state\.thinkingMessage = appendThinkingMessage\(\{ vision: Boolean\(state\.pendingImage\) \}\)/u)
   assert.doesNotMatch(mobileJs, /line\('user', message \|\| '\[图片\]'\)/u)
   assert.match(mobileCss, /\.image-card/u)
 

@@ -5,13 +5,14 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const [html, mobileJs, mobileCss, composerJs, overlay, petCss] = await Promise.all([
+const [html, mobileJs, mobileCss, composerJs, overlay, petCss, submissionJs] = await Promise.all([
   readFile(join(root, 'src/remote/mobile-ui/index.html'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.js'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.css'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/chat-composer.js'), 'utf8'),
   readFile(join(root, 'src/client/pet-overlay.js'), 'utf8'),
   readFile(join(root, 'src/client/pet.css'), 'utf8'),
+  readFile(join(root, 'src/remote/mobile-ui/submission-state.js'), 'utf8'),
 ])
 
 assert.match(html, /id="messages"/u)
@@ -21,18 +22,19 @@ assert.match(mobileJs, /className = 'message-bubble thinking-bubble'/u)
 assert.match(mobileJs, /setAttribute\('role', 'status'\)/u)
 assert.match(mobileJs, /setAttribute\('aria-live', 'polite'\)/u)
 assert.match(mobileJs, /vision \? '花花认真看看' : '花花想一想'/u)
-assert.match(mobileJs, /const thinkingMessage = appendThinkingMessage\(\{ vision: Boolean\(pendingImage\) \}\)/u)
-assert.match(mobileJs, /removeThinkingMessage\(thinkingMessage\)/u)
-assert.match(mobileJs, /runTurnProgress\(\{ message, pendingImage, attachment, thinkingMessage \}\)/u)
+assert.match(mobileJs, /state\.thinkingMessage = appendThinkingMessage\(\{ vision: Boolean\(state\.pendingImage\) \}\)/u)
+assert.match(mobileJs, /removeThinkingMessage\(state\.thinkingMessage\)/u)
+assert.match(mobileJs, /runTurnProgress,/u)
 assert.match(mobileJs, /payload\.result\?\.text/u)
 assert.match(mobileJs, /className = 'thinking-meta'/u)
 assert.match(mobileJs, /meta\.textContent = `🐾 \$\{durationText\}`/u)
 
 const submitBody = mobileJs.slice(mobileJs.indexOf('async function submitComposer'))
 assert.notEqual(mobileJs.indexOf('async function submitComposer'), -1)
-assert.ok(submitBody.indexOf("line('user', message, localAttachment)") < submitBody.indexOf('appendThinkingMessage'))
-assert.ok(submitBody.indexOf('appendThinkingMessage') < submitBody.indexOf('runTurnProgress({ message, pendingImage, attachment, thinkingMessage })'))
-assert.match(submitBody, /catch \{\s+removeThinkingMessage\(thinkingMessage\)/su)
+assert.match(submitBody, /submissionController\.submit\(\{ draftText, message, pendingImage \}\)/u)
+assert.match(submissionJs, /SUBMISSION_STAGE\.TURN_ACCEPTED/u)
+assert.match(submissionJs, /onTurnAccepted/u)
+assert.match(submissionJs, /onPreAcceptFailure/u)
 assert.match(composerJs, /form\?\.addEventListener\('submit'/u)
 assert.match(composerJs, /event\.preventDefault\(\)/u)
 assert.match(composerJs, /event\.isComposing|event\.keyCode === 229/u)

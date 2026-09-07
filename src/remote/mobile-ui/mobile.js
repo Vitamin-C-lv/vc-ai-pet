@@ -22,6 +22,9 @@ let navigation
 let currentScreen = 'home'
 let composerController
 let emojiController
+let submissionController
+let activeTurnId = null
+let submissionStatusNode = null
 let diagnosticsPanel
 let diagnosticsOutput
 let diagnosticsStatus
@@ -44,6 +47,13 @@ const SCREEN = globalThis.VcAiPetNavigation?.VC_SCREEN ?? Object.freeze({
   GALLERY: 'gallery',
   GALLERY_DETAIL: 'gallery-detail',
   DREAMS: 'dreams',
+})
+const SUBMISSION_STAGE = globalThis.VcAiPetSubmission?.SUBMISSION_STAGE ?? Object.freeze({
+  PRE_UPLOAD: 'PRE_UPLOAD',
+  UPLOADED: 'UPLOADED',
+  TURN_ACCEPTED: 'TURN_ACCEPTED',
+  TURN_COMPLETED: 'TURN_COMPLETED',
+  TURN_FAILED: 'TURN_FAILED',
 })
 const VALID_SCREENS = new Set(Object.values(SCREEN))
 let selectedImage = null
@@ -772,6 +782,10 @@ function appendThinkingMessage({ vision = false } = {}) {
 }
 
 function removeThinkingMessage(node) {
+  removeMessageNode(node)
+}
+
+function removeMessageNode(node) {
   if (!node) return
   if (node.parentNode) node.parentNode.removeChild(node)
   else node.remove?.()
@@ -1037,42 +1051,61 @@ function waitForTurnPoll() {
   return new Promise((resolve) => setTimeout(resolve, 300))
 }
 
-async function runTurnProgress({ message, pendingImage, attachment, thinkingMessage }) {
+async function runTurnProgress({
+  message,
+  pendingImage,
+  attachment,
+  thinkingMessage,
+  turnId: existingTurnId = '',
+  after: initialAfter = 0,
+  presentation: initialPresentation = null,
+  assistantRendered: initialAssistantRendered = false,
+  onTurnAccepted,
+  onPollProgress,
+} = {}) {
+  let turnId = typeof existingTurnId === 'string' ? existingTurnId : ''
   const turnContext = {
-    stage: 'turn-start',
+    stage: turnId ? 'turn-poll' : 'turn-start',
     hadImage: Boolean(pendingImage),
     attachmentId: attachment?.id,
     ...(pendingImage ? imageDiagnosticDetails(pendingImage) : {}),
+    ...(turnId ? { turnId } : {}),
   }
-  let started
-  try {
-    started = await fetchJsonDiagnostic('/api/pet/chat/start', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
-    }, turnContext)
-  } catch (error) {
-    if (![404, 405].includes(Number(error?.httpStatus))) throw error
-    const legacy = await fetchJsonDiagnostic('/api/pet/chat', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
-    }, { ...turnContext, stage: 'chat' })
-    removeThinkingMessage(thinkingMessage)
-    const replies = Array.isArray(legacy.payload?.replyMessages) && legacy.payload.replyMessages.length ? legacy.payload.replyMessages : [legacy.payload?.text]
-    replies.filter(Boolean).forEach((text, index) => line('pet', text, null, index === replies.length - 1 ? legacy.payload?.reasoning : null))
-    return
-  }
-  const turnId = typeof started.payload?.turnId === 'string' ? started.payload.turnId : ''
   if (!turnId) {
-    recordDiagnostic({ level: 'error', stage: 'turn-start', code: 'TURN_START_INVALID_RESPONSE', details: turnContext })
-    throw diagnosticError('TURN_START_INVALID_RESPONSE', 'turn unavailable')
+    let started
+    try {
+      started = await fetchJsonDiagnostic('/api/pet/chat/start', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+      }, turnContext)
+    } catch (error) {
+      if (![404, 405].includes(Number(error?.httpStatus))) throw error
+      const legacy = await fetchJsonDiagnostic('/api/pet/chat', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+      }, { ...turnContext, stage: 'chat' })
+      removeThinkingMessage(thinkingMessage)
+      const replies = Array.isArray(legacy.payload?.replyMessages) && legacy.payload.replyMessages.length ? legacy.payload.replyMessages : [legacy.payload?.text]
+      replies.filter(Boolean).forEach((text, index) => line('pet', text, null, index === replies.length - 1 ? legacy.payload?.reasoning : null))
+      return { stage: SUBMISSION_STAGE.TURN_COMPLETED, turnId: null, after: 0 }
+    }
+    turnId = typeof started.payload?.turnId === 'string' ? started.payload.turnId : ''
+    if (!turnId) {
+      recordDiagnostic({ level: 'error', stage: 'turn-start', code: 'TURN_START_INVALID_RESPONSE', details: turnContext })
+      throw diagnosticError('TURN_START_INVALID_RESPONSE', 'turn unavailable')
+    }
+    // This is the ownership boundary: expose the accepted turn before the
+    // first poll can fail so recovery cannot restore a new sendable draft.
+    onTurnAccepted?.(turnId)
   }
-  let after = 0
-  let completed = false
+
+  let after = Number.isInteger(initialAfter) && initialAfter >= 0 ? initialAfter : 0
+  let pollDone = false
   const seen = new Set()
-  let assistantRendered = false
-  const presentation = createVisualPresentationState({ currentAttachmentId: attachment?.id })
+  let assistantRendered = Boolean(initialAssistantRendered)
+  const presentation = initialPresentation ?? createVisualPresentationState({ currentAttachmentId: attachment?.id })
   const deadline = Date.now() + 15 * 60 * 1000
-  while (!completed) {
+  while (!pollDone) {
     const poll = await fetchJsonDiagnostic(`/api/pet/chat/turn/${encodeURIComponent(turnId)}?after=${after}`, {}, { stage: 'turn-poll', turnId, hadImage: Boolean(pendingImage), attachmentId: attachment?.id })
     const payload = poll.payload
     const events = Array.isArray(payload?.events) ? payload.events : []
@@ -1099,8 +1132,9 @@ async function runTurnProgress({ message, pendingImage, attachment, thinkingMess
       scrollMessagesToBottom()
     }
     after = lastSeq
+    onPollProgress?.({ after, presentation, assistantRendered })
     if (payload?.status === 'done') {
-      completed = true
+      pollDone = true
       if (!assistantRendered) {
         const replies = Array.isArray(payload.result?.replyMessages) && payload.result.replyMessages.length ? payload.result.replyMessages : [payload.result?.text]
         replies.filter(Boolean).forEach((text) => line('pet', text))
@@ -1117,10 +1151,92 @@ async function runTurnProgress({ message, pendingImage, attachment, thinkingMess
     }
   }
   removeThinkingMessage(thinkingMessage)
+  return { stage: SUBMISSION_STAGE.TURN_COMPLETED, turnId, after, presentation, assistantRendered }
+}
+
+function clearSubmissionStatus() {
+  removeMessageNode(submissionStatusNode)
+  submissionStatusNode = null
+}
+
+function showSubmissionStatus(text) {
+  clearSubmissionStatus()
+  submissionStatusNode = line('pet', text)
+  scrollMessagesToBottom()
+}
+
+function createMobileSubmissionController() {
+  const createController = globalThis.VcAiPetSubmission?.createSubmissionController
+  if (typeof createController !== 'function') throw new Error('submission state unavailable')
+  return createController({
+    uploadImage,
+    runTurnProgress,
+    onOptimisticUser: (state) => {
+      clearSubmissionStatus()
+      const localAttachment = state.pendingImage
+        ? { thumbnailUrl: state.pendingImage.thumbnailDataUrl }
+        : null
+      const optimisticUserNode = line('user', state.message, localAttachment)
+      state.thinkingMessage = appendThinkingMessage({ vision: Boolean(state.pendingImage) })
+      scrollMessagesToBottom()
+      return optimisticUserNode
+    },
+    onAccepted: (state) => {
+      activeTurnId = state.turnId
+    },
+    onCompleted: (state) => {
+      removeThinkingMessage(state.thinkingMessage)
+      state.thinkingMessage = null
+      clearSubmissionStatus()
+      input.value = ''
+      clearImageSelection()
+      activeTurnId = null
+      setOnline(true)
+      scrollMessagesToBottom()
+    },
+    onPreAcceptFailure: (state) => {
+      removeThinkingMessage(state.thinkingMessage)
+      state.thinkingMessage = null
+      removeMessageNode(state.optimisticUserNode)
+      state.optimisticUserNode = null
+      activeTurnId = null
+      input.value = state.draftText
+      restoreImageSelection(state.pendingImage)
+      line('pet', '花花脑袋刚刚卡了一下……')
+      scrollMessagesToBottom()
+      setOnline(false)
+    },
+    onAcceptedFailure: (state) => {
+      removeThinkingMessage(state.thinkingMessage)
+      state.thinkingMessage = null
+      input.value = ''
+      clearImageSelection()
+      activeTurnId = state.turnId
+      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。')
+      setOnline(false)
+    },
+    onServerFailure: (state) => {
+      removeThinkingMessage(state.thinkingMessage)
+      state.thinkingMessage = null
+      input.value = ''
+      clearImageSelection()
+      activeTurnId = null
+      showSubmissionStatus('这条消息没有完成；如需重试，请重新发送。')
+      setOnline(true)
+    },
+    onResume: (state) => {
+      clearSubmissionStatus()
+      if (!state.thinkingMessage?.parentNode) {
+        state.thinkingMessage = appendThinkingMessage({ vision: Boolean(state.pendingImage) })
+      }
+      activeTurnId = state.turnId
+      scrollMessagesToBottom()
+    },
+  })
 }
 
 async function submitComposer(message = input.value.trim()) {
-  if (imageProcessing) return
+  if (imageProcessing || submissionController?.hasActive?.()) return
   const pendingImage = selectedImage
   if (!message && !pendingImage) return
 
@@ -1131,37 +1247,20 @@ async function submitComposer(message = input.value.trim()) {
   sendButton.disabled = true
   composerController?.sync?.()
   scheduleComposerTextareaHeight()
-  const localAttachment = pendingImage
-    ? { thumbnailUrl: pendingImage.thumbnailDataUrl }
-    : null
-  line('user', message, localAttachment)
-  const thinkingMessage = appendThinkingMessage({ vision: Boolean(pendingImage) })
-  scrollMessagesToBottom()
-  let completed = false
   try {
-    const attachment = pendingImage ? await uploadImage(pendingImage) : null
-    await runTurnProgress({ message, pendingImage, attachment, thinkingMessage })
-    completed = true
-    scrollMessagesToBottom()
-  } catch {
-    removeThinkingMessage(thinkingMessage)
-    line('pet', '花花脑袋刚刚卡了一下……')
-    scrollMessagesToBottom()
-    setOnline(false)
+    await submissionController.submit({ draftText, message, pendingImage })
   } finally {
     input.readOnly = false
-    if (completed) {
-      clearImageSelection()
-    } else {
-      input.value = draftText
-      restoreImageSelection(pendingImage)
-      if (!pendingImage) updateSendButton()
-    }
     if (restoreInputFocus && currentScreen === SCREEN.CHAT) input.focus({ preventScroll: true })
     updateSendButton()
     scheduleComposerTextareaHeight()
     void refresh()
   }
+}
+
+function resumeActiveSubmission() {
+  if (!submissionController?.hasActive?.()) return
+  void submissionController.resume()
 }
 
 function renderDiagnosticsPanel() {
@@ -1218,6 +1317,7 @@ function sourceBasename(value) {
 function installDiagnosticHooks() {
   globalThis.addEventListener?.('online', () => {
     recordDiagnostic({ level: 'info', stage: 'network', code: 'ONLINE' })
+    resumeActiveSubmission()
     void refresh()
   })
   globalThis.addEventListener?.('offline', () => {
@@ -1361,6 +1461,7 @@ function bindDom() {
       if (emojiAtBottom) globalThis.requestAnimationFrame?.(() => scrollMessagesToBottom())
     },
   })
+  submissionController = createMobileSubmissionController()
   composerController = globalThis.VcAiPetComposer?.wireVcComposer?.({
     form,
     input,
@@ -1371,7 +1472,7 @@ function bindDom() {
     openExistingImagePicker: async () => imageInput.click(),
     sendExistingText: (message) => submitComposer(message),
     hasPendingImage: () => Boolean(selectedImage),
-    isBusy: () => imageProcessing,
+    isBusy: () => imageProcessing || Boolean(submissionController?.hasActive?.()),
     showToast: (message) => {
       imageStatus.textContent = message
       globalThis.setTimeout(() => {

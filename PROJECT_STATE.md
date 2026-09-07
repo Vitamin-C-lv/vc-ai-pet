@@ -1,6 +1,47 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_PRODUCTION_DEPLOYMENT
+Status: FINAL_STATUS=READY_FOR_GITHUB_REVIEW
+
+## 2026-09-08 — Composer Failure Recovery Correctness Fix
+
+基于用户指定的 `3d53660ea923bc7ba0cdd795dc30182b4f1fabc4` 建立独立
+worktree。本轮只调整 mobile frontend submission state/recovery：明确
+`PRE_UPLOAD`、`UPLOADED`、`TURN_ACCEPTED`、`TURN_COMPLETED` 与终态
+`TURN_FAILED`；pre-accept 失败回滚 optimistic user bubble 并恢复草稿/图片；
+已上传的 attachment 在 start 前显式重试时复用；已接收 turn 的网络失败保留
+同一 `turnId` 并在重新连接时继续 poll。没有修改 ConversationStore semantics、
+Chat backend API、PetTurnManager、Visual Memory、Dream、PetMemory、Local Brain、
+LAN 或 Android native，也没有 production deploy。
+
+FINAL_STATUS=READY_FOR_GITHUB_REVIEW
+BASE_COMMIT=3d53660ea923bc7ba0cdd795dc30182b4f1fabc4
+BRANCH=fix/composer-failure-recovery
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-composer-failure-recovery
+COMMIT=RECORDED_IN_GIT
+REMOTE_HEAD=PUSHED_TO_ORIGIN
+WORKTREE_STATUS=CLEAN_AFTER_COMMIT
+PRE_ACCEPT_FAILURE_RECOVERY=PASS
+OPTIMISTIC_BUBBLE_ROLLBACK=PASS
+UPLOAD_RETRY_COUNT=1
+ATTACHMENT_REUSED=YES
+TURN_ACCEPTED_TRACKING=PASS
+POLL_FAILURE_REUSES_TURN_ID=PASS
+AUTOMATIC_DUPLICATE_TURN=NO
+SERVER_TURN_FAILED_DUPLICATE=NO
+TEXT_IMAGE_SUCCESS=PASS
+AUTOSIZE_REGRESSION=PASS
+PLUS_SEND_REGRESSION=PASS
+IME_REGRESSION=PASS
+EMOJI_REGRESSION=PASS
+CHAT_BACKEND_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+
+新增 `test/v0.4-mobile-submission-recovery.mjs` 覆盖 upload 前失败、已上传
+start 前失败重试、accepted 后同 turn 恢复、server `TURN_FAILED`、optimistic
+bubble 数量、图片上传次数与 attachment id 复用；既有
+`test/v0.4-mobile-composer-polish.mjs` 的 autosize、Plus/Send、IME、Emoji
+与文字/图片路径继续通过。客户端构建与 bundle 校验通过；真实 Android/生产
+验收未运行。
 
 ## 2026-09-08 — Android UI Acceptance Small Fix: Composer + Chat Header
 
