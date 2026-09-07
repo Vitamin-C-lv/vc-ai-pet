@@ -180,6 +180,13 @@ function bindKeyboardState() {
 let innerLifeView
 let innerLifeNextOffset = null
 let innerLifeLoading = false
+let visualGalleryView
+let visualGalleryDetailView
+let visualGalleryNextOffset = null
+let visualGalleryLoading = false
+let visualGalleryDetailLoading = false
+let galleryHomeCount
+let galleryHomePreview
 
 function formatInnerLifeTime(value) {
   if (value === null || !Number.isFinite(Number(value))) return '还没有'
@@ -199,11 +206,43 @@ function renderInnerLifeEntry(item) {
   heading.append(type, time)
   const summary = document.createElement('p')
   summary.className = 'inner-life-summary'
-  summary.textContent = item.summary || (item.understandingCount === 0 ? '这次只是整理了一些最近的事情。' : '这段回想暂不展示摘要。')
+  const insightCount = Number(item.insightCount ?? item.understandingCount ?? 0)
+  summary.textContent = item.summary || (insightCount === 0 ? '这次没有形成新的理解。' : '这段回想暂不展示摘要。')
   const meta = document.createElement('p')
   meta.className = 'inner-life-meta'
-  meta.textContent = `联想与理解 · ${item.understandingCount} 条新理解`
+  meta.textContent = `联想与理解 · ${insightCount} 条新理解`
   card.append(heading, summary, meta)
+
+  if (insightCount > 0) {
+    const toggle = document.createElement('button')
+    toggle.className = 'inner-life-insight-toggle'
+    toggle.type = 'button'
+    toggle.textContent = '查看这次花花想明白了什么'
+    const panel = document.createElement('div')
+    panel.className = 'inner-life-insights'
+    panel.hidden = true
+    const insights = Array.isArray(item.insights) ? item.insights : []
+    if (insights.length === 0) {
+      const unavailable = document.createElement('p')
+      unavailable.className = 'inner-life-insight-empty'
+      unavailable.textContent = '这次留下了新的理解，但当前没有可展示的安全内容。'
+      panel.append(unavailable)
+    } else {
+      insights.forEach((insight) => {
+        if (typeof insight?.content !== 'string' || !insight.content) return
+        const content = document.createElement('p')
+        content.className = 'inner-life-insight'
+        content.textContent = insight.content
+        panel.append(content)
+      })
+    }
+    toggle.setAttribute('aria-expanded', 'false')
+    toggle.addEventListener('click', () => {
+      panel.hidden = !panel.hidden
+      toggle.setAttribute('aria-expanded', String(!panel.hidden))
+    })
+    card.append(toggle, panel)
+  }
   return card
 }
 
@@ -241,9 +280,250 @@ async function loadInnerLife({ more = false } = {}) {
 function openInnerLife() {
   setActiveTab('play', { persist: false })
   playView.hidden = true
+  visualGalleryView.hidden = true
+  visualGalleryDetailView.hidden = true
   innerLifeView.hidden = false
   document.querySelector('#inner-life-back').focus({ preventScroll: true })
   void loadInnerLife()
+}
+
+function renderGalleryHome(payload) {
+  if (!galleryHomeCount || !galleryHomePreview) return
+  const count = Number(payload?.count)
+  galleryHomeCount.textContent = Number.isFinite(count) ? `${count} 张照片` : '照片整理中'
+  galleryHomePreview.replaceChildren()
+  for (const item of (Array.isArray(payload?.items) ? payload.items : []).slice(0, 4)) {
+    if (typeof item?.thumbnailUrl !== 'string' || !item.thumbnailUrl) continue
+    const image = document.createElement('img')
+    image.src = item.thumbnailUrl
+    image.alt = ''
+    image.loading = 'lazy'
+    galleryHomePreview.append(image)
+  }
+}
+
+async function loadGalleryHome() {
+  try {
+    const { payload } = await fetchJsonDiagnostic('/api/visual-gallery?limit=4&offset=0', { cache: 'no-store' }, { stage: 'visual-gallery-home' })
+    if (!Array.isArray(payload?.items) || !Number.isFinite(Number(payload?.count))) throw diagnosticError('VISUAL_GALLERY_INVALID_RESPONSE', 'visual gallery unavailable')
+    renderGalleryHome(payload)
+  } catch {
+    if (galleryHomeCount) galleryHomeCount.textContent = '图库暂时不可用'
+  }
+}
+
+function renderGalleryCard(item) {
+  const card = document.createElement('button')
+  card.className = 'visual-gallery-card'
+  card.type = 'button'
+  card.setAttribute('aria-label', `查看 ${formatInnerLifeTime(item.occurredAt)} 的照片`)
+  if (typeof item.thumbnailUrl === 'string' && item.thumbnailUrl) {
+    const image = document.createElement('img')
+    image.className = 'visual-gallery-card-image'
+    image.src = item.thumbnailUrl
+    image.alt = '花花看过的照片'
+    image.loading = 'lazy'
+    card.append(image)
+  } else {
+    const placeholder = document.createElement('span')
+    placeholder.className = 'visual-gallery-card-placeholder'
+    placeholder.textContent = '照片暂不可用'
+    card.append(placeholder)
+  }
+  const copy = document.createElement('span')
+  copy.className = 'visual-gallery-card-copy'
+  const date = document.createElement('span')
+  date.className = 'visual-gallery-card-date'
+  date.textContent = formatInnerLifeTime(item.occurredAt)
+  const owner = document.createElement('span')
+  owner.className = 'visual-gallery-card-owner'
+  owner.textContent = item.ownerText || '主人没有留下文字。'
+  const meta = document.createElement('span')
+  meta.className = 'visual-gallery-card-meta'
+  const markers = []
+  if (item.hasObservation) markers.push('有视觉批注')
+  if (item.hasComparison) markers.push('有对照')
+  if (item.hasRevisit) markers.push('有复看')
+  meta.textContent = markers.join(' · ') || '花花当时还没有留下视觉批注。'
+  copy.append(date, owner, meta)
+  card.append(copy)
+  card.addEventListener('click', () => { void openGalleryDetail(item.experienceId) })
+  return card
+}
+
+async function loadGalleryList({ more = false } = {}) {
+  if (visualGalleryLoading) return
+  visualGalleryLoading = true
+  const status = document.querySelector('#visual-gallery-status')
+  const grid = document.querySelector('#visual-gallery-grid')
+  const moreButton = document.querySelector('#visual-gallery-more')
+  const refreshButton = document.querySelector('#visual-gallery-refresh')
+  moreButton.disabled = true
+  refreshButton.disabled = true
+  status.textContent = '正在翻看和花花一起看过的照片……'
+  try {
+    const offset = more ? visualGalleryNextOffset : 0
+    const { payload } = await fetchJsonDiagnostic(`/api/visual-gallery?limit=24&offset=${offset ?? 0}`, { cache: 'no-store' }, { stage: 'visual-gallery-list' })
+    if (!Array.isArray(payload?.items) || !Number.isFinite(Number(payload?.count))) throw diagnosticError('VISUAL_GALLERY_INVALID_RESPONSE', 'visual gallery unavailable')
+    if (!more) grid.replaceChildren()
+    payload.items.forEach((item) => grid.append(renderGalleryCard(item)))
+    visualGalleryNextOffset = payload.nextOffset
+    moreButton.hidden = visualGalleryNextOffset === null
+    renderGalleryHome(payload)
+    status.textContent = grid.children.length ? '' : '花花还没有找到一起看过的照片。'
+  } catch {
+    status.textContent = '暂时没能打开图库，请稍后再试。'
+  } finally {
+    visualGalleryLoading = false
+    moreButton.disabled = false
+    refreshButton.disabled = false
+  }
+}
+
+function galleryEventLabel(event) {
+  if (event.kind === 'observation') return '花花的观察 · INFERRED'
+  if (event.kind === 'comparison') return '花花做了对照 · INFERRED'
+  if (event.kind === 'revisit') return '花花又看了看'
+  return '花花查看了这张照片'
+}
+
+function renderGalleryEvent(event) {
+  const article = document.createElement('article')
+  article.className = 'visual-gallery-event'
+  const heading = document.createElement('div')
+  heading.className = 'visual-gallery-event-heading'
+  const kind = document.createElement('strong')
+  kind.textContent = galleryEventLabel(event)
+  const time = document.createElement('time')
+  time.dateTime = new Date(Number(event.occurredAt)).toISOString()
+  time.textContent = formatInnerLifeTime(event.occurredAt)
+  heading.append(kind, time)
+  article.append(heading)
+  if (typeof event.summary === 'string' && event.summary) {
+    const summary = document.createElement('p')
+    summary.textContent = event.summary
+    article.append(summary)
+  }
+  if (typeof event.relatedExperienceId === 'string' && event.relatedExperienceId) {
+    const related = document.createElement('button')
+    related.className = 'visual-gallery-event-link'
+    related.type = 'button'
+    related.textContent = '查看相关照片'
+    related.addEventListener('click', () => { void openGalleryDetail(event.relatedExperienceId) })
+    article.append(related)
+  }
+  return article
+}
+
+function renderGalleryTerms(terms) {
+  const list = document.querySelector('#visual-gallery-term-list')
+  list.replaceChildren()
+  if (!Array.isArray(terms) || terms.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'visual-gallery-empty'
+    empty.textContent = '暂时没有足够的检索线索。'
+    list.append(empty)
+    return
+  }
+  terms.forEach((term) => {
+    const item = document.createElement('span')
+    item.className = 'visual-gallery-term'
+    const label = document.createElement('span')
+    label.textContent = term.term
+    const source = document.createElement('small')
+    source.textContent = term.sourceKind === 'observation' ? '视觉' : '主人'
+    item.append(label, source)
+    list.append(item)
+  })
+}
+
+function renderGalleryDebug(debug) {
+  const content = document.querySelector('#visual-gallery-debug-content')
+  content.replaceChildren()
+  const fields = [
+    ['experienceId', debug?.experienceId],
+    ['sourceMessageId', debug?.sourceMessageId],
+    ['attachmentId', debug?.attachmentId],
+    ['rawRoot', debug?.rawRoot ? `${debug.rawRoot.sourceMessageId} / ${debug.rawRoot.attachmentId}` : null],
+    ['inspectionCount', debug?.inspectionCount],
+    ['lastInspectedAt', debug?.lastInspectedAt ? formatInnerLifeTime(debug.lastInspectedAt) : '—'],
+    ['eventCount', debug?.eventCount],
+  ]
+  const dl = document.createElement('dl')
+  fields.forEach(([label, value]) => {
+    const term = document.createElement('dt')
+    term.textContent = label
+    const description = document.createElement('dd')
+    description.textContent = value === null || value === undefined ? '—' : String(value)
+    dl.append(term, description)
+  })
+  content.append(dl)
+  const events = document.createElement('p')
+  events.textContent = `event metadata: ${Array.isArray(debug?.eventMetadata) ? debug.eventMetadata.map((event) => `${event.kind}/${event.evidence}/${event.eventId}`).join(' · ') || '—' : '—'}`
+  content.append(events)
+  const terms = document.createElement('p')
+  terms.textContent = `terms: ${Array.isArray(debug?.terms) ? debug.terms.map((term) => `${term.sourceKind}/${term.term}/${term.weight}`).join(' · ') || '—' : '—'}`
+  content.append(terms)
+}
+
+function renderGalleryDetail(payload) {
+  const image = document.querySelector('#visual-gallery-original')
+  if (typeof payload?.originalUrl === 'string' && payload.originalUrl) {
+    image.src = payload.originalUrl
+    image.removeAttribute('hidden')
+  } else {
+    image.removeAttribute('src')
+    image.setAttribute('hidden', '')
+  }
+  document.querySelector('#visual-gallery-date').textContent = formatInnerLifeTime(payload?.occurredAt)
+  document.querySelector('#visual-gallery-owner-text').textContent = payload?.ownerText || '主人当时没有留下文字。'
+  document.querySelector('#visual-gallery-owner-provenance').textContent = payload?.ownerTextProvenance === 'raw' ? '原话 · RAW' : '主人文字'
+  const eventList = document.querySelector('#visual-gallery-event-list')
+  eventList.replaceChildren()
+  if (!Array.isArray(payload?.visualEvents) || payload.visualEvents.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'visual-gallery-empty'
+    empty.textContent = '花花当时还没有留下视觉批注。'
+    eventList.append(empty)
+  } else {
+    payload.visualEvents.forEach((event) => eventList.append(renderGalleryEvent(event)))
+  }
+  renderGalleryTerms(payload?.visualTerms)
+  renderGalleryDebug(payload?.debug)
+}
+
+async function openGalleryDetail(experienceId) {
+  if (typeof experienceId !== 'string' || !experienceId) return
+  if (visualGalleryDetailLoading) return
+  visualGalleryDetailLoading = true
+  setActiveTab('play', { persist: false })
+  playView.hidden = true
+  innerLifeView.hidden = true
+  visualGalleryView.hidden = true
+  visualGalleryDetailView.hidden = false
+  const status = document.querySelector('#visual-gallery-detail-status')
+  status.textContent = '正在打开这段视觉经历……'
+  try {
+    const { payload } = await fetchJsonDiagnostic(`/api/visual-gallery/${encodeURIComponent(experienceId)}`, { cache: 'no-store' }, { stage: 'visual-gallery-detail' })
+    if (!payload?.experienceId || !Array.isArray(payload.visualEvents) || !Array.isArray(payload.visualTerms)) throw diagnosticError('VISUAL_GALLERY_DETAIL_INVALID_RESPONSE', 'visual gallery detail unavailable')
+    renderGalleryDetail(payload)
+    status.textContent = ''
+    document.querySelector('#visual-gallery-detail-back').focus({ preventScroll: true })
+  } catch {
+    status.textContent = '暂时没能打开这张照片，请稍后再试。'
+  } finally {
+    visualGalleryDetailLoading = false
+  }
+}
+
+function openGallery() {
+  setActiveTab('play', { persist: false })
+  playView.hidden = true
+  innerLifeView.hidden = true
+  visualGalleryDetailView.hidden = true
+  visualGalleryView.hidden = false
+  document.querySelector('#visual-gallery-back').focus({ preventScroll: true })
+  void loadGalleryList()
 }
 
 function readStoredTab() {
@@ -264,6 +544,8 @@ function persistActiveTab(tab) {
 function setActiveTab(tab, { persist = true } = {}) {
   const activeTab = VALID_TABS.has(tab) ? tab : DEFAULT_ACTIVE_TAB
   if (innerLifeView) innerLifeView.hidden = true
+  if (visualGalleryView) visualGalleryView.hidden = true
+  if (visualGalleryDetailView) visualGalleryDetailView.hidden = true
   if (playView) playView.hidden = activeTab !== 'play'
   if (chatView) chatView.hidden = activeTab !== 'chat'
   tabButtons.forEach((button) => {
@@ -934,10 +1216,23 @@ function bindDom() {
   playView = document.querySelector('#play-view')
   chatView = document.querySelector('#chat-view')
   innerLifeView = document.querySelector('#inner-life-view')
+  visualGalleryView = document.querySelector('#visual-gallery-view')
+  visualGalleryDetailView = document.querySelector('#visual-gallery-detail-view')
+  galleryHomeCount = document.querySelector('#gallery-home-count')
+  galleryHomePreview = document.querySelector('#gallery-home-preview')
   document.querySelector('#inner-life-open')?.addEventListener('click', openInnerLife)
   document.querySelector('#inner-life-back')?.addEventListener('click', () => { setActiveTab('play'); document.querySelector('#inner-life-open').focus({ preventScroll: true }) })
   document.querySelector('#inner-life-refresh')?.addEventListener('click', () => { void loadInnerLife() })
   document.querySelector('#inner-life-more')?.addEventListener('click', () => { void loadInnerLife({ more: true }) })
+  document.querySelector('#visual-gallery-open')?.addEventListener('click', openGallery)
+  document.querySelector('#visual-gallery-back')?.addEventListener('click', () => { setActiveTab('play'); document.querySelector('#visual-gallery-open').focus({ preventScroll: true }) })
+  document.querySelector('#visual-gallery-refresh')?.addEventListener('click', () => { void loadGalleryList() })
+  document.querySelector('#visual-gallery-more')?.addEventListener('click', () => { void loadGalleryList({ more: true }) })
+  document.querySelector('#visual-gallery-detail-back')?.addEventListener('click', () => {
+    visualGalleryDetailView.hidden = true
+    visualGalleryView.hidden = false
+    document.querySelector('#visual-gallery-back').focus({ preventScroll: true })
+  })
   petApp = document.querySelector('.pet-app')
   tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
   diagnosticsPanel = document.querySelector('#diagnostics-panel')
@@ -1029,6 +1324,7 @@ function startApp() {
   updateSendButton()
   recordDiagnostic({ level: 'info', stage: 'app', code: 'APP_BOOT' })
   refresh()
+  loadGalleryHome()
   loadHistory()
   setInterval(refresh, 1500)
 }

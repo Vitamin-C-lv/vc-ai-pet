@@ -20,6 +20,15 @@
       <div class="view-host">
         <section id="play-view" class="app-view play-view" data-view="play" aria-label="和花花玩耍">
           <button id="inner-life-open" class="inner-life-entry" type="button" aria-controls="inner-life-view">🌙 花花的梦境 <span aria-hidden="true">›</span></button>
+          <button id="visual-gallery-open" class="inner-life-entry visual-gallery-entry" type="button" aria-controls="visual-gallery-view">
+            <span class="gallery-home-copy">
+              <strong>🖼️ 花花的图库</strong>
+              <small>主人和花花一起看过的照片</small>
+              <span id="gallery-home-count">正在整理……</span>
+            </span>
+            <span id="gallery-home-preview" class="gallery-home-preview" aria-hidden="true"></span>
+            <span aria-hidden="true">›</span>
+          </button>
           <div class="pet-card" aria-live="polite">
             <p class="stage-hint" aria-hidden="true">今天也陪花花玩一会儿吧</p>
             <div class="sprite-wrap"><img id="pet-sprite" src="/assets/idle-front.png" alt="李花花"></div>
@@ -51,6 +60,51 @@
             <p id="inner-life-status" class="inner-life-status" role="status" aria-live="polite"></p>
             <div id="inner-life-list" class="inner-life-list"></div>
             <button id="inner-life-more" class="inner-life-more" type="button" hidden>更早的心事</button>
+          </div>
+        </section>
+
+        <section id="visual-gallery-view" class="app-view visual-gallery-view" aria-label="花花的图库" hidden>
+          <div class="inner-life-heading">
+            <button id="visual-gallery-back" type="button" aria-label="返回玩耍">‹ 返回</button>
+            <h2>🖼️ 花花的图库</h2>
+            <button id="visual-gallery-refresh" type="button">刷新</button>
+          </div>
+          <div class="visual-gallery-scroll">
+            <p class="visual-gallery-subtitle">主人和花花一起看过的照片</p>
+            <p id="visual-gallery-status" class="inner-life-status" role="status" aria-live="polite"></p>
+            <div id="visual-gallery-grid" class="visual-gallery-grid"></div>
+            <button id="visual-gallery-more" class="inner-life-more" type="button" hidden>更早的照片</button>
+          </div>
+        </section>
+
+        <section id="visual-gallery-detail-view" class="app-view visual-gallery-detail-view" aria-label="图库照片详情" hidden>
+          <div class="inner-life-heading">
+            <button id="visual-gallery-detail-back" type="button" aria-label="返回图库">‹ 图库</button>
+            <h2>照片详情</h2>
+          </div>
+          <div class="visual-gallery-detail-scroll">
+            <p id="visual-gallery-detail-status" class="inner-life-status" role="status" aria-live="polite"></p>
+            <figure class="visual-gallery-hero">
+              <img id="visual-gallery-original" alt="花花看过的照片" hidden>
+              <figcaption id="visual-gallery-date"></figcaption>
+            </figure>
+            <section class="visual-gallery-owner" aria-labelledby="visual-gallery-owner-title">
+              <h3 id="visual-gallery-owner-title">主人当时说</h3>
+              <p id="visual-gallery-owner-text"></p>
+              <p id="visual-gallery-owner-provenance" class="visual-gallery-provenance">原话 · RAW</p>
+            </section>
+            <section class="visual-gallery-events" aria-labelledby="visual-gallery-events-title">
+              <h3 id="visual-gallery-events-title">花花留下的视觉经历</h3>
+              <div id="visual-gallery-event-list"></div>
+            </section>
+            <section class="visual-gallery-terms" aria-labelledby="visual-gallery-terms-title">
+              <h3 id="visual-gallery-terms-title">检索线索</h3>
+              <div id="visual-gallery-term-list"></div>
+            </section>
+            <details class="visual-gallery-debug">
+              <summary>调试信息</summary>
+              <div id="visual-gallery-debug-content"></div>
+            </details>
           </div>
         </section>
 

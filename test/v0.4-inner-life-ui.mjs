@@ -46,7 +46,8 @@ try {
   assert.match(html, /近 7 天梦境|累计梦境/)
   const mobile = await readFile(new URL('../src/remote/mobile-ui/mobile.js', import.meta.url), 'utf8')
   assert.match(mobile, /💭 小思考/)
-  assert.match(mobile, /这次只是整理了一些最近的事情/)
+  assert.match(mobile, /这次没有形成新的理解/)
+  assert.match(mobile, /查看这次花花想明白了什么/)
   assert.match(mobile, /summary\.textContent =/)
   assert.doesNotMatch(mobile, /summary\.innerHTML/)
   if (process.argv.includes('--serve')) {

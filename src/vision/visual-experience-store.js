@@ -74,6 +74,12 @@ function boundedLimit(value, fallback, maximum = 500) {
   return Math.max(0, Math.min(maximum, Math.floor(number)))
 }
 
+function boundedOffset(value, maximum = 10_000) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  return Math.max(0, Math.min(maximum, Math.floor(number)))
+}
+
 function termWidth(term) {
   return [...String(term ?? '')].length
 }
@@ -517,24 +523,78 @@ export class VisualExperienceStore {
     `).all(String(experienceId ?? '').trim(), count).map(rowToEvent)
   }
 
-  async listExperiences({ limit = 100, before = null } = {}) {
+  async eventsFor(experienceId, { limit = 80 } = {}) {
+    await this.initialize()
+    const count = boundedLimit(limit, 80, 100)
+    if (count === 0) return []
+    return this.db.prepare(`
+      SELECT * FROM visual_events
+      WHERE experience_id = ?
+      ORDER BY occurred_at ASC, event_id ASC
+      LIMIT ?
+    `).all(String(experienceId ?? '').trim(), count).map(rowToEvent)
+  }
+
+  async termsFor(experienceId, { limit = 100 } = {}) {
+    await this.initialize()
+    const count = boundedLimit(limit, 100, 200)
+    if (count === 0) return []
+    return this.db.prepare(`
+      SELECT source_kind, source_ref, term, weight
+      FROM visual_terms
+      WHERE experience_id = ?
+      ORDER BY weight DESC, term ASC
+      LIMIT ?
+    `).all(String(experienceId ?? '').trim(), count).map(row => ({
+      sourceKind: row.source_kind,
+      sourceRef: row.source_ref,
+      term: row.term,
+      weight: Number(row.weight),
+    }))
+  }
+
+  async eventFlagsFor(experienceIds = []) {
+    await this.initialize()
+    const ids = [...new Set((Array.isArray(experienceIds) ? experienceIds : [])
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean))]
+    if (ids.length === 0) return new Map()
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT experience_id, kind
+      FROM visual_events
+      WHERE experience_id IN (${placeholders})
+      GROUP BY experience_id, kind
+    `).all(...ids)
+    const flags = new Map()
+    for (const row of rows) {
+      if (!flags.has(row.experience_id)) flags.set(row.experience_id, new Set())
+      flags.get(row.experience_id).add(row.kind)
+    }
+    return flags
+  }
+
+  async listExperiences({ limit = 100, before = null, offset = 0 } = {}) {
     await this.initialize()
     const count = boundedLimit(limit, 100, 500)
     if (count === 0) return []
     const beforeValue = before === null || before === undefined ? null : Number(before)
+    const pageOffset = boundedOffset(offset)
     if (beforeValue !== null && Number.isFinite(beforeValue)) {
       return this.db.prepare(`
         SELECT * FROM visual_experiences
         WHERE occurred_at < ?
         ORDER BY occurred_at DESC, experience_id ASC
         LIMIT ?
-      `).all(beforeValue, count).map(rowToExperience)
+        OFFSET ?
+      `).all(beforeValue, count, pageOffset).map(rowToExperience)
     }
     return this.db.prepare(`
       SELECT * FROM visual_experiences
       ORDER BY occurred_at DESC, experience_id ASC
       LIMIT ?
-    `).all(count).map(rowToExperience)
+      OFFSET ?
+    `).all(count, pageOffset).map(rowToExperience)
   }
 
   async countExperiences() {

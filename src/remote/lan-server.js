@@ -5,6 +5,7 @@ import { basename, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readInnerLifeTimeline } from '../memory/inner-life-timeline.js'
 import { normalizeVisionImage } from '../brain/vision-input.js'
+import { readVisualGallery, readVisualGalleryDetail } from './visual-gallery.js'
 
 const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
 const DEFAULT_PORT = 17870
@@ -69,7 +70,35 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         const offset = url.searchParams.get('offset') ?? '0'
         if (!/^\d{1,7}$/u.test(offset)) return sendJson(res, 400, { error: 'invalid-offset' })
         if (!runtime.memory?.db?.db) return sendJson(res, 503, { error: 'inner-life-unavailable' })
-        return sendJson(res, 200, readInnerLifeTimeline(runtime.memory.db.db, { offset: Number(offset) }))
+        return sendJson(res, 200, readInnerLifeTimeline(runtime.memory.db.db, {
+          offset: Number(offset),
+          findById: runtime.memory.db.findById?.bind(runtime.memory.db),
+        }))
+      }
+      if (req.method === 'GET' && url.pathname === '/api/visual-gallery') {
+        const limit = url.searchParams.get('limit') ?? '24'
+        const offset = url.searchParams.get('offset') ?? '0'
+        if (!/^\d{1,2}$/u.test(limit) || Number(limit) < 1 || Number(limit) > 40) {
+          return sendJson(res, 400, { error: 'invalid-limit' })
+        }
+        if (!/^\d{1,5}$/u.test(offset) || Number(offset) > 10_000) {
+          return sendJson(res, 400, { error: 'invalid-offset' })
+        }
+        if (!runtime.visualExperience) return sendJson(res, 503, { error: 'visual-gallery-unavailable' })
+        return sendJson(res, 200, await readVisualGallery(runtime, { limit: Number(limit), offset: Number(offset) }))
+      }
+      if (req.method === 'GET' && url.pathname.startsWith('/api/visual-gallery/')) {
+        let experienceId
+        try {
+          experienceId = decodeURIComponent(url.pathname.slice('/api/visual-gallery/'.length))
+        } catch {
+          return sendJson(res, 404, { error: 'not-found' })
+        }
+        if (!/^[a-z0-9_-]{1,120}$/iu.test(experienceId) || !runtime.visualExperience) {
+          return sendJson(res, 404, { error: 'not-found' })
+        }
+        const detail = await readVisualGalleryDetail(runtime, experienceId)
+        return detail ? sendJson(res, 200, detail) : sendJson(res, 404, { error: 'not-found' })
       }
       if (req.method === 'GET' && url.pathname === '/api/pet/state') {
         const presentation = runtime.presentationSnapshot(visualConfig)
