@@ -6,6 +6,10 @@ const UNSAFE_TRACE_PATTERN = /(?:chain[-_ ]?of[-_ ]?thought|hidden(?:[-_ ](?:rea
 function text(value, max = 300) { return typeof value === 'string' ? value.trim().slice(0, max) : '' }
 function clone(value) { return JSON.parse(JSON.stringify(value)) }
 
+function visualRelation(value) {
+  return value === 'current' ? 'current' : value === 'recalled' ? 'recalled' : 'previous'
+}
+
 export function sanitizeSafeTraceText(value, max = 180) {
   const valueText = text(value, max)
   return valueText && !UNSAFE_TRACE_PATTERN.test(valueText) ? valueText : ''
@@ -21,9 +25,9 @@ function safeReasoning(value) {
 
 function publicPayload(type, payload = {}) {
   if (type === 'turn_started') return { mode: payload.mode === 'visual' ? 'visual' : 'text' }
-  if (type === 'visual_selected') return { relation: payload.relation === 'current' ? 'current' : payload.relation === 'recalled' ? 'recalled' : 'previous', caption: text(payload.caption, 120) }
-  if (type === 'visual_image') return { sourceAttachmentId: text(payload.sourceAttachmentId, 100), caption: text(payload.caption, 120), attachment: payload.attachment && typeof payload.attachment === 'object' ? { id: text(payload.attachment.id, 100), thumbnailUrl: text(payload.attachment.thumbnailUrl, 260), thumbnailWidth: payload.attachment.thumbnailWidth, thumbnailHeight: payload.attachment.thumbnailHeight } : null }
-  if (type === 'visual_observation' || type === 'visual_compare') return { summary: sanitizeSafeTraceText(payload.summary, 180) }
+  if (type === 'visual_selected') return { relation: visualRelation(payload.relation), comparison: payload.comparison === true, revisit: payload.revisit === true, caption: text(payload.caption, 120) }
+  if (type === 'visual_image') return { relation: visualRelation(payload.relation), comparison: payload.comparison === true, revisit: payload.revisit === true, sourceAttachmentId: text(payload.sourceAttachmentId, 100), caption: text(payload.caption, 120), attachment: payload.attachment && typeof payload.attachment === 'object' ? { id: text(payload.attachment.id, 100), thumbnailUrl: text(payload.attachment.thumbnailUrl, 260), thumbnailWidth: payload.attachment.thumbnailWidth, thumbnailHeight: payload.attachment.thumbnailHeight } : null }
+  if (type === 'visual_observation' || type === 'visual_compare') return { relation: visualRelation(payload.relation), comparison: payload.comparison === true, summary: sanitizeSafeTraceText(payload.summary, 180) }
   if (type === 'visual_recall') return { sourceAttachmentId: text(payload.sourceAttachmentId, 100), caption: sanitizeSafeTraceText(payload.caption, 120) }
   if (type === 'memory_recall') return { summary: sanitizeSafeTraceText(payload.summary, 180), provenance: payload.provenance === 'inferred' ? 'inferred' : 'confirmed' }
   if (type === 'assistant_message') return { text: sanitizeSafeTraceText(payload.text, 300) }

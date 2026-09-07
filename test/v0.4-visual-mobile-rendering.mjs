@@ -50,7 +50,7 @@ const context = {
 }
 context.globalThis = context
 vm.createContext(context)
-vm.runInContext(source.replace(/startApp\(\)\s*$/u, 'messages = document.querySelector(\'#messages\'); globalThis.__renderTurnEvent = renderTurnEvent'), context, { filename: 'mobile.js' })
+vm.runInContext(source.replace(/startApp\(\)\s*$/u, 'messages = document.querySelector(\'#messages\'); globalThis.__renderTurnEvent = renderTurnEvent; globalThis.__createVisualPresentationState = createVisualPresentationState; globalThis.__renderHistory = renderHistory'), context, { filename: 'mobile.js' })
 
 const events = [
   { type: 'turn_started', payload: { mode: 'visual' } },
@@ -62,29 +62,30 @@ const events = [
   { type: 'assistant_message', payload: { text: '我记得这盆植物了。', reasoning_content: '不要显示这段 CoT' } },
   { type: 'turn_completed', payload: {} },
 ]
-for (const event of events) context.__renderTurnEvent(event)
+const recalledPresentation = context.__createVisualPresentationState()
+for (const event of events) context.__renderTurnEvent(event, recalledPresentation)
 
 assert.equal(fetchCalls, 0, 'rendering recall must not fetch or XHR')
 assert.equal(xhrCalls, 0, 'rendering recall must not construct XHR')
-assert.equal(messages.children.length, 6)
+assert.equal(messages.children.length, 5)
 const rendered = messages.outerHTML
-assert.match(rendered, /vm-recall/u)
-assert.match(rendered, /花花想起以前好像见过/u)
 assert.match(rendered, /花花翻到以前的一张照片/u)
 assert.match(rendered, /conversation-assets\/attachment-old\/thumb\.webp/u)
 assert.match(rendered, /👀 花花重新看了看/u)
 assert.match(rendered, /我记得这盆植物了/u)
+assert.doesNotMatch(rendered, /花花想起以前好像见过/u)
 assert.doesNotMatch(rendered, /我先推理一下：system prompt/u)
 assert.doesNotMatch(rendered, /不要显示这段 CoT/u)
-assert.match(css, /\.vm-recall\s+\.message-bubble/u)
 
 messages.children.length = 0
-context.__renderTurnEvent({ type: 'visual_observation', payload: { summary: '一盆绿叶植物' } })
-assert.match(messages.outerHTML, /👀 看到：一盆绿叶植物/u)
+context.__renderTurnEvent({ type: 'visual_observation', payload: { relation: 'current', summary: '1788110095163 internal observation' } }, context.__createVisualPresentationState())
+assert.match(messages.outerHTML, /👀 花花仔细看了看/u)
+assert.doesNotMatch(messages.outerHTML, /1788110095163/u)
 
 messages.children.length = 0
-context.__renderTurnEvent({ type: 'visual_selected', payload: { relation: 'previous', caption: '↩️ 上一张照片' } })
-assert.match(messages.outerHTML, /上一张照片/u)
+context.__renderTurnEvent({ type: 'visual_selected', payload: { relation: 'previous', caption: '1788110095163 internal id' } }, context.__createVisualPresentationState())
+assert.match(messages.outerHTML, /再回头看看前一张/u)
+assert.doesNotMatch(messages.outerHTML, /1788110095163/u)
 
 console.log('VISUAL_RECALL_DOM=PASS')
 console.log('VISUAL_RECALL_NO_NETWORK=PASS')

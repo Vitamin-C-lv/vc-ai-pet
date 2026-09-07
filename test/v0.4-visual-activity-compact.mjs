@@ -64,7 +64,7 @@ const recalled = await runSession({
   steps: [{ ok: true, observation: recalledSummary, action: 'answer', nextVisualId: '', focus: '无花果', replyMessages: ['我记得这盆无花果。', '书架上那本书也看到了。', '这是第三条重复观察。'] }],
 })
 assert.equal(recalled.result.ok, true)
-assert.equal(recalled.result.final.replyMessages.length, 1)
+assert.deepEqual(recalled.result.final.replyMessages, ['我记得这盆无花果。', '书架上那本书也看到了。'])
 const recalledActivities = (await conversationStore.listForRecentVisualRecall()).filter((message) => message.turnId === 'turn-recalled-compact' && message.kind === 'activity')
 assert.deepEqual(recalledActivities.map((message) => message.text), ['↩️ 花花翻到以前的一张照片', '👀 花花重新看了看'])
 assert.equal(recalledActivities.some((message) => /书架上|这是|画面中/u.test(message.text)), false)

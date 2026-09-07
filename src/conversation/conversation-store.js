@@ -658,7 +658,9 @@ export class ConversationStore {
         ? this.state.attachments.find((item) => item.id === normalizedSourceAttachmentId) ?? null
         : null
       if (normalizedKind === 'media_ref' && (!normalizedSourceAttachmentId || !this.state.attachments.some((item) => item.id === normalizedSourceAttachmentId) || (normalizedAttachment && normalizedAttachment.id !== normalizedSourceAttachmentId))) throw storeError('PET_CONVERSATION_MEDIA_REF_SOURCE_INVALID')
-      const messageAttachment = normalizedAttachment ?? referencedAttachment
+      const messageAttachment = normalizedKind === 'media_ref'
+        ? normalizedAttachment ?? referencedAttachment
+        : normalizedKind === 'dialogue' ? normalizedAttachment : null
       if (messageAttachment && !this.state.attachments.some((item) => item.id === messageAttachment.id)) {
         this.state.attachments.push(messageAttachment)
       }

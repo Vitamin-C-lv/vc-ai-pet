@@ -294,7 +294,81 @@ function formatThinkingDuration(durationMs) {
   return `思考了 ${Math.floor(totalSeconds / 60)}分${totalSeconds % 60}秒`
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null } = {}) {
+const VISUAL_ACTIVITY_TYPES = new Set(['visual_recall', 'visual_selected', 'visual_observation', 'visual_compare'])
+
+function visualRelation(value) {
+  return value === 'current' ? 'current' : value === 'recalled' ? 'recalled' : 'previous'
+}
+
+function createVisualPresentationState({ currentAttachmentId = null } = {}) {
+  return {
+    mode: 'text',
+    currentAttachmentId: typeof currentAttachmentId === 'string' ? currentAttachmentId : null,
+    recalled: false,
+    comparison: false,
+    currentActivityShown: false,
+    recalledActivityShown: false,
+    previousActivityShown: false,
+    observationShown: false,
+    mediaImageCounts: new Map(),
+    finalCount: 0,
+  }
+}
+
+function visualActivityCopy(type, relation) {
+  if (type === 'visual_selected') {
+    if (relation === 'current') return '👀 花花仔细看了看'
+    if (relation === 'recalled') return '↩️ 花花翻到以前的一张照片'
+    return '↩️ 花花再回头看看前一张'
+  }
+  if (type === 'visual_observation') return relation === 'current' ? '👀 花花仔细看了看' : '👀 花花重新看了看'
+  if (type === 'visual_compare') return '🔎 花花对照了这几张'
+  return ''
+}
+
+function visualSourceRelation(source, state) {
+  if (source?.relation) return visualRelation(source.relation)
+  if (source?.sourceAttachmentId && state?.currentAttachmentId && source.sourceAttachmentId === state.currentAttachmentId) return 'current'
+  return 'previous'
+}
+
+function renderVisualActivity({ type, source = {}, state }) {
+  state.mode = 'visual'
+  if (type === 'visual_recall') {
+    state.recalled = true
+    return null
+  }
+  if (!VISUAL_ACTIVITY_TYPES.has(type)) return null
+  const relation = visualSourceRelation(source, state)
+  if (source.comparison === true || type === 'visual_compare') state.comparison = true
+  if (relation === 'recalled') state.recalled = true
+
+  if (type === 'visual_selected') {
+    if (relation === 'current') {
+      if (state.currentActivityShown) return null
+      state.currentActivityShown = true
+    } else if (relation === 'recalled') {
+      if (state.recalledActivityShown) return null
+      state.recalledActivityShown = true
+    } else {
+      if (state.recalled && !state.comparison) return null
+      if (state.previousActivityShown) return null
+      state.previousActivityShown = true
+    }
+    return renderMessage({ role: 'assistant', kind: 'activity', text: visualActivityCopy(type, relation) })
+  }
+
+  if (type === 'visual_compare' || state.comparison || state.observationShown) return null
+  if (relation === 'current' && state.currentActivityShown) return null
+  state.observationShown = true
+  return renderMessage({ role: 'assistant', kind: 'activity', text: visualActivityCopy(type, relation) })
+}
+
+function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
+  return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
+}
+
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
@@ -315,7 +389,8 @@ function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, 
     bubble.append(textNode)
   }
 
-  const thumbnailUrl = typeof attachment?.thumbnailUrl === 'string' ? attachment.thumbnailUrl : ''
+  const canRenderAttachment = showAttachment && (userMessage || kind === 'media_ref')
+  const thumbnailUrl = canRenderAttachment && typeof attachment?.thumbnailUrl === 'string' ? attachment.thumbnailUrl : ''
   const localPreviewUrl = userMessage && /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/iu.test(thumbnailUrl) ? thumbnailUrl : ''
   if (thumbnailUrl && (localPreviewUrl || isSameOriginAssetUrl(thumbnailUrl))) {
     const card = document.createElement('div')
@@ -355,32 +430,35 @@ function line(role, text, attachment = null, reasoning = null) {
 
 const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_recall', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
 
-function renderTurnEvent(event) {
+function renderTurnEvent(event, state = null) {
+  const presentation = state ?? createVisualPresentationState()
   const payload = event?.payload ?? {}
-  if (event?.type === 'turn_started' || event?.type === 'thinking' || event?.type === 'turn_failed') return null
-  if (event?.type === 'visual_recall') {
-    const node = renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
-    node.classList.add('vm-recall')
-    if (typeof payload.sourceAttachmentId === 'string' && payload.sourceAttachmentId) node.classList.add('has-source')
-    return node
+  if (event?.type === 'turn_started') {
+    presentation.mode = payload.mode === 'visual' ? 'visual' : 'text'
+    return null
   }
+  if (event?.type === 'thinking' || event?.type === 'turn_failed') return null
+  if (event?.type === 'visual_recall') return renderVisualActivity({ type: event.type, source: payload, state: presentation })
   if (event?.type === 'visual_selected') {
     removeThinkingMessage(document.querySelector('.thinking-message'))
-    const node = renderMessage({ role: 'assistant', kind: 'activity', text: payload.caption })
-    if (payload.relation === 'recalled') node.classList.add('vm-recalled')
+    const node = renderVisualActivity({ type: event.type, source: payload, state: presentation })
+    if (node && payload.relation === 'recalled') node.classList.add('vm-recalled')
     return node
   }
   if (event?.type === 'visual_image') {
     removeThinkingMessage(document.querySelector('.thinking-message'))
-    return renderMessage({ role: 'assistant', kind: 'media_ref', text: payload.caption, attachment: payload.attachment })
+    presentation.mode = 'visual'
+    const sourceAttachmentId = typeof payload.sourceAttachmentId === 'string' ? payload.sourceAttachmentId : ''
+    const count = presentation.mediaImageCounts.get(sourceAttachmentId) ?? 0
+    presentation.mediaImageCounts.set(sourceAttachmentId, count + 1)
+    if (shouldSkipFirstCurrentMedia(sourceAttachmentId, presentation, count)) return null
+    return renderMessage({ role: 'assistant', kind: 'media_ref', text: '', attachment: payload.attachment })
   }
-  if (event?.type === 'visual_observation') {
-    const summary = typeof payload.summary === 'string' ? payload.summary : ''
-    const recalledTrace = payload.relation === 'recalled' || payload.recalled === true || summary === '👀 花花重新看了看' || summary === '花花重新看了看'
-    return renderMessage({ role: 'assistant', kind: 'activity', text: recalledTrace ? (summary.startsWith('👀') ? summary : `👀 ${summary}`) : `👀 看到：${summary}` })
+  if (event?.type === 'visual_observation' || event?.type === 'visual_compare') return renderVisualActivity({ type: event.type, source: payload, state: presentation })
+  if (event?.type === 'memory_recall') {
+    if (presentation.mode === 'visual') return null
+    return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
   }
-  if (event?.type === 'visual_compare') return renderMessage({ role: 'assistant', kind: 'activity', text: `🔎 对照：${payload.summary ?? ''}` })
-  if (event?.type === 'memory_recall') return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
   if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning)
   if (event?.type === 'turn_completed') {
     removeThinkingMessage(document.querySelector('.thinking-message'))
@@ -435,10 +513,54 @@ function renderHistory(history) {
     line('pet', '汪，在呀。')
     return
   }
-  history.forEach((message) => {
-    if (message.kind === 'activity') renderMessage({ ...message, role: 'assistant' })
-    else if (message.kind === 'media_ref') renderMessage({ ...message, role: 'assistant' })
-    else renderMessage(message)
+  const visualTurnKeys = new Set()
+  const recalledTurnKeys = new Set()
+  const comparisonTurnKeys = new Set()
+  const turnKeyFor = (message, index) => message?.turnId || `message-${index}`
+  history.forEach((message, index) => {
+    const key = turnKeyFor(message, index)
+    if (message?.kind === 'media_ref' || VISUAL_ACTIVITY_TYPES.has(message?.activityType)) visualTurnKeys.add(key)
+    if (message?.activityType === 'visual_recall') recalledTurnKeys.add(key)
+    if (message?.activityType === 'visual_compare') comparisonTurnKeys.add(key)
+  })
+  const presentations = new Map()
+  const presentationFor = (message, index) => {
+    const key = turnKeyFor(message, index)
+    let state = presentations.get(key)
+    if (!state) {
+      state = createVisualPresentationState()
+      state.mode = visualTurnKeys.has(key) ? 'visual' : 'text'
+      state.recalled = recalledTurnKeys.has(key)
+      state.comparison = comparisonTurnKeys.has(key)
+      presentations.set(key, state)
+    }
+    return state
+  }
+
+  history.forEach((message, index) => {
+    const state = presentationFor(message, index)
+    if (message?.role === 'user' && message.attachment?.id) state.currentAttachmentId = message.attachment.id
+
+    if (message.kind === 'activity' && VISUAL_ACTIVITY_TYPES.has(message.activityType)) {
+      renderVisualActivity({ type: message.activityType, source: message, state })
+      return
+    }
+    if (message.kind === 'activity' && message.activityType === 'memory_recall' && state.mode === 'visual') return
+    if (message.kind === 'media_ref') {
+      state.mode = 'visual'
+      const sourceAttachmentId = typeof message.sourceAttachmentId === 'string' ? message.sourceAttachmentId : message.attachment?.id
+      const count = state.mediaImageCounts.get(sourceAttachmentId) ?? 0
+      state.mediaImageCounts.set(sourceAttachmentId, count + 1)
+      if (shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count)) return
+      renderMessage({ ...message, role: 'assistant', text: '', attachment: message.attachment })
+      return
+    }
+    if (message.kind === 'final' && state.mode === 'visual') {
+      const finalLimit = state.recalled ? 1 : 2
+      state.finalCount += 1
+      if (state.finalCount > finalLimit) return
+    }
+    renderMessage(message)
   })
 }
 
@@ -658,6 +780,7 @@ async function runTurnProgress({ message, pendingImage, attachment, thinkingMess
   let completed = false
   const seen = new Set()
   let assistantRendered = false
+  const presentation = createVisualPresentationState({ currentAttachmentId: attachment?.id })
   const deadline = Date.now() + 15 * 60 * 1000
   while (!completed) {
     const poll = await fetchJsonDiagnostic(`/api/pet/chat/turn/${encodeURIComponent(turnId)}?after=${after}`, {}, { stage: 'turn-poll', turnId, hadImage: Boolean(pendingImage), attachmentId: attachment?.id })
@@ -682,7 +805,7 @@ async function runTurnProgress({ message, pendingImage, attachment, thinkingMess
       seen.add(event.seq)
       expectedSeq += 1
       if (event.type === 'assistant_message') assistantRendered = true
-      renderTurnEvent(event)
+      renderTurnEvent(event, presentation)
       scrollMessagesToBottom()
     }
     after = lastSeq

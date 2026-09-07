@@ -176,7 +176,13 @@ export class VisualWorkingSession {
           : candidate.relation === 'recalled'
             ? '↩️ 花花翻到以前的一张照片'
             : '↩️ 花花再回头看看前一张……'
-      const selectedEvent = this.emit('visual_selected', { relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, caption })
+      const selectedEvent = this.emit('visual_selected', {
+        relation: candidate.relation,
+        sourceAttachmentId: candidate.attachmentId,
+        comparison: this.comparison,
+        revisit: alreadyInspected,
+        caption,
+      })
       await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_selected', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: selectedEvent?.seq, activityAt: selectedEvent?.at, turnId: this.turnId, text: caption })
       let publicAttachment
       try {
@@ -188,8 +194,15 @@ export class VisualWorkingSession {
       const imageCaption = candidate.relation === 'recalled'
         ? '花花重新看看这张'
         : candidate.relation === 'current' ? '花花看看这张' : '花花再看看这张'
-      const imageEvent = this.emit('visual_image', { sourceAttachmentId: candidate.attachmentId, attachment: publicAttachment, caption: imageCaption })
-      await this.conversationStore.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', sourceAttachmentId: candidate.attachmentId, activitySeq: imageEvent?.seq, activityAt: imageEvent?.at, turnId: this.turnId, text: caption, attachment: metadata })
+      const imageEvent = this.emit('visual_image', {
+        relation: candidate.relation,
+        sourceAttachmentId: candidate.attachmentId,
+        comparison: this.comparison,
+        revisit: alreadyInspected,
+        attachment: publicAttachment,
+        caption: imageCaption,
+      })
+      await this.conversationStore.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: imageEvent?.seq, activityAt: imageEvent?.at, turnId: this.turnId, text: caption, attachment: metadata })
       this.inspections.push({ visualId, attachmentId: candidate.attachmentId })
       let step
       try {
@@ -227,13 +240,13 @@ export class VisualWorkingSession {
         const compactRecalledTrace = this.recalledSession && !this.comparison
         if (!compactRecalledTrace || !this.recalledObservationTraceShown) {
           const traceText = compactRecalledTrace ? '👀 花花重新看了看' : `看到：${summary}`
-          const observationEvent = this.emit('visual_observation', { summary: compactRecalledTrace ? traceText : summary, focus: safeFocus })
-          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })
+          const observationEvent = this.emit('visual_observation', { relation: candidate.relation, comparison: this.comparison, summary: compactRecalledTrace ? traceText : summary, focus: safeFocus })
+          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', relation: candidate.relation, activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })
           if (compactRecalledTrace) this.recalledObservationTraceShown = true
         }
         if (this.inspections.length >= 1 && this.inspections.some((item) => item.attachmentId !== candidate.attachmentId)) {
-          const compareEvent = this.emit('visual_compare', { summary, focus: safeFocus })
-          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_compare', activitySeq: compareEvent?.seq, activityAt: compareEvent?.at, turnId: this.turnId, text: `对照：${summary}` })
+          const compareEvent = this.emit('visual_compare', { relation: candidate.relation, comparison: true, summary, focus: safeFocus })
+          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_compare', relation: candidate.relation, activitySeq: compareEvent?.seq, activityAt: compareEvent?.at, turnId: this.turnId, text: `对照：${summary}` })
         }
       }
       const forcedFinal = ordinal === MAX_VISUAL_INSPECTIONS_PER_TURN - 1
@@ -263,7 +276,8 @@ export class VisualWorkingSession {
       if (action === 'answer') {
         if (!forcedFinal && (step.nextVisualId || replyMessages.length === 0)) return visualFailure({ reason: 'invalid-visual-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
         if (forcedFinal && replyMessages.length === 0) { final = null; break }
-        const presentationReplyMessages = this.recalledSession && !this.comparison ? replyMessages.slice(0, 1) : replyMessages
+        const presentationLimit = 2
+        const presentationReplyMessages = replyMessages.slice(0, presentationLimit)
         final = { ...step, action: 'answer', nextVisualId: '', replyMessages: presentationReplyMessages }
         break
       }
