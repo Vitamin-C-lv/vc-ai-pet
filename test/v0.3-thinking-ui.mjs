@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const [html, mobileJs, mobileCss, overlay, petCss] = await Promise.all([
+const [html, mobileJs, mobileCss, composerJs, overlay, petCss] = await Promise.all([
   readFile(join(root, 'src/remote/mobile-ui/index.html'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.js'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.css'), 'utf8'),
+  readFile(join(root, 'src/remote/mobile-ui/chat-composer.js'), 'utf8'),
   readFile(join(root, 'src/client/pet-overlay.js'), 'utf8'),
   readFile(join(root, 'src/client/pet.css'), 'utf8'),
 ])
@@ -27,10 +28,14 @@ assert.match(mobileJs, /payload\.result\?\.text/u)
 assert.match(mobileJs, /className = 'thinking-meta'/u)
 assert.match(mobileJs, /meta\.textContent = `🐾 \$\{durationText\}`/u)
 
-const submitBody = mobileJs.slice(mobileJs.indexOf("form.addEventListener('submit'"))
+const submitBody = mobileJs.slice(mobileJs.indexOf('async function submitComposer'))
+assert.notEqual(mobileJs.indexOf('async function submitComposer'), -1)
 assert.ok(submitBody.indexOf("line('user', message, localAttachment)") < submitBody.indexOf('appendThinkingMessage'))
 assert.ok(submitBody.indexOf('appendThinkingMessage') < submitBody.indexOf('runTurnProgress({ message, pendingImage, attachment, thinkingMessage })'))
 assert.match(submitBody, /catch \{\s+removeThinkingMessage\(thinkingMessage\)/su)
+assert.match(composerJs, /form\?\.addEventListener\('submit'/u)
+assert.match(composerJs, /event\.preventDefault\(\)/u)
+assert.match(composerJs, /event\.isComposing|event\.keyCode === 229/u)
 
 assert.match(mobileCss, /\.thinking-bubble\s*\{[^}]*max-width:\s*min\(210px,\s*100%\)/su)
 assert.match(mobileCss, /\.thinking-dots span:nth-child\(2\)\s*\{\s*animation-delay:\s*160ms/su)

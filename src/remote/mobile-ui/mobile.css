@@ -1,5 +1,5 @@
 
-/* A read-only inner-life subpage shares the existing two-tab shell. */
+/* A read-only inner-life subpage shares the existing Home shell. */
 #play-view .inner-life-entry {
   flex: 0 0 44px;
   width: 100%;
@@ -56,18 +56,6 @@
 .inner-life-insight-empty { color: #877669; }
 .inner-life-more { display: block; margin: 16px auto 0; }
 .inner-life-more[hidden] { display: none; }
-#play-view .visual-gallery-entry {
-  flex: 0 0 auto;
-  min-height: 74px;
-  margin-bottom: 0;
-  gap: 10px;
-  text-align: left;
-}
-.gallery-home-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
-.gallery-home-copy strong { font-size: 15px; }
-.gallery-home-copy small, .gallery-home-copy span { color: #927e70; font-size: 11px; font-weight: 400; }
-.gallery-home-preview { display: flex; flex: 0 0 auto; gap: 4px; max-width: 112px; overflow: hidden; }
-.gallery-home-preview img { width: 28px; height: 40px; border-radius: 7px; object-fit: cover; background: #eee4d8; }
 .visual-gallery-scroll, .visual-gallery-detail-scroll { min-height: 0; overflow-y: auto; padding: 6px 16px 24px; }
 .visual-gallery-subtitle { margin: 0 0 12px; color: #877669; font-size: 13px; line-height: 1.7; }
 .visual-gallery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -778,86 +766,8 @@ button:disabled {
   background: #b77b54;
 }
 
-#send-button {
-  flex: 0 0 64px;
-  width: 64px;
-  min-width: 64px;
-  height: 46px;
-  min-height: 46px;
-}
-
-/* The nav is outside both views, so it cannot cover the composer. */
-#bottom-nav,
-.bottom-nav {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: stretch;
-  gap: 4px;
-  width: 100%;
-  height: calc(58px + env(safe-area-inset-bottom));
-  min-height: calc(58px + env(safe-area-inset-bottom));
-  padding: 0 8px env(safe-area-inset-bottom);
-  overflow: hidden;
-  border-top: 1px solid #eadccd;
-  background: #fffdf9;
-  box-shadow: 0 -3px 12px rgba(88, 63, 41, .04);
-  transition: opacity .16s ease, transform .16s ease;
-}
-
-.pet-app.keyboard-open #bottom-nav,
-.pet-app.keyboard-open .bottom-nav {
-  flex-basis: 0;
-  height: 0;
-  min-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  border-top-width: 0;
-  border-top-color: transparent;
-  box-shadow: none;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(8px);
-  pointer-events: none;
-}
-
-.nav-item {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 46px;
-  gap: 2px;
-  padding: 3px 6px;
-  border-radius: 14px;
-  background: transparent;
-  color: #806b5d;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.nav-item.active,
-.nav-item[aria-selected="true"] {
-  background: rgba(183, 123, 84, .12);
-  color: #8f5838;
-  font-weight: 700;
-}
-
-.nav-item:active {
-  background: rgba(183, 123, 84, .18);
-}
-
-.nav-icon {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.nav-label {
-  line-height: 1.2;
-}
-
 /* Local-only diagnostics stay outside the app shell, so they never change
-   chat scrolling, keyboard layout, or the bottom navigation's flex sizing. */
+   chat scrolling or keyboard layout. */
 .diagnostics-panel {
   position: fixed;
   z-index: 30;

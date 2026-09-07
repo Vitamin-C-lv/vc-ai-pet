@@ -6,10 +6,11 @@
     <meta name="theme-color" content="#f5eee3">
     <title>李花花</title>
     <link rel="stylesheet" href="/mobile.css">
+    <link rel="stylesheet" href="/mobile-redesign.css">
   </head>
   <body>
     <main class="pet-app">
-      <header class="app-header">
+      <header id="app-header" class="app-header">
         <div class="header-brand">
           <span class="paw">🐾</span>
           <h1>李花花</h1>
@@ -18,15 +19,9 @@
       </header>
 
       <div class="view-host">
-        <section id="play-view" class="app-view play-view" data-view="play" aria-label="和花花玩耍">
-          <button id="inner-life-open" class="inner-life-entry" type="button" aria-controls="inner-life-view">🌙 花花的梦境 <span aria-hidden="true">›</span></button>
-          <button id="visual-gallery-open" class="inner-life-entry visual-gallery-entry" type="button" aria-controls="visual-gallery-view">
-            <span class="gallery-home-copy">
-              <strong>🖼️ 花花的图库</strong>
-              <small>主人和花花一起看过的照片</small>
-              <span id="gallery-home-count">正在整理……</span>
-            </span>
-            <span id="gallery-home-preview" class="gallery-home-preview" aria-hidden="true"></span>
+        <section id="play-view" class="app-view play-view" data-view="home" aria-label="和花花玩耍">
+          <button id="inner-life-open" class="inner-life-entry" type="button" aria-controls="inner-life-view">
+            <span class="home-entry-copy"><span class="vc-icon vc-icon-moon" aria-hidden="true"></span><span>花花的梦境</span></span>
             <span aria-hidden="true">›</span>
           </button>
           <div class="pet-card" aria-live="polite">
@@ -42,14 +37,45 @@
             <button id="play-button" type="button">玩耍</button>
             <button id="long-button" type="button">长按</button>
           </div>
+          <div class="home-actions" aria-label="主要页面">
+            <button id="house-open" class="home-action" type="button" aria-controls="house-view">
+              <span class="vc-icon vc-icon-construction" aria-hidden="true"></span><span>花花家</span>
+            </button>
+            <button id="chat-open" class="home-action" type="button" aria-controls="chat-view">
+              <span aria-hidden="true">💬</span><span>聊天</span>
+            </button>
+          </div>
+        </section>
+
+        <section id="house-view" class="app-view house-view" aria-label="花花家" hidden>
+          <header class="subpage-header">
+            <button id="house-back" class="icon-button" type="button" aria-label="返回">
+              <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
+            </button>
+            <button id="house-home" class="icon-button" type="button" aria-label="回到主页">
+              <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+            </button>
+            <h2>花花家</h2>
+          </header>
+          <div class="house-content">
+            <span class="house-illustration"><span class="vc-icon vc-icon-construction" aria-hidden="true"></span></span>
+            <h3>花花家</h3>
+            <p>正在施工中…</p>
+            <p class="house-subtext">花花正在慢慢布置自己的小窝。</p>
+          </div>
         </section>
 
         <section id="inner-life-view" class="app-view inner-life-view" aria-label="花花的梦境" hidden>
-          <div class="inner-life-heading">
-            <button id="inner-life-back" type="button" aria-label="返回玩耍">‹ 返回</button>
+          <header class="subpage-header">
+            <button id="inner-life-back" class="icon-button" type="button" aria-label="返回">
+              <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
+            </button>
+            <button id="inner-life-home" class="icon-button" type="button" aria-label="回到主页">
+              <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+            </button>
             <h2>🌙 花花的梦境</h2>
             <button id="inner-life-refresh" type="button">刷新</button>
-          </div>
+          </header>
           <div class="inner-life-scroll">
             <div class="inner-life-stats" aria-label="梦境统计">
               <p><b id="dream-recent">—</b><span>近 7 天梦境</span></p>
@@ -64,11 +90,16 @@
         </section>
 
         <section id="visual-gallery-view" class="app-view visual-gallery-view" aria-label="花花的图库" hidden>
-          <div class="inner-life-heading">
-            <button id="visual-gallery-back" type="button" aria-label="返回玩耍">‹ 返回</button>
+          <header class="subpage-header">
+            <button id="visual-gallery-back" class="icon-button" type="button" aria-label="返回">
+              <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
+            </button>
+            <button id="visual-gallery-home" class="icon-button" type="button" aria-label="回到主页">
+              <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+            </button>
             <h2>🖼️ 花花的图库</h2>
             <button id="visual-gallery-refresh" type="button">刷新</button>
-          </div>
+          </header>
           <div class="visual-gallery-scroll">
             <p class="visual-gallery-subtitle">主人和花花一起看过的照片</p>
             <p id="visual-gallery-status" class="inner-life-status" role="status" aria-live="polite"></p>
@@ -78,10 +109,15 @@
         </section>
 
         <section id="visual-gallery-detail-view" class="app-view visual-gallery-detail-view" aria-label="图库照片详情" hidden>
-          <div class="inner-life-heading">
-            <button id="visual-gallery-detail-back" type="button" aria-label="返回图库">‹ 图库</button>
+          <header class="subpage-header">
+            <button id="visual-gallery-detail-back" class="icon-button" type="button" aria-label="返回图库">
+              <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
+            </button>
+            <button id="visual-gallery-detail-home" class="icon-button" type="button" aria-label="回到主页">
+              <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+            </button>
             <h2>照片详情</h2>
-          </div>
+          </header>
           <div class="visual-gallery-detail-scroll">
             <p id="visual-gallery-detail-status" class="inner-life-status" role="status" aria-live="polite"></p>
             <figure class="visual-gallery-hero">
@@ -110,6 +146,15 @@
 
         <section id="chat-view" class="app-view chat-view" data-view="chat" aria-label="和李花花聊天" hidden>
           <div class="chat">
+            <header class="chat-header">
+              <button id="chat-home" class="icon-button" type="button" aria-label="回到主页">
+                <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+              </button>
+              <h2>李花花</h2>
+              <button id="chat-gallery" class="icon-button" type="button" aria-label="打开花花的图库">
+                <span class="vc-icon vc-icon-gallery" aria-hidden="true"></span>
+              </button>
+            </header>
             <div id="messages" class="messages">
               <article class="message pet-line">
                 <div class="message-bubble">
@@ -118,31 +163,31 @@
                 </div>
               </article>
             </div>
-            <div id="image-preview" class="image-preview" hidden>
-              <img id="image-thumbnail" alt="待发送图片预览">
-              <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
-            </div>
-            <p id="image-status" class="image-status" role="status" aria-live="polite"></p>
-            <form id="chat-form">
-              <button id="image-button" class="image-button" type="button" aria-label="选择图片" title="给花花看一张图片">▧</button>
+            <div class="chat-composer-wrap">
+              <div id="emoji-drawer" class="emoji-drawer" data-open="false" hidden aria-label="表情面板">
+                <div class="emoji-grid" data-emoji-grid></div>
+              </div>
+              <div id="image-preview" class="image-preview" hidden>
+                <img id="image-thumbnail" alt="待发送图片预览">
+                <button id="remove-image" class="remove-image" type="button" aria-label="移除图片">×</button>
+              </div>
+              <p id="image-status" class="image-status" role="status" aria-live="polite"></p>
+              <form id="chat-form">
+              <button id="mic-button" class="icon-button composer-icon-button" type="button" aria-label="语音输入（暂未开放）" title="语音输入后续开放">
+                <span class="vc-icon vc-icon-mic" aria-hidden="true"></span>
+              </button>
+              <button id="image-button" class="legacy-image-button" type="button" aria-label="选择图片" title="给花花看一张图片" hidden>选择图片</button>
               <input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-              <input id="chat-input" maxlength="500" autocomplete="off" placeholder="和花花说句话……" aria-label="聊天内容">
-              <button id="send-button" type="submit">发送</button>
-            </form>
+              <textarea id="chat-input" rows="1" maxlength="500" autocomplete="off" enterkeyhint="send" placeholder="和花花说句话……" aria-label="聊天内容"></textarea>
+              <button id="emoji-button" class="icon-button composer-icon-button" type="button" aria-label="打开表情面板" aria-controls="emoji-drawer" aria-expanded="false">
+                <span class="vc-icon vc-icon-smile" aria-hidden="true"></span>
+              </button>
+              <button id="send-button" class="composer-action-button" type="button" data-mode="add" aria-label="添加图片">+</button>
+              </form>
+            </div>
           </div>
         </section>
       </div>
-
-      <nav id="bottom-nav" class="bottom-nav" aria-label="主要功能">
-        <button class="nav-item active" type="button" data-tab="play" aria-selected="true" aria-controls="play-view">
-          <span class="nav-icon">🐾</span>
-          <span class="nav-label">玩耍</span>
-        </button>
-        <button class="nav-item" type="button" data-tab="chat" aria-selected="false" aria-controls="chat-view">
-          <span class="nav-icon">💬</span>
-          <span class="nav-label">聊天</span>
-        </button>
-      </nav>
     </main>
     <section id="diagnostics-panel" class="diagnostics-panel" role="dialog" aria-modal="true" aria-labelledby="diagnostics-title" hidden>
       <div class="diagnostics-sheet">
@@ -160,6 +205,9 @@
       </div>
     </section>
     <script src="/diagnostics.js"></script>
+    <script src="/navigation.js"></script>
+    <script src="/emoji-drawer.js"></script>
+    <script src="/chat-composer.js"></script>
     <script src="/mobile.js"></script>
   </body>
 </html>

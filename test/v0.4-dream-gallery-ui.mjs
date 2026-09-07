@@ -159,7 +159,7 @@ try {
   }, readOnlyCountsBefore)
 
   const html = await (await fetch(base)).text()
-  assert.match(html, /visual-gallery-open/u)
+  assert.match(html, /chat-gallery/u)
   assert.match(html, /主人和花花一起看过的照片/u)
   assert.match(html, /visual-gallery-detail-view/u)
   const mobile = await readFile(new URL('../src/remote/mobile-ui/mobile.js', import.meta.url), 'utf8')

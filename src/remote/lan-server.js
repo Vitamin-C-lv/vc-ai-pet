@@ -20,6 +20,7 @@ const CONTENT_TYPES = Object.freeze({
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
 })
 const CONVERSATION_ASSET_CONTENT_TYPES = Object.freeze({
   '.jpg': 'image/jpeg',

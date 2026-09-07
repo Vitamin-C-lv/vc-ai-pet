@@ -14,9 +14,14 @@ let imageThumbnail
 let removeImage
 let imageStatus
 let playView
+let houseView
 let chatView
+let appHeader
 let petApp
-let tabButtons = []
+let navigation
+let currentScreen = 'home'
+let composerController
+let emojiController
 let diagnosticsPanel
 let diagnosticsOutput
 let diagnosticsStatus
@@ -30,11 +35,17 @@ const THUMBNAIL_MAX_EDGE = 256
 const IMAGE_QUALITY = 0.9
 const MAX_IMAGE_DATA_URL_BYTES = 7 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const ACTIVE_TAB_STORAGE_KEY = 'vc-ai-pet-mobile-active-tab-v1'
-const DEFAULT_ACTIVE_TAB = 'play'
-const VALID_TABS = new Set(['play', 'chat'])
 const KEYBOARD_OPEN_THRESHOLD = 120
 const KEYBOARD_CLOSE_THRESHOLD = 72
+const SCREEN = globalThis.VcAiPetNavigation?.VC_SCREEN ?? Object.freeze({
+  HOME: 'home',
+  HOUSE: 'house',
+  CHAT: 'chat',
+  GALLERY: 'gallery',
+  GALLERY_DETAIL: 'gallery-detail',
+  DREAMS: 'dreams',
+})
+const VALID_SCREENS = new Set(Object.values(SCREEN))
 let selectedImage = null
 let imageProcessing = false
 let pressTimer = null
@@ -48,7 +59,8 @@ let connectionTapTimer = null
 
 const diagnostics = globalThis.VcAiPetDiagnostics?.createFrontendDiagnostics?.({
   context: () => ({
-    tab: chatView?.hidden === false ? 'chat' : 'play',
+    tab: currentScreen === SCREEN.CHAT ? 'chat' : 'play',
+    screen: currentScreen,
     online: globalThis.navigator?.onLine,
     visibility: document.visibilityState,
     viewportWidth: globalThis.innerWidth,
@@ -185,8 +197,6 @@ let visualGalleryDetailView
 let visualGalleryNextOffset = null
 let visualGalleryLoading = false
 let visualGalleryDetailLoading = false
-let galleryHomeCount
-let galleryHomePreview
 
 function formatInnerLifeTime(value) {
   if (value === null || !Number.isFinite(Number(value))) return '还没有'
@@ -277,39 +287,62 @@ async function loadInnerLife({ more = false } = {}) {
   }
 }
 
+function renderScreen(screen, params = {}) {
+  const nextScreen = VALID_SCREENS.has(screen) ? screen : SCREEN.HOME
+  currentScreen = nextScreen
+  const views = [playView, houseView, chatView, innerLifeView, visualGalleryView, visualGalleryDetailView]
+  views.filter(Boolean).forEach((view) => { view.hidden = true })
+  const view = nextScreen === SCREEN.HOME ? playView
+    : nextScreen === SCREEN.HOUSE ? houseView
+      : nextScreen === SCREEN.CHAT ? chatView
+        : nextScreen === SCREEN.DREAMS ? innerLifeView
+          : nextScreen === SCREEN.GALLERY ? visualGalleryView
+            : visualGalleryDetailView
+  if (view) view.hidden = false
+  if (appHeader) appHeader.hidden = nextScreen !== SCREEN.HOME
+  petApp?.classList.toggle('chat-active', nextScreen === SCREEN.CHAT)
+  if (petApp) petApp.dataset.screen = nextScreen
+  const focusTarget = nextScreen === SCREEN.HOUSE ? '#house-back'
+    : nextScreen === SCREEN.CHAT ? '#chat-home'
+      : nextScreen === SCREEN.DREAMS ? '#inner-life-back'
+        : nextScreen === SCREEN.GALLERY ? '#visual-gallery-back'
+          : nextScreen === SCREEN.GALLERY_DETAIL ? '#visual-gallery-detail-back' : null
+  if (focusTarget) document.querySelector(focusTarget)?.focus?.({ preventScroll: true })
+
+  if (nextScreen === SCREEN.CHAT) {
+    globalThis.requestAnimationFrame?.(() => scrollMessagesToBottom())
+  } else if (nextScreen === SCREEN.DREAMS) {
+    void loadInnerLife()
+  } else if (nextScreen === SCREEN.GALLERY) {
+    void loadGalleryList()
+  } else if (nextScreen === SCREEN.GALLERY_DETAIL) {
+    if (typeof params.experienceId === 'string' && params.experienceId) void loadGalleryDetail(params.experienceId)
+    else document.querySelector('#visual-gallery-detail-status').textContent = '请先从图库选择一张照片。'
+  }
+}
+
+function navigateTo(screen, params = {}) {
+  navigation?.push(screen, params)
+}
+
+function navigateHome() {
+  navigation?.home()
+}
+
+function navigateBack(fallback = SCREEN.HOME) {
+  navigation?.back({ fallback })
+}
+
 function openInnerLife() {
-  setActiveTab('play', { persist: false })
-  playView.hidden = true
-  visualGalleryView.hidden = true
-  visualGalleryDetailView.hidden = true
-  innerLifeView.hidden = false
-  document.querySelector('#inner-life-back').focus({ preventScroll: true })
-  void loadInnerLife()
+  navigateTo(SCREEN.DREAMS)
 }
 
-function renderGalleryHome(payload) {
-  if (!galleryHomeCount || !galleryHomePreview) return
-  const count = Number(payload?.count)
-  galleryHomeCount.textContent = Number.isFinite(count) ? `${count} 张照片` : '照片整理中'
-  galleryHomePreview.replaceChildren()
-  for (const item of (Array.isArray(payload?.items) ? payload.items : []).slice(0, 4)) {
-    if (typeof item?.thumbnailUrl !== 'string' || !item.thumbnailUrl) continue
-    const image = document.createElement('img')
-    image.src = item.thumbnailUrl
-    image.alt = ''
-    image.loading = 'lazy'
-    galleryHomePreview.append(image)
-  }
+function openHouse() {
+  navigateTo(SCREEN.HOUSE)
 }
 
-async function loadGalleryHome() {
-  try {
-    const { payload } = await fetchJsonDiagnostic('/api/visual-gallery?limit=4&offset=0', { cache: 'no-store' }, { stage: 'visual-gallery-home' })
-    if (!Array.isArray(payload?.items) || !Number.isFinite(Number(payload?.count))) throw diagnosticError('VISUAL_GALLERY_INVALID_RESPONSE', 'visual gallery unavailable')
-    renderGalleryHome(payload)
-  } catch {
-    if (galleryHomeCount) galleryHomeCount.textContent = '图库暂时不可用'
-  }
+function openGallery() {
+  navigateTo(SCREEN.GALLERY)
 }
 
 function renderGalleryCard(item) {
@@ -369,7 +402,6 @@ async function loadGalleryList({ more = false } = {}) {
     payload.items.forEach((item) => grid.append(renderGalleryCard(item)))
     visualGalleryNextOffset = payload.nextOffset
     moreButton.hidden = visualGalleryNextOffset === null
-    renderGalleryHome(payload)
     status.textContent = grid.children.length ? '' : '花花还没有找到一起看过的照片。'
   } catch {
     status.textContent = '暂时没能打开图库，请稍后再试。'
@@ -492,15 +524,9 @@ function renderGalleryDetail(payload) {
   renderGalleryDebug(payload?.debug)
 }
 
-async function openGalleryDetail(experienceId) {
-  if (typeof experienceId !== 'string' || !experienceId) return
-  if (visualGalleryDetailLoading) return
+async function loadGalleryDetail(experienceId) {
+  if (typeof experienceId !== 'string' || !experienceId || visualGalleryDetailLoading) return
   visualGalleryDetailLoading = true
-  setActiveTab('play', { persist: false })
-  playView.hidden = true
-  innerLifeView.hidden = true
-  visualGalleryView.hidden = true
-  visualGalleryDetailView.hidden = false
   const status = document.querySelector('#visual-gallery-detail-status')
   status.textContent = '正在打开这段视觉经历……'
   try {
@@ -516,49 +542,9 @@ async function openGalleryDetail(experienceId) {
   }
 }
 
-function openGallery() {
-  setActiveTab('play', { persist: false })
-  playView.hidden = true
-  innerLifeView.hidden = true
-  visualGalleryDetailView.hidden = true
-  visualGalleryView.hidden = false
-  document.querySelector('#visual-gallery-back').focus({ preventScroll: true })
-  void loadGalleryList()
-}
-
-function readStoredTab() {
-  try {
-    const storedTab = globalThis.localStorage?.getItem(ACTIVE_TAB_STORAGE_KEY)
-    return VALID_TABS.has(storedTab) ? storedTab : DEFAULT_ACTIVE_TAB
-  } catch {
-    return DEFAULT_ACTIVE_TAB
-  }
-}
-
-function persistActiveTab(tab) {
-  try { globalThis.localStorage?.setItem(ACTIVE_TAB_STORAGE_KEY, tab) } catch {
-    // Private browsing and disabled storage must not prevent the app from starting.
-  }
-}
-
-function setActiveTab(tab, { persist = true } = {}) {
-  const activeTab = VALID_TABS.has(tab) ? tab : DEFAULT_ACTIVE_TAB
-  if (innerLifeView) innerLifeView.hidden = true
-  if (visualGalleryView) visualGalleryView.hidden = true
-  if (visualGalleryDetailView) visualGalleryDetailView.hidden = true
-  if (playView) playView.hidden = activeTab !== 'play'
-  if (chatView) chatView.hidden = activeTab !== 'chat'
-  tabButtons.forEach((button) => {
-    const isActive = button.dataset.tab === activeTab
-    button.classList.toggle('active', isActive)
-    button.setAttribute('aria-selected', String(isActive))
-  })
-  if (persist) persistActiveTab(activeTab)
-  return activeTab
-}
-
-function restoreActiveTab() {
-  return setActiveTab(readStoredTab(), { persist: false })
+function openGalleryDetail(experienceId) {
+  if (typeof experienceId !== 'string' || !experienceId) return
+  navigateTo(SCREEN.GALLERY_DETAIL, { experienceId })
 }
 
 function scrollMessagesToBottom() {
@@ -847,7 +833,15 @@ function renderHistory(history) {
 }
 
 function updateSendButton() {
-  sendButton.disabled = imageProcessing || (!input.value.trim() && !selectedImage)
+  if (composerController) {
+    composerController.sync()
+    return
+  }
+  const hasText = input.value.trim().length > 0
+  const canSend = hasText || Boolean(selectedImage)
+  sendButton.dataset.mode = canSend ? 'send' : 'add'
+  sendButton.textContent = canSend ? '发送' : '+'
+  sendButton.disabled = imageProcessing
 }
 
 function clearImageSelection({ clearStatus = true } = {}) {
@@ -941,7 +935,6 @@ async function chooseImage() {
   if (!file) return
   clearImageSelection({ clearStatus: false })
   imageProcessing = true
-  imageButton.disabled = true
   imageStatus.textContent = '图片处理中……'
   updateSendButton()
   try {
@@ -964,7 +957,6 @@ async function chooseImage() {
     imageStatus.textContent = '这张图片花花暂时看不了，再换一张试试吧。'
   } finally {
     imageProcessing = false
-    imageButton.disabled = false
     updateSendButton()
   }
 }
@@ -989,10 +981,7 @@ async function loadHistory() {
       throw diagnosticError('HISTORY_INVALID_RESPONSE', 'invalid history')
     }
     renderHistory(history)
-    const chatWasHidden = chatView?.hidden
-    if (chatWasHidden) chatView.hidden = false
-    scrollMessagesToBottom()
-    if (chatWasHidden) chatView.hidden = true
+    if (currentScreen === SCREEN.CHAT) scrollMessagesToBottom()
     setOnline(true)
   } catch { setOnline(false) }
 }
@@ -1111,6 +1100,39 @@ async function runTurnProgress({ message, pendingImage, attachment, thinkingMess
   removeThinkingMessage(thinkingMessage)
 }
 
+async function submitComposer(message = input.value.trim()) {
+  if (imageProcessing) return
+  const pendingImage = selectedImage
+  if (!message && !pendingImage) return
+
+  const restoreInputFocus = document.activeElement === input
+  input.value = ''
+  input.readOnly = true
+  sendButton.disabled = true
+  const localAttachment = pendingImage
+    ? { thumbnailUrl: pendingImage.thumbnailDataUrl }
+    : null
+  line('user', message, localAttachment)
+  const thinkingMessage = appendThinkingMessage({ vision: Boolean(pendingImage) })
+  scrollMessagesToBottom()
+  try {
+    const attachment = pendingImage ? await uploadImage(pendingImage) : null
+    await runTurnProgress({ message, pendingImage, attachment, thinkingMessage })
+    scrollMessagesToBottom()
+  } catch {
+    removeThinkingMessage(thinkingMessage)
+    line('pet', '花花脑袋刚刚卡了一下……')
+    scrollMessagesToBottom()
+    setOnline(false)
+  } finally {
+    input.readOnly = false
+    clearImageSelection()
+    if (restoreInputFocus && currentScreen === SCREEN.CHAT) input.focus({ preventScroll: true })
+    updateSendButton()
+    void refresh()
+  }
+}
+
 function renderDiagnosticsPanel() {
   if (!diagnosticsOutput) return
   const events = diagnostics.list()
@@ -1214,27 +1236,51 @@ function bindDom() {
   removeImage = document.querySelector('#remove-image')
   imageStatus = document.querySelector('#image-status')
   playView = document.querySelector('#play-view')
+  houseView = document.querySelector('#house-view')
   chatView = document.querySelector('#chat-view')
+  appHeader = document.querySelector('#app-header')
   innerLifeView = document.querySelector('#inner-life-view')
   visualGalleryView = document.querySelector('#visual-gallery-view')
   visualGalleryDetailView = document.querySelector('#visual-gallery-detail-view')
-  galleryHomeCount = document.querySelector('#gallery-home-count')
-  galleryHomePreview = document.querySelector('#gallery-home-preview')
+
+  navigation = globalThis.VcAiPetNavigation?.createVcNavigation?.({
+    getScreen: () => currentScreen,
+    goToScreen: renderScreen,
+  }) ?? (() => {
+    const stack = []
+    return {
+      push(screen, params = {}) {
+        if (currentScreen !== screen) stack.push(currentScreen)
+        renderScreen(screen, params)
+      },
+      home() {
+        stack.length = 0
+        renderScreen(SCREEN.HOME)
+      },
+      back({ fallback = SCREEN.HOME } = {}) {
+        renderScreen(stack.pop() || fallback)
+      },
+    }
+  })()
+
   document.querySelector('#inner-life-open')?.addEventListener('click', openInnerLife)
-  document.querySelector('#inner-life-back')?.addEventListener('click', () => { setActiveTab('play'); document.querySelector('#inner-life-open').focus({ preventScroll: true }) })
+  document.querySelector('#house-open')?.addEventListener('click', openHouse)
+  document.querySelector('#chat-open')?.addEventListener('click', () => navigateTo(SCREEN.CHAT))
+  document.querySelector('#house-back')?.addEventListener('click', () => navigateBack(SCREEN.HOME))
+  document.querySelector('#house-home')?.addEventListener('click', navigateHome)
+  document.querySelector('#inner-life-back')?.addEventListener('click', () => navigateBack(SCREEN.HOME))
+  document.querySelector('#inner-life-home')?.addEventListener('click', navigateHome)
   document.querySelector('#inner-life-refresh')?.addEventListener('click', () => { void loadInnerLife() })
   document.querySelector('#inner-life-more')?.addEventListener('click', () => { void loadInnerLife({ more: true }) })
-  document.querySelector('#visual-gallery-open')?.addEventListener('click', openGallery)
-  document.querySelector('#visual-gallery-back')?.addEventListener('click', () => { setActiveTab('play'); document.querySelector('#visual-gallery-open').focus({ preventScroll: true }) })
+  document.querySelector('#visual-gallery-back')?.addEventListener('click', () => navigateBack(SCREEN.HOME))
+  document.querySelector('#visual-gallery-home')?.addEventListener('click', navigateHome)
   document.querySelector('#visual-gallery-refresh')?.addEventListener('click', () => { void loadGalleryList() })
   document.querySelector('#visual-gallery-more')?.addEventListener('click', () => { void loadGalleryList({ more: true }) })
-  document.querySelector('#visual-gallery-detail-back')?.addEventListener('click', () => {
-    visualGalleryDetailView.hidden = true
-    visualGalleryView.hidden = false
-    document.querySelector('#visual-gallery-back').focus({ preventScroll: true })
-  })
+  document.querySelector('#visual-gallery-detail-back')?.addEventListener('click', () => navigateBack(SCREEN.GALLERY))
+  document.querySelector('#visual-gallery-detail-home')?.addEventListener('click', navigateHome)
+  document.querySelector('#chat-home')?.addEventListener('click', navigateHome)
+  document.querySelector('#chat-gallery')?.addEventListener('click', openGallery)
   petApp = document.querySelector('.pet-app')
-  tabButtons = [...document.querySelectorAll('#bottom-nav .nav-item')]
   diagnosticsPanel = document.querySelector('#diagnostics-panel')
   diagnosticsOutput = document.querySelector('#diagnostics-output')
   diagnosticsStatus = document.querySelector('#diagnostics-status')
@@ -1243,17 +1289,12 @@ function bindDom() {
   diagnosticsClearButton = document.querySelector('#diagnostics-clear')
   diagnosticsCloseButton = document.querySelector('#diagnostics-close')
 
-  tabButtons.forEach((button) => {
-    button.addEventListener('click', () => setActiveTab(button.dataset.tab))
-  })
-
   document.querySelector('#pet-button').addEventListener('click', () => action('click'))
   document.querySelector('#play-button').addEventListener('click', () => action('double_click'))
   document.querySelector('#long-button').addEventListener('click', () => action('long_press'))
   imageButton.addEventListener('click', () => imageInput.click())
   imageInput.addEventListener('change', () => { void chooseImage() })
   removeImage.addEventListener('click', () => clearImageSelection())
-  input.addEventListener('input', updateSendButton)
   connection.addEventListener('click', connectionDiagnosticTap)
   diagnosticsCloseButton.addEventListener('click', closeDiagnosticsPanel)
   diagnosticsCopyButton.addEventListener('click', () => { void copyDiagnostics() })
@@ -1278,53 +1319,46 @@ function bindDom() {
     action('double_click')
   })
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault()
-    if (imageProcessing) return
-    const message = input.value.trim()
-    const pendingImage = selectedImage
-    if (!message && !pendingImage) return
-
-    const restoreInputFocus = document.activeElement === input
-    input.value = ''
-    input.readOnly = true
-    imageButton.disabled = true
-    sendButton.disabled = true
-    const localAttachment = pendingImage
-      ? { thumbnailUrl: pendingImage.thumbnailDataUrl }
-      : null
-    line('user', message, localAttachment)
-    const thinkingMessage = appendThinkingMessage({ vision: Boolean(pendingImage) })
-    scrollMessagesToBottom()
-    try {
-      const attachment = pendingImage ? await uploadImage(pendingImage) : null
-      await runTurnProgress({ message, pendingImage, attachment, thinkingMessage })
-      scrollMessagesToBottom()
-    } catch {
-      removeThinkingMessage(thinkingMessage)
-      line('pet', '花花脑袋刚刚卡了一下……')
-      scrollMessagesToBottom()
-      setOnline(false)
-    } finally {
-      input.readOnly = false
-      imageButton.disabled = false
-      clearImageSelection()
-      if (restoreInputFocus && !chatView.hidden) input.focus({ preventScroll: true })
-      updateSendButton()
-      refresh()
-    }
+  let emojiAtBottom = false
+  emojiController = globalThis.VcAiPetEmoji?.wireEmojiDrawer?.({
+    drawer: document.querySelector('#emoji-drawer'),
+    input,
+    button: document.querySelector('#emoji-button'),
+    onToggle: (open) => {
+      if (open) {
+        emojiAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 32
+      }
+      if (emojiAtBottom) globalThis.requestAnimationFrame?.(() => scrollMessagesToBottom())
+    },
   })
+  composerController = globalThis.VcAiPetComposer?.wireVcComposer?.({
+    form,
+    input,
+    micButton: document.querySelector('#mic-button'),
+    emojiButton: document.querySelector('#emoji-button'),
+    actionButton: sendButton,
+    emojiController,
+    openExistingImagePicker: async () => imageButton.click(),
+    sendExistingText: (message) => submitComposer(message),
+    hasPendingImage: () => Boolean(selectedImage),
+    isBusy: () => imageProcessing,
+    showToast: (message) => {
+      imageStatus.textContent = message
+      globalThis.setTimeout(() => {
+        if (imageStatus.textContent === message) imageStatus.textContent = ''
+      }, 1_800)
+    },
+  })
+  renderScreen(SCREEN.HOME)
 }
 
 function startApp() {
   bindDom()
   installDiagnosticHooks()
   bindKeyboardState()
-  restoreActiveTab()
   updateSendButton()
   recordDiagnostic({ level: 'info', stage: 'app', code: 'APP_BOOT' })
   refresh()
-  loadGalleryHome()
   loadHistory()
   setInterval(refresh, 1500)
 }
