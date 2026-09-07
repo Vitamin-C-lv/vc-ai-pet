@@ -2,6 +2,29 @@
 
 Status: FINAL_STATUS=VC_AI_PET_VISUAL_MEMORY_PHASE1_2_READY_FOR_PRODUCTION_DEPLOYMENT
 
+## 2026-09-07 — Fixed LAN endpoint and WSL forwarding self-heal
+
+本次是独立的 Windows LAN maintenance，不改变 Visual Memory、PetMemory、
+Dream、Vision、retrieval、scorer、conversation 数据或 Pet runtime。
+
+```
+OFFICIAL_LAN_ENDPOINT=http://192.168.1.175:17870
+OFFICIAL_LAN_PORT=17870
+WINDOWS_FIXED_LAN_IP=192.168.1.175
+IP_STABILITY_METHOD=ROUTER_DHCP_RESERVATION
+WSL_FORWARDING=SELF_HEAL_CONNECTADDRESS
+SELF_HEAL_SCRIPT=scripts/windows/vc-ai-pet-lan-forwarding-self-heal.ps1
+PET_RUNTIME_MODIFIED=NO
+VISUAL_MEMORY_MODIFIED=NO
+PRODUCTION_DATA_MODIFIED=NO
+```
+
+当前 Windows 仍使用 DHCP；DHCP reservation 需要由路由器侧完成。本机
+self-heal 在 Windows 不再拥有 .175 时 fail-closed，不会将新地址变成正式
+endpoint。Android Companion fresh-install 默认同步为 192.168.1.175:17870，
+已有 pet_host preference 保留。完整操作与测试边界见
+[LAN_FORWARDING_SELF_HEAL.md](docs/LAN_FORWARDING_SELF_HEAL.md)。
+
 ## 2026-09-07 — Visual Memory Phase 1.2（Long-Term Retrieval Precision + Activity Trace Compact）
 
 修复 Android 真机长期视觉复验再次失败：真实根因不是 observation term pollution，
