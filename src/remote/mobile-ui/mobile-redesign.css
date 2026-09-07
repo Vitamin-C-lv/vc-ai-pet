@@ -42,6 +42,7 @@
 .vc-icon-gallery { -webkit-mask-image: url('/icons/gallery.svg'); mask-image: url('/icons/gallery.svg'); }
 .vc-icon-mic { -webkit-mask-image: url('/icons/mic.svg'); mask-image: url('/icons/mic.svg'); }
 .vc-icon-smile { -webkit-mask-image: url('/icons/smile.svg'); mask-image: url('/icons/smile.svg'); }
+.vc-icon-plus { -webkit-mask-image: url('/icons/plus.svg'); mask-image: url('/icons/plus.svg'); }
 .vc-icon-moon { -webkit-mask-image: url('/icons/moon.svg'); mask-image: url('/icons/moon.svg'); }
 .vc-icon-construction { -webkit-mask-image: url('/icons/construction.svg'); mask-image: url('/icons/construction.svg'); }
 
@@ -108,6 +109,7 @@
   font-weight: 600;
 }
 
+#chat-view,
 .chat-view {
   padding: 0;
   overflow: hidden;
@@ -125,6 +127,12 @@
   display: grid;
   grid-template-columns: var(--vc-touch) minmax(0, 1fr) var(--vc-touch);
   align-items: center;
+  width: 100%;
+  border-radius: 0;
+  background: var(--vc-bg);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .chat-header .icon-button:last-child { justify-self: end; }
@@ -149,9 +157,9 @@
 }
 
 #chat-form {
-  display: grid;
-  grid-template-columns: var(--vc-touch) minmax(0, 1fr) var(--vc-touch) auto;
+  display: flex;
   align-items: end;
+  flex: 0 0 auto;
   gap: 6px;
   height: auto;
   min-height: var(--vc-touch);
@@ -161,13 +169,30 @@
 }
 
 .composer-icon-button {
+  flex: 0 0 var(--vc-touch);
   align-self: end;
   color: var(--vc-muted);
 }
 
+#image-button.composer-add-button {
+  flex: 0 0 var(--vc-touch);
+  width: var(--vc-touch);
+  min-width: var(--vc-touch);
+  height: var(--vc-touch);
+  min-height: var(--vc-touch);
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  color: var(--vc-muted);
+  background: transparent;
+}
+
+#image-button.composer-add-button:active { background: rgba(183, 123, 84, .14); }
+
 #chat-input {
-  grid-column: 2;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   min-height: var(--vc-touch);
   max-height: 132px;
   margin: 0;
@@ -188,10 +213,11 @@
   box-shadow: 0 0 0 3px rgba(201, 149, 112, .16);
 }
 
-#emoji-button { grid-column: 3; }
-
 .composer-action-button {
-  grid-column: 4;
+  display: inline-grid;
+  flex: 0 0 58px;
+  place-items: center;
+  width: 58px;
   min-width: 58px;
   height: var(--vc-touch);
   min-height: var(--vc-touch);
@@ -203,23 +229,10 @@
   white-space: nowrap;
 }
 
-.composer-action-button[data-mode="add"] {
-  width: var(--vc-touch);
-  min-width: var(--vc-touch);
-  padding: 0;
-  background: #d0a27f;
-  font-size: 0;
-}
-
-.composer-action-button[data-mode="add"]::before {
-  display: block;
-  width: 25px;
-  height: 25px;
-  margin: auto;
-  background-color: currentColor;
-  content: '';
-  -webkit-mask: url('/icons/plus.svg') center / contain no-repeat;
-  mask: url('/icons/plus.svg') center / contain no-repeat;
+.composer-action-button[hidden] {
+  display: inline-grid;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .emoji-drawer {
@@ -371,7 +384,13 @@
 @media (max-width: 380px) {
   .chat-composer-wrap { padding-left: 7px; padding-right: 7px; }
   #chat-form { gap: 3px; }
-  .composer-action-button:not([data-mode="add"]) { min-width: 54px; padding-left: 9px; padding-right: 9px; }
+  .composer-action-button {
+    flex-basis: 54px;
+    width: 54px;
+    min-width: 54px;
+    padding-left: 9px;
+    padding-right: 9px;
+  }
 }
 
 @media (max-height: 620px) {

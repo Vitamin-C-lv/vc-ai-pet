@@ -310,6 +310,8 @@ function renderScreen(screen, params = {}) {
   if (focusTarget) document.querySelector(focusTarget)?.focus?.({ preventScroll: true })
 
   if (nextScreen === SCREEN.CHAT) {
+    composerController?.sync?.()
+    scheduleComposerTextareaHeight()
     globalThis.requestAnimationFrame?.(() => scrollMessagesToBottom())
   } else if (nextScreen === SCREEN.DREAMS) {
     void loadInnerLife()
@@ -839,9 +841,14 @@ function updateSendButton() {
   }
   const hasText = input.value.trim().length > 0
   const canSend = hasText || Boolean(selectedImage)
-  sendButton.dataset.mode = canSend ? 'send' : 'add'
-  sendButton.textContent = canSend ? '发送' : '+'
+  sendButton.hidden = !canSend
   sendButton.disabled = imageProcessing
+}
+
+function scheduleComposerTextareaHeight() {
+  const sync = () => globalThis.VcAiPetComposer?.syncComposerTextareaHeight?.(input)
+  if (typeof globalThis.requestAnimationFrame === 'function') globalThis.requestAnimationFrame(sync)
+  else globalThis.setTimeout?.(sync, 0)
 }
 
 function clearImageSelection({ clearStatus = true } = {}) {
@@ -850,6 +857,18 @@ function clearImageSelection({ clearStatus = true } = {}) {
   imagePreview.hidden = true
   imageInput.value = ''
   if (clearStatus) imageStatus.textContent = ''
+  updateSendButton()
+}
+
+function restoreImageSelection(image) {
+  if (!image) {
+    updateSendButton()
+    return
+  }
+  selectedImage = image
+  imageThumbnail.src = image.thumbnailDataUrl
+  imagePreview.hidden = false
+  imageStatus.textContent = '已选择一张图片'
   updateSendButton()
 }
 
@@ -1105,19 +1124,24 @@ async function submitComposer(message = input.value.trim()) {
   const pendingImage = selectedImage
   if (!message && !pendingImage) return
 
+  const draftText = input.value
   const restoreInputFocus = document.activeElement === input
   input.value = ''
   input.readOnly = true
   sendButton.disabled = true
+  composerController?.sync?.()
+  scheduleComposerTextareaHeight()
   const localAttachment = pendingImage
     ? { thumbnailUrl: pendingImage.thumbnailDataUrl }
     : null
   line('user', message, localAttachment)
   const thinkingMessage = appendThinkingMessage({ vision: Boolean(pendingImage) })
   scrollMessagesToBottom()
+  let completed = false
   try {
     const attachment = pendingImage ? await uploadImage(pendingImage) : null
     await runTurnProgress({ message, pendingImage, attachment, thinkingMessage })
+    completed = true
     scrollMessagesToBottom()
   } catch {
     removeThinkingMessage(thinkingMessage)
@@ -1126,9 +1150,16 @@ async function submitComposer(message = input.value.trim()) {
     setOnline(false)
   } finally {
     input.readOnly = false
-    clearImageSelection()
+    if (completed) {
+      clearImageSelection()
+    } else {
+      input.value = draftText
+      restoreImageSelection(pendingImage)
+      if (!pendingImage) updateSendButton()
+    }
     if (restoreInputFocus && currentScreen === SCREEN.CHAT) input.focus({ preventScroll: true })
     updateSendButton()
+    scheduleComposerTextareaHeight()
     void refresh()
   }
 }
@@ -1292,7 +1323,6 @@ function bindDom() {
   document.querySelector('#pet-button').addEventListener('click', () => action('click'))
   document.querySelector('#play-button').addEventListener('click', () => action('double_click'))
   document.querySelector('#long-button').addEventListener('click', () => action('long_press'))
-  imageButton.addEventListener('click', () => imageInput.click())
   imageInput.addEventListener('change', () => { void chooseImage() })
   removeImage.addEventListener('click', () => clearImageSelection())
   connection.addEventListener('click', connectionDiagnosticTap)
@@ -1335,10 +1365,10 @@ function bindDom() {
     form,
     input,
     micButton: document.querySelector('#mic-button'),
-    emojiButton: document.querySelector('#emoji-button'),
-    actionButton: sendButton,
+    addButton: imageButton,
+    sendButton,
     emojiController,
-    openExistingImagePicker: async () => imageButton.click(),
+    openExistingImagePicker: async () => imageInput.click(),
     sendExistingText: (message) => submitComposer(message),
     hasPendingImage: () => Boolean(selectedImage),
     isBusy: () => imageProcessing,

@@ -2,6 +2,62 @@
 
 Status: FINAL_STATUS=READY_FOR_PRODUCTION_DEPLOYMENT
 
+## 2026-09-08 — Android UI Acceptance Small Fix: Composer + Chat Header
+
+基于用户指定的 `5b968f6a86acb8d8211861871b4391f7562367c6` 建立独立
+worktree。本次只调整移动端 Chat composer 的 Plus/Send 分离、textarea
+autosize、emoji 插入辅助、现有图片选择器接线，以及 Chat sticky header/shell
+的 CSS 特异性与布局；复用现有 upload、attachmentId、chat start/turn 和视觉
+渲染链路。没有部署生产，也没有修改导航协议、Chat 后端、Visual Memory、Dream、
+PetMemory、Local Brain、LAN 或 Android native shell。
+
+FINAL_STATUS=READY_FOR_PRODUCTION_DEPLOYMENT
+BASE_COMMIT=5b968f6a86acb8d8211861871b4391f7562367c6
+BRANCH=feat/mobile-ui-composer-polish
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-mobile-ui-composer-polish
+COMMIT=RECORDED_IN_GIT
+REMOTE_HEAD=PUSHED_TO_ORIGIN
+WORKTREE_STATUS=CLEAN_AFTER_COMMIT
+TEXTAREA_AUTOGROW=PASS
+TEXTAREA_AUTOSHRINK=PASS
+TEXTAREA_RESET_AFTER_SEND=PASS
+TEXTAREA_MAX_HEIGHT=132
+PLUS_ALWAYS_VISIBLE=PASS
+SEND_VISIBLE_EMPTY=PASS
+SEND_VISIBLE_TEXT=PASS
+SEND_VISIBLE_IMAGE=PASS
+SEND_VISIBLE_TEXT_AND_IMAGE=PASS
+TEXT_THEN_IMAGE=PASS
+IMAGE_THEN_TEXT=PASS
+TEXT_DRAFT_PRESERVED=PASS
+ATTACHMENT_PRESERVED=PASS
+SECOND_IMAGE_UPLOADER_CREATED=NO
+CHAT_API_MODIFIED=NO
+EMOJI_INSERT_AUTOSIZE=PASS
+IME_GUARD=PASS
+CHAT_HEADER_WHITE_FRAME_REMOVED=PASS
+CHAT_HEADER_TITLE_CENTERED=PASS
+CHAT_HEADER_STICKY=PASS
+SAFE_AREA=PASS
+NAVIGATION_REGRESSION=PASS
+GALLERY_REGRESSION=PASS
+DREAM_REGRESSION=PASS
+VISUAL_PRESENTATION_REGRESSION=PASS
+PET_MEMORY_MODIFIED=NO
+VISUAL_DB_MODIFIED=NO
+DREAM_LOGIC_MODIFIED=NO
+LOCAL_BRAIN_MODIFIED=NO
+LAN_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+ANDROID_MANUAL_ACCEPTANCE=NOT_RUN
+
+纯 VM/假 DOM 的 `test/v0.4-mobile-composer-polish.mjs` 覆盖 A–M 行为；现有
+mobile navigation、Dream/Gallery、Visual Presentation Cleanup、Visual Memory
+1.2、Visual Memory 及 smoke 等价 Node 命令全部通过。浏览器 computed-style
+探针也确认 `#chat-view` padding 为 `0px`、Chat header 使用页面暖色背景且无
+shadow/radius、三列为 `44px 1fr 44px`、标题居中、composer 为 flex、隐藏 Send
+仍预留固定槽位。真实 Android 设备/键盘接受测试仍留在部署前手工边界。
+
 ## 2026-09-07 — Mobile UI / Navigation Redesign
 
 基于 contextual visual recall follow-up 的只读基线建立独立 worktree。本次只改

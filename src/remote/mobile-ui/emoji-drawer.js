@@ -21,14 +21,24 @@
   }
 
   function insertEmoji(textarea, emoji) {
+    if (!textarea || textarea.readOnly) return false
     const value = textarea.value || ''
     const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : value.length
     const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start
-    textarea.value = value.slice(0, start) + emoji + value.slice(end)
-    const next = start + emoji.length
+    const insertedEmoji = typeof emoji === 'string' ? emoji : ''
+    if (!insertedEmoji) return false
+    const maxLength = Number(textarea.maxLength)
+    const selectedLength = Math.max(0, end - start)
+    const remainingLength = Number.isFinite(maxLength) && maxLength >= 0
+      ? maxLength - (value.length - selectedLength)
+      : Number.POSITIVE_INFINITY
+    if (insertedEmoji.length > remainingLength) return false
+    textarea.value = value.slice(0, start) + insertedEmoji + value.slice(end)
+    const next = start + insertedEmoji.length
     textarea.setSelectionRange?.(next, next)
     if (typeof global.Event === 'function') textarea.dispatchEvent(new global.Event('input', { bubbles: true }))
     textarea.focus?.({ preventScroll: true })
+    return true
   }
 
   function wireEmojiDrawer({ drawer, input, button, onToggle = () => {} } = {}) {
