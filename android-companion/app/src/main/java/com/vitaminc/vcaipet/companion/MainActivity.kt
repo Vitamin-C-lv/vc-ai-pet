@@ -17,6 +17,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var petWebView: WebView
@@ -30,7 +32,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var editAddressButton: Button
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
-    private var petAddress: LanAddress? = null
+    private val endpointProbeExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private var activeEndpoint: LanAddress? = null
+    private var endpointProbeGeneration = 0L
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -59,18 +63,12 @@ class MainActivity : ComponentActivity() {
         installBackNavigation()
         hideSystemBars()
 
-        val savedHost = preferences.getString(PREFERENCE_HOST, null)
-        if (savedHost.isNullOrBlank()) {
-            showConnectionForm(DEFAULT_HOST)
-        } else {
-            val savedAddress = runCatching { LanAddress.parse(savedHost) }.getOrNull()
-            if (savedAddress == null) {
-                showConnectionForm(savedHost)
-                hostInput.error = getString(R.string.invalid_address)
-            } else {
-                loadPet(savedAddress)
-            }
-        }
+        val settings = readEndpointSettings()
+        val initialHost = settings.lastSuccessfulEndpoint?.hostPort
+            ?: preferences.getString(PREFERENCE_HOST, null)
+            ?: settings.lanEndpoint.hostPort
+        showConnectionForm(initialHost)
+        connectUsingConfiguredEndpoints(settings)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -117,11 +115,20 @@ class MainActivity : ComponentActivity() {
     private fun configureConnectionUi() {
         connectButton.setOnClickListener { connectFromInput() }
         retryButton.setOnClickListener {
-            val address = petAddress
-            if (address == null) connectFromInput() else loadPet(address)
+            val address = activeEndpoint
+            if (address == null || readEndpointSettings().mode == ConnectionMode.AUTO) {
+                connectUsingConfiguredEndpoints()
+            } else {
+                loadPet(address)
+            }
         }
         editAddressButton.setOnClickListener {
-            showConnectionForm(petAddress?.hostPort ?: hostInput.text.toString())
+            val settings = readEndpointSettings()
+            showConnectionForm(
+                activeEndpoint?.hostPort
+                    ?: settings.lastSuccessfulEndpoint?.hostPort
+                    ?: hostInput.text.toString().ifBlank { settings.lanEndpoint.hostPort },
+            )
         }
     }
 
@@ -138,6 +145,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectFromInput() {
+        endpointProbeGeneration += 1
         hostInput.error = null
         val address = runCatching { LanAddress.parse(hostInput.text.toString()) }.getOrNull()
         if (address == null) {
@@ -147,12 +155,88 @@ class MainActivity : ComponentActivity() {
         loadPet(address)
     }
 
+    private fun connectUsingConfiguredEndpoints(settings: EndpointSettings = readEndpointSettings()) {
+        endpointProbeGeneration += 1
+        val generation = endpointProbeGeneration
+        endpointProbeExecutor.execute {
+            val selected = firstReachableEndpoint(settings) { endpoint ->
+                EndpointProbe.isAvailable(endpoint)
+            }
+            runOnUiThread {
+                if (generation != endpointProbeGeneration || isFinishing || isDestroyed) return@runOnUiThread
+                if (selected == null) {
+                    activeEndpoint = null
+                    showConnectionError()
+                } else {
+                    rememberSuccessfulEndpoint(selected)
+                    loadPet(selected)
+                }
+            }
+        }
+    }
+
+    private fun readEndpointSettings(): EndpointSettings {
+        val lanEndpoint = readEndpoint(
+            ConnectionPreferenceKeys.LAN_ENDPOINT,
+            ConnectionDefaults.LAN_ENDPOINT,
+        )
+        val remoteEndpoint = readEndpoint(
+            ConnectionPreferenceKeys.REMOTE_ENDPOINT,
+            ConnectionDefaults.REMOTE_ENDPOINT,
+        )
+        val mode = ConnectionMode.fromPreference(
+            preferences.getString(ConnectionPreferenceKeys.CONNECTION_MODE, null),
+        )
+        val lastSuccessfulEndpoint = listOf(
+            preferences.getString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, null),
+            preferences.getString(PREFERENCE_HOST, null),
+        ).asSequence()
+            .filterNotNull()
+            .mapNotNull { runCatching { LanAddress.parse(it) }.getOrNull() }
+            .firstOrNull()
+
+        val preferenceEditor = preferences.edit()
+            .putString(ConnectionPreferenceKeys.LAN_ENDPOINT, lanEndpoint.hostPort)
+            .putString(ConnectionPreferenceKeys.REMOTE_ENDPOINT, remoteEndpoint.hostPort)
+            .putString(ConnectionPreferenceKeys.CONNECTION_MODE, mode.name)
+        if (lastSuccessfulEndpoint != null) {
+            preferenceEditor.putString(
+                ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT,
+                lastSuccessfulEndpoint.hostPort,
+            )
+        }
+        preferenceEditor.apply()
+
+        return EndpointSettings(
+            lanEndpoint = lanEndpoint,
+            remoteEndpoint = remoteEndpoint,
+            mode = mode,
+            lastSuccessfulEndpoint = lastSuccessfulEndpoint,
+        )
+    }
+
+    private fun readEndpoint(key: String, fallback: String): LanAddress {
+        val raw = preferences.getString(key, null) ?: fallback
+        return runCatching { LanAddress.parse(raw) }
+            .getOrElse { LanAddress.parse(fallback) }
+    }
+
+    private fun rememberSuccessfulEndpoint(address: LanAddress) {
+        preferences.edit()
+            .putString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, address.hostPort)
+            .putString(PREFERENCE_HOST, address.hostPort)
+            .apply()
+    }
+
     private fun loadPet(address: LanAddress) {
-        petAddress = address
-        preferences.edit().putString(PREFERENCE_HOST, address.hostPort).apply()
+        activeEndpoint = address
+        preferences.edit()
+            .putString(PREFERENCE_HOST, address.hostPort)
+            .putString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, address.hostPort)
+            .apply()
         petWebView.webViewClient = PetWebViewClient(address) {
             runOnUiThread {
-                if (petAddress == address) showConnectionError()
+                if (activeEndpoint == address) showConnectionError()
             }
         }
         connectionPanel.visibility = View.GONE
@@ -196,6 +280,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        endpointProbeGeneration += 1
+        endpointProbeExecutor.shutdownNow()
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = null
         if (::petWebView.isInitialized) {
@@ -206,7 +292,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val DEFAULT_HOST = "192.168.1.129:17870"
         private const val PREFERENCES_NAME = "pet_connection"
         private const val PREFERENCE_HOST = "pet_host"
         private val IMAGE_MIME_TYPES = arrayOf(

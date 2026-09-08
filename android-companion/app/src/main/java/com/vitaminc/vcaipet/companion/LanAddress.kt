@@ -83,6 +83,7 @@ class LanAddress private constructor(
             return octets[0] == 10
                 || (octets[0] == 172 && octets[1] in 16..31)
                 || (octets[0] == 192 && octets[1] == 168)
+                || (octets[0] == 100 && octets[1] in 64..127)
         }
     }
 }
