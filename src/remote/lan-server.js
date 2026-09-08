@@ -5,6 +5,7 @@ import { basename, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readInnerLifeTimeline } from '../memory/inner-life-timeline.js'
 import { normalizeVisionImage } from '../brain/vision-input.js'
+import { createChatSubmissionIdempotency } from './chat-submission-idempotency.js'
 import { readVisualGallery, readVisualGalleryDetail } from './visual-gallery.js'
 
 const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
@@ -59,8 +60,9 @@ export function actionToInteractionKind(action, state = {}) {
   return null
 }
 
-export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console } = {}) {
+export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console, submissionRegistry = null } = {}) {
   const assets = resolve(assetRoot)
+  const chatSubmissionIdempotency = submissionRegistry ?? createChatSubmissionIdempotency()
 
   return async (req, res) => {
     if (!isAllowedLanAddress(req.socket?.remoteAddress)) return sendJson(res, 403, { error: 'lan-only' })
@@ -172,6 +174,11 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         const body = await readJsonBody(req, CHAT_BODY_LIMIT_BYTES)
         const message = typeof body?.message === 'string' ? body.message.trim() : ''
         if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
+        const hasSubmissionId = Object.hasOwn(body ?? {}, 'submissionId')
+        const submissionId = hasSubmissionId ? body.submissionId : null
+        if (hasSubmissionId && (typeof submissionId !== 'string' || !/^[a-z0-9_-]{1,80}$/iu.test(submissionId))) {
+          return sendJson(res, 400, { error: 'invalid-submission-id' })
+        }
         let image = null
         let attachment = null
         let attachmentId = null
@@ -179,22 +186,48 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
           if (Object.hasOwn(body ?? {}, 'image') || typeof body?.attachmentId !== 'string') return sendJson(res, 400, { error: 'invalid-image' })
           attachmentId = body.attachmentId
           if (!/^[a-z0-9_-]{1,80}$/iu.test(attachmentId)) return sendJson(res, 400, { error: 'invalid-image' })
-          const metadata = await conversationStore?.attachment?.(attachmentId)
-          if (conversationStore?.attachment && !metadata) return sendJson(res, 400, { error: 'invalid-image' })
         } else {
           try { image = normalizeVisionImage(body?.image) } catch { return sendJson(res, 400, { error: 'invalid-image' }) }
         }
         if ((message.length < 1 && !image && !attachmentId) || message.length > 500) return sendJson(res, 400, { error: 'invalid-message' })
+        if (submissionId) {
+          try {
+            const replay = chatSubmissionIdempotency.lookup({ submissionId, message, attachmentId })
+            if (replay) return sendJson(res, 202, {
+              ok: true,
+              turnId: replay.turnId,
+              submissionId,
+              idempotentReplay: true,
+            })
+          } catch (error) {
+            if (error?.code === 'SUBMISSION_ID_CONFLICT') return sendJson(res, 409, { error: 'SUBMISSION_ID_CONFLICT' })
+            if (error?.code === 'SUBMISSION_ID_INVALID') return sendJson(res, 400, { error: 'invalid-submission-id' })
+            throw error
+          }
+        }
+        if (attachmentId) {
+          const metadata = await conversationStore?.attachment?.(attachmentId)
+          if (conversationStore?.attachment && !metadata) return sendJson(res, 400, { error: 'invalid-image' })
+        }
         if (typeof runtime.startChatTurn !== 'function') return sendJson(res, 503, { error: 'turn-transport-unavailable' })
         let started
         try {
-          started = runtime.startChatTurn({ userText: message, image, attachment, attachmentId })
+          const createTurn = () => runtime.startChatTurn({ userText: message, image, attachment, attachmentId })
+          started = submissionId
+            ? chatSubmissionIdempotency.start({ submissionId, message, attachmentId, createTurn })
+            : createTurn()
         } catch (error) {
           if (error?.code === 'PET_TURN_MANAGER_CAPACITY') return sendJson(res, 503, { error: 'turn-capacity' })
+          if (error?.code === 'SUBMISSION_ID_CONFLICT') return sendJson(res, 409, { error: 'SUBMISSION_ID_CONFLICT' })
+          if (error?.code === 'SUBMISSION_ID_INVALID') return sendJson(res, 400, { error: 'invalid-submission-id' })
           throw error
         }
         if (!started?.turnId) return sendJson(res, 500, { error: 'turn-start-failed' })
-        return sendJson(res, 202, { ok: true, turnId: started.turnId })
+        return sendJson(res, 202, {
+          ok: true,
+          turnId: started.turnId,
+          ...(submissionId ? { submissionId, idempotentReplay: started.idempotentReplay === true } : {}),
+        })
       }
       if (req.method === 'GET' && url.pathname.startsWith('/api/pet/chat/turn/')) {
         const turnId = url.pathname.slice('/api/pet/chat/turn/'.length)
@@ -223,10 +256,10 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
   }
 }
 
-export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console } = {}) {
+export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console, submissionRegistry = null } = {}) {
   if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
   if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
-  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger }))
+  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger, submissionRegistry }))
   await new Promise((resolveStart, rejectStart) => {
     server.once('error', rejectStart)
     server.listen(port, host, () => {

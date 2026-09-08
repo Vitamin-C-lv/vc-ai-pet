@@ -1,6 +1,76 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_GITHUB_REVIEW
+Status: FINAL_STATUS=READY_FOR_GITHUB_FINAL_REVIEW
+
+## 2026-09-08 — Final Chat Start Idempotency + Reload Recovery Fix
+
+基于用户指定的 `d271afdcc84cd5b4a3f9e9ee28b61b7a6bfaf416` 建立独立
+worktree `fix/chat-start-idempotency`。本轮把提交身份从页面生命周期提升到
+host-lifetime 的 `/api/pet/chat/start` 边界：前端每次显式发送生成独立
+`submissionId`，服务端 host-RAM registry 记录 `submissionId -> turnId` 与
+`message + attachmentId` fingerprint；同 ID 同 payload 返回同一 turn 且不会再次
+调用 `runtime.startChatTurn`，同 ID 不同 payload 返回 409
+`SUBMISSION_ID_CONFLICT`。registry 为最多 256 条、24 小时 TTL 的 LRU/TTL 内存
+结构，不进入 ConversationStore、PetMemory 或 Visual DB；Pet Host 重启后的全局
+exactly-once 不作保证。
+
+mobile submission state 现在把 pending submission 的非敏感元数据写入
+`localStorage`：只保存 schema、submissionId、message、attachmentId、stage、
+turnId、after、createdAt 与 hasImage，不保存图片 base64、tokens、CoT 或 secrets。
+`PRE_UPLOAD` 的图片仍只在 RAM，reload 后清除并提示重新选择；`UPLOADED` 复用
+attachmentId；`START_IN_FLIGHT`/`START_ACCEPTANCE_UNKNOWN` 用同 submissionId 做
+start reconciliation；`TURN_ACCEPTED` 直接复用同 turnId/after poll。完成或
+`TURN_FAILED` 清除 pending；过期 pending 清除且不自动 start。accepted poll 保留
+1s/2s/4s 最多三次 bounded same-turn retry，耗尽后显式继续等待仍只 resume 同一
+turn。确认的 legacy 404/405 只给未带 submissionId 的旧客户端使用，ambiguous
+start 不走 legacy fallback。
+
+`test/v0.5-chat-start-idempotency.mjs` 覆盖 N–Q/Z 的真实 LAN HTTP registry、409
+conflict、distinct submission、LRU/TTL 与双客户端竞态；
+`test/v0.5-mobile-reload-recovery.mjs` 覆盖 R–Z 的 localStorage reload/restart
+fixture、附件复用、同 turn/cursor、PRE_UPLOAD 重新选择、完成/失败清理与 stale
+清理。既有 A–M、composer autosize/Plus/Send/IME/Emoji、navigation、Dream/Gallery、
+Visual、diagnostics、turn orchestrator 与 client bundle 校验继续通过。
+
+FINAL_STATUS=READY_FOR_GITHUB_FINAL_REVIEW
+BASE_COMMIT=d271afdcc84cd5b4a3f9e9ee28b61b7a6bfaf416
+BRANCH=fix/chat-start-idempotency
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-chat-start-idempotency
+COMMIT=RECORDED_IN_GIT
+REMOTE_HEAD=PUSHED_TO_ORIGIN
+WORKTREE_STATUS=CLEAN_AFTER_COMMIT
+SUBMISSION_ID_GENERATION=CRYPTO_RANDOM_UUID_WITH_SECURE_RANDOM_TIME_COUNTER_FALLBACK
+SUBMISSION_ID_PERSISTED=LOCALSTORAGE_NON_SENSITIVE_PENDING_METADATA
+SUBMISSION_ID_REUSED_AFTER_RELOAD=YES
+SERVER_IDEMPOTENCY_REGISTRY=HOST_RAM_SUBMISSION_ID_TO_TURN_ID_AND_FINGERPRINT
+SERVER_IDEMPOTENCY_BOUNDED=MAX_ENTRIES_256_LRU
+SERVER_IDEMPOTENCY_TTL=24_HOURS
+SAME_SUBMISSION_SAME_TURN=PASS
+SAME_SUBMISSION_START_CALL_COUNT=1
+SUBMISSION_PAYLOAD_CONFLICT=HTTP_409_SUBMISSION_ID_CONFLICT
+DIFFERENT_SUBMISSION_SAME_PAYLOAD=DISTINCT_TURNS
+START_IN_FLIGHT_RELOAD=IDEMPOTENT_RECONCILIATION
+START_UNKNOWN_RELOAD=IDEMPOTENT_RECONCILIATION
+TURN_ACCEPTED_RELOAD=SAME_TURN_AND_AFTER
+UPLOADED_RELOAD=SAME_ATTACHMENT_ID_NO_UPLOAD
+ATTACHMENT_REUPLOAD_AFTER_RELOAD=NO
+PENDING_STORAGE_CLEARED_ON_COMPLETE=YES
+PENDING_STORAGE_CLEARED_ON_FAIL=YES
+STALE_PENDING_CLEARED=YES
+LEGACY_FALLBACK_AMBIGUOUS_START_DUPLICATE=NO
+CROSS_WEBVIEW_RELOAD_DUPLICATE_TURN=NO
+CROSS_APP_RESTART_DUPLICATE_TURN=NO
+CROSS_PET_HOST_RESTART_EXACTLY_ONCE=NOT_GUARANTEED
+GLOBAL_EXACTLY_ONCE_CLAIMED=NO
+CASE_A_TO_M=PASS
+CASE_N_TO_Z=PASS
+VISUAL_MEMORY_MODIFIED=NO
+DREAM_MODIFIED=NO
+PET_MEMORY_MODIFIED=NO
+LOCAL_BRAIN_MODIFIED=NO
+LAN_TOPOLOGY_MODIFIED=NO
+ANDROID_NATIVE_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
 
 ## 2026-09-08 — Composer Transport Ambiguity Final Fix
 

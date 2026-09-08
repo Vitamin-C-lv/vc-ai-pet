@@ -23,8 +23,11 @@ let currentScreen = 'home'
 let composerController
 let emojiController
 let submissionController
+let pendingSubmissionStore
 let activeTurnId = null
 let submissionStatusNode = null
+let renderedHistoryTurnIds = new Set()
+let pendingRecoveryStarted = false
 let diagnosticsPanel
 let diagnosticsOutput
 let diagnosticsStatus
@@ -827,6 +830,7 @@ function removeMessageNode(node) {
 
 function renderHistory(history) {
   messages.replaceChildren()
+  renderedHistoryTurnIds = new Set(history.map((message) => message?.turnId).filter((turnId) => typeof turnId === 'string' && turnId))
   if (!history.length) {
     line('pet', '汪，在呀。')
     return
@@ -1086,6 +1090,7 @@ function waitForTurnPoll() {
 }
 
 async function runTurnProgress({
+  submissionId,
   message,
   pendingImage,
   attachment,
@@ -1101,6 +1106,7 @@ async function runTurnProgress({
   let turnId = typeof existingTurnId === 'string' ? existingTurnId : ''
   const turnContext = {
     stage: turnId ? 'turn-poll' : 'turn-start',
+    submissionId,
     hadImage: Boolean(pendingImage),
     attachmentId: attachment?.id,
     ...(pendingImage ? imageDiagnosticDetails(pendingImage) : {}),
@@ -1112,10 +1118,12 @@ async function runTurnProgress({
     try {
       started = await fetchJsonDiagnostic('/api/pet/chat/start', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+        body: JSON.stringify({ submissionId, message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
       }, turnContext)
     } catch (error) {
-      if (![404, 405].includes(Number(error?.httpStatus))) throw markStartFailure(error)
+      // A legacy synchronous endpoint cannot honor the submission id. Keep the
+      // old-client path only when this caller did not opt into idempotency.
+      if (submissionId || ![404, 405].includes(Number(error?.httpStatus))) throw markStartFailure(error)
       let legacy
       try {
         legacy = await fetchJsonDiagnostic('/api/pet/chat', {
@@ -1231,15 +1239,18 @@ function createMobileSubmissionController() {
   return createController({
     uploadImage,
     runTurnProgress,
+    pendingStore: pendingSubmissionStore,
     onOptimisticUser: (state) => {
       clearSubmissionStatus()
       const localAttachment = state.pendingImage
         ? { thumbnailUrl: state.pendingImage.thumbnailDataUrl }
         : null
       const optimisticUserNode = line('user', state.message, localAttachment)
+      const historyAlreadyHasTurn = Boolean(state.turnId && renderedHistoryTurnIds.has(state.turnId))
+      if (historyAlreadyHasTurn) removeMessageNode(optimisticUserNode)
       state.thinkingMessage = appendThinkingMessage({ vision: Boolean(state.pendingImage) })
       scrollMessagesToBottom()
-      return optimisticUserNode
+      return historyAlreadyHasTurn ? null : optimisticUserNode
     },
     onAccepted: (state) => {
       activeTurnId = state.turnId
@@ -1266,13 +1277,15 @@ function createMobileSubmissionController() {
       scrollMessagesToBottom()
       setOnline(false)
     },
-    onStartAcceptanceUnknown: (state) => {
+    onStartAcceptanceUnknown: (state, error) => {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
       input.value = ''
       clearImageSelection()
       activeTurnId = null
-      showSubmissionStatus('消息可能已经交给花花了，正在确认……')
+      showSubmissionStatus(error?.code === 'SUBMISSION_ID_CONFLICT'
+        ? '发送状态冲突，请刷新后重试。'
+        : '消息可能已经交给花花了，正在确认……')
       setOnline(false)
     },
     onAcceptedFailure: (state) => {
@@ -1304,6 +1317,34 @@ function createMobileSubmissionController() {
   })
 }
 
+async function recoverPendingSubmission() {
+  if (pendingRecoveryStarted || !pendingSubmissionStore || !submissionController) return
+  pendingRecoveryStarted = true
+  const result = pendingSubmissionStore.read?.()
+  if (result?.status === 'stale') {
+    showSubmissionStatus('之前未完成的发送已经过期。')
+    return
+  }
+  if (result?.status !== 'pending') return
+  const pending = result.pending
+  if (pending?.stage === SUBMISSION_STAGE.PRE_UPLOAD) {
+    pendingSubmissionStore.clear?.()
+    showSubmissionStatus('上次图片还没有完成上传，请重新选择图片。')
+    return
+  }
+  const recoverable = new Set([
+    SUBMISSION_STAGE.UPLOADED,
+    SUBMISSION_STAGE.START_IN_FLIGHT,
+    SUBMISSION_STAGE.START_ACCEPTANCE_UNKNOWN,
+    SUBMISSION_STAGE.TURN_ACCEPTED,
+  ])
+  if (!recoverable.has(pending?.stage)) {
+    pendingSubmissionStore.clear?.()
+    return
+  }
+  await submissionController.recover(pending)
+}
+
 async function submitComposer(message = input.value.trim()) {
   if (imageProcessing || submissionController?.hasActive?.()) return
   const pendingImage = selectedImage
@@ -1317,7 +1358,12 @@ async function submitComposer(message = input.value.trim()) {
   composerController?.sync?.()
   scheduleComposerTextareaHeight()
   try {
-    await submissionController.submit({ draftText, message, pendingImage })
+    const result = await submissionController.submit({ draftText, message, pendingImage })
+    if (result?.status === 'pending-recovery') {
+      input.value = draftText
+      restoreImageSelection(pendingImage)
+      showSubmissionStatus('上一条消息还在确认中，请稍候。')
+    }
   } finally {
     input.readOnly = false
     if (restoreInputFocus && currentScreen === SCREEN.CHAT) input.focus({ preventScroll: true })
@@ -1530,6 +1576,7 @@ function bindDom() {
       if (emojiAtBottom) globalThis.requestAnimationFrame?.(() => scrollMessagesToBottom())
     },
   })
+  pendingSubmissionStore = globalThis.VcAiPetSubmission?.createPendingSubmissionStore?.() ?? null
   submissionController = createMobileSubmissionController()
   composerController = globalThis.VcAiPetComposer?.wireVcComposer?.({
     form,
@@ -1559,7 +1606,7 @@ function startApp() {
   updateSendButton()
   recordDiagnostic({ level: 'info', stage: 'app', code: 'APP_BOOT' })
   refresh()
-  loadHistory()
+  void loadHistory().then(() => recoverPendingSubmission())
   setInterval(refresh, 1500)
 }
 
