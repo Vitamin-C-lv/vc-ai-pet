@@ -486,6 +486,7 @@ export class PetRuntime {
     return this.visualExperience.syncFromArchive({
       readBatch: (afterSequence, limit) => this.conversationStore.rawHistoryAfterSequence({ afterSequence, limit }),
       readMaxSequence: () => this.conversationStore.rawHistoryMaxSequence(),
+      readAttachment: (attachmentId) => this.conversationStore.readAttachmentDataUrl(attachmentId),
       tokenizeText: (text, { boost }) => visualTermsFor(text, { boost }),
     })
   }

@@ -79,6 +79,10 @@ export class PetTurnOrchestrator {
         ? pool[0]?.visualId
         : resolvedVisual ?? pool[0]?.visualId
     await store.appendMessage({ role: 'user', text: userText, attachment, turnId })
+    // The current upload must become an occurrence before VisualWorkingSession
+    // records its inspection/observation event. This is still archive-only and
+    // zero-model; the outer runVisualTurn performs the idempotent follow-up sync.
+    if (typeof this.runtime.syncVisualExperiences === 'function') await this.runtime.syncVisualExperiences()
     await this.#appendMemoryRecall({ turnId, emit, userText, store })
     const session = new VisualWorkingSession({
       turnId,
@@ -187,8 +191,24 @@ export class PetTurnOrchestrator {
       this.recallContext.clear()
     }
     const winner = result.winner
-    const attachmentId = winner.attachmentId
-    const metadata = typeof store.attachment === 'function' ? await store.attachment(attachmentId) : null
+    const attachmentIds = [...new Set([
+      ...(Array.isArray(winner.attachmentIds) ? winner.attachmentIds : []),
+      winner.attachmentId,
+    ].filter(Boolean))]
+    let attachmentId = attachmentIds[0] ?? null
+    let metadata = null
+    for (const candidateAttachmentId of attachmentIds) {
+      try {
+        const stored = await store.readAttachmentDataUrl(candidateAttachmentId)
+        if (stored?.dataUrl && stored.attachment) {
+          attachmentId = candidateAttachmentId
+          metadata = stored.attachment
+          break
+        }
+      } catch {
+        // A missing occurrence asset falls through to the next preserved one.
+      }
+    }
     const recallCaption = sanitizeSafeTraceText(
       metadata ? '🐾 花花想起以前好像见过……' : '🐾 花花想起以前好像见过，可是原图已经找不到了……',
       120,

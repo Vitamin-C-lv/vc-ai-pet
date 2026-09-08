@@ -62,12 +62,25 @@ function listItem(experience, attachment, flags) {
     attachmentId: experience.attachmentId,
     thumbnailUrl: attachment?.thumbnailUrl ?? null,
     occurredAt: experience.occurredAt,
+    lastOccurredAt: experience.lastOccurredAt ?? experience.occurredAt,
+    occurrenceCount: Number(experience.occurrenceCount ?? 0),
     ownerText: ownerText(experience.userText, 140),
     ownerTextProvenance: 'raw',
     inspectionCount: Number(experience.inspectionCount ?? 0),
     lastInspectedAt: experience.lastInspectedAt ?? null,
     ...eventFlags(flags),
   }
+}
+
+async function attachmentForExperience(store, conversationStore, experience) {
+  const ids = typeof store?.reopenAttachmentIdsFor === 'function'
+    ? await store.reopenAttachmentIdsFor(experience.experienceId)
+    : [experience.attachmentId]
+  for (const attachmentId of ids) {
+    const attachment = await attachmentFor(conversationStore, attachmentId)
+    if (attachment) return { attachment, attachmentId }
+  }
+  return { attachment: null, attachmentId: experience.attachmentId }
 }
 
 function safeTerm(entry) {
@@ -124,6 +137,7 @@ async function exactRelatedIds(store, experienceId, events) {
     .filter((value) => typeof value === 'string' && value && value !== experienceId))]
   const found = await Promise.all(related.map(async (id) => {
     try {
+      if (typeof store.resolveExperienceId === 'function') return await store.resolveExperienceId(id)
       return await store.findExperienceById(id) ? id : null
     } catch {
       return null
@@ -149,9 +163,10 @@ export async function readVisualGallery(runtime, { limit = DEFAULT_LIMIT, offset
   const page = experiences.slice(0, size)
   const ids = page.map((item) => item.experienceId)
   const flags = typeof store.eventFlagsFor === 'function' ? await store.eventFlagsFor(ids) : new Map()
-  const items = await Promise.all(page.map(async (experience) => (
-    listItem(experience, await attachmentFor(conversationStore, experience.attachmentId), flags.get(experience.experienceId) ?? new Set())
-  )))
+  const items = await Promise.all(page.map(async (experience) => {
+    const selected = await attachmentForExperience(store, conversationStore, experience)
+    return listItem({ ...experience, attachmentId: selected.attachmentId }, selected.attachment, flags.get(experience.experienceId) ?? new Set())
+  }))
   const count = typeof store.countExperiences === 'function' ? await store.countExperiences() : items.length
   return {
     count: Number(count),
@@ -165,18 +180,26 @@ export async function readVisualGallery(runtime, { limit = DEFAULT_LIMIT, offset
 export async function readVisualGalleryDetail(runtime, experienceId) {
   const store = requireStore(runtime)
   const id = String(experienceId ?? '').trim()
-  const experience = await store.findExperienceById(id)
+  const canonicalId = typeof store.resolveExperienceId === 'function' ? await store.resolveExperienceId(id) : id
+  const experience = await store.findExperienceById(canonicalId)
   if (!experience) return null
 
   const conversationStore = runtime?.conversationStore
-  const attachment = await attachmentFor(conversationStore, experience.attachmentId)
-  const storedEvents = typeof store.eventsFor === 'function' ? await store.eventsFor(id, { limit: MAX_EVENTS }) : []
-  const relatedIds = await exactRelatedIds(store, id, storedEvents)
+  const selectedAttachment = await attachmentForExperience(store, conversationStore, experience)
+  const storedOccurrences = typeof store.occurrenceFor === 'function' ? await store.occurrenceFor(canonicalId, { limit: 500 }) : []
+  const occurrences = storedOccurrences.map((occurrence) => ({
+    occurredAt: occurrence.occurredAt,
+    userText: ownerText(occurrence.userText),
+    attachmentId: occurrence.attachmentId,
+    sourceMessageId: occurrence.sourceMessageId,
+  }))
+  const storedEvents = typeof store.eventsFor === 'function' ? await store.eventsFor(canonicalId, { limit: MAX_EVENTS }) : []
+  const relatedIds = await exactRelatedIds(store, canonicalId, storedEvents)
   const visualEvents = storedEvents.map((event) => publicEvent(event, relatedIds))
   const rawTerms = typeof store.termsFor === 'function' ? await store.termsFor(id, { limit: 100 }) : []
   const visualTerms = publicTerms(rawTerms)
   const flags = typeof store.eventFlagsFor === 'function'
-    ? (await store.eventFlagsFor([id])).get(id) ?? new Set()
+    ? (await store.eventFlagsFor([canonicalId])).get(canonicalId) ?? new Set()
     : new Set(visualEvents.map((event) => event.kind))
   const eventMetadata = visualEvents.map((event) => ({
     eventId: event.eventId,
@@ -188,14 +211,17 @@ export async function readVisualGalleryDetail(runtime, experienceId) {
   }))
 
   return {
-    experienceId: experience.experienceId,
+    experienceId: canonicalId,
     sourceMessageId: experience.sourceMessageId,
     attachmentId: experience.attachmentId,
     occurredAt: experience.occurredAt,
     ownerText: ownerText(experience.userText),
     ownerTextProvenance: 'raw',
-    originalUrl: attachment?.assetUrl ?? null,
-    thumbnailUrl: attachment?.thumbnailUrl ?? null,
+    originalUrl: selectedAttachment.attachment?.assetUrl ?? null,
+    thumbnailUrl: selectedAttachment.attachment?.thumbnailUrl ?? null,
+    occurrenceCount: Number(experience.occurrenceCount ?? occurrences.length),
+    lastOccurredAt: experience.lastOccurredAt ?? experience.occurredAt,
+    occurrences,
     inspectionCount: Number(experience.inspectionCount ?? 0),
     lastInspectedAt: experience.lastInspectedAt ?? null,
     ...eventFlags(flags),
@@ -212,6 +238,9 @@ export async function readVisualGalleryDetail(runtime, experienceId) {
       inspectionCount: Number(experience.inspectionCount ?? 0),
       lastInspectedAt: experience.lastInspectedAt ?? null,
       eventCount: visualEvents.length,
+      occurrenceCount: Number(experience.occurrenceCount ?? occurrences.length),
+      lastOccurredAt: experience.lastOccurredAt ?? experience.occurredAt,
+      occurrences,
       eventMetadata,
       terms: visualTerms.map(({ sourceKind, term, weight }) => ({ sourceKind, term, weight })),
     },

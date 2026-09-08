@@ -2,6 +2,31 @@
 
 Status: FINAL_STATUS=READY_FOR_GITHUB_FINAL_REVIEW
 
+## 2026-09-09 — Visual Canonical Deduplication on Current Production Lineage
+
+基于当前正式 lineage `819fb2ce33013c86ae2ccfb56bdad2dfa8d6e60a` 建立
+`feat/visual-canonical-dedup-current`，仅 transplant 已审查的
+`c1a4b1ea7673de51de62d26a7ef53a91a99d26c9` Visual Canonical Dedup 变更。本轮不重写
+dedup 算法，不修改 Tailscale、Android endpoint、submissionId、Composer、Dream toggle、LAN
+或 Local Brain。UI 冲突保留当前 production navigation/composer/recovery/header 行为，再叠加
+occurrenceCount、lastOccurredAt、visual-gallery-occurrences 与 Gallery detail occurrence
+rendering；backend 仅落在 Visual Experience、Visual Gallery、Visual Dream Context、Visual
+Recall、Visual Working Session 与 Pet runtime/orchestrator integration。
+
+```text
+BASE_COMMIT=819fb2ce33013c86ae2ccfb56bdad2dfa8d6e60a
+SOURCE_DEDUP_COMMIT=c1a4b1ea7673de51de62d26a7ef53a91a99d26c9
+BRANCH=feat/visual-canonical-dedup-current
+LINEAGE_STATUS=AHEAD_BEHIND_CHECK_REQUIRED
+ANDROID_COMPANION_MODIFIED_BY_DEDUP=NO
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+```
+
+冲突处理只涉及 `PROJECT_STATE.md` 文档；代码冲突按 current production 版本保留并叠加
+dedup additions。migration preview 继续只使用 sandbox/temp DB，保持
+`MODEL_CALLS=0`、`PET_MEMORY_WRITES=0`、`DREAM_RUNS=0`。
+
 ## 2026-09-08 — Final Idempotency TTL Alignment Fix
 
 基于用户指定的 `dcb6c6095ef5eeeef76549135d2f46be465a9db0` 在独立 worktree

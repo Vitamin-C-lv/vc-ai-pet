@@ -101,6 +101,10 @@
 .visual-gallery-owner h3, .visual-gallery-events h3, .visual-gallery-terms h3 { margin: 0 0 9px; font-size: 14px; }
 .visual-gallery-owner p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; }
 .visual-gallery-provenance { margin-top: 7px !important; color: #917e96; font-size: 11px !important; }
+.visual-gallery-occurrences { display: flex; flex-direction: column; gap: 7px; margin-top: 12px; }
+.visual-gallery-occurrence { padding-top: 8px; border-top: 1px solid #eee5dc; color: #665047; font-size: 12px; line-height: 1.55; }
+.visual-gallery-occurrence time { display: block; margin-bottom: 2px; color: #8d7c70; font-size: 11px; }
+.visual-gallery-occurrence span { white-space: pre-wrap; overflow-wrap: anywhere; }
 .visual-gallery-event { padding: 10px 0; border-top: 1px solid #eee5dc; }
 .visual-gallery-event:first-child { padding-top: 0; border-top: 0; }
 .visual-gallery-event-heading { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }

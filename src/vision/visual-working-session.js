@@ -89,6 +89,13 @@ export class VisualWorkingSession {
     }
     if (!experience?.experienceId) return
 
+    let occurrence = null
+    try {
+      occurrence = await store.findOccurrenceByAttachmentId?.(candidate.attachmentId)
+    } catch (error) {
+      occurrence = null
+    }
+
     const previouslyInspected = this.inspections
       .slice(0, -1)
       .some((item) => item.attachmentId === candidate.attachmentId)
@@ -96,7 +103,7 @@ export class VisualWorkingSession {
       await store.recordEvent({
         experienceId: experience.experienceId,
         turnId: this.turnId,
-        kind: previouslyInspected ? 'revisit' : 'inspection',
+        kind: previouslyInspected || ['EXACT', 'PERCEPTUAL'].includes(occurrence?.duplicateKind) ? 'revisit' : 'inspection',
         occurredAt: this.now(),
         summary: null,
         focus: null,

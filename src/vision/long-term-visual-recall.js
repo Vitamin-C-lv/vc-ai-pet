@@ -28,8 +28,10 @@ function metadataOnly(candidate) {
   return {
     experienceId: candidate?.experienceId,
     attachmentId: candidate?.attachmentId,
+    attachmentIds: Array.isArray(candidate?.attachmentIds) ? candidate.attachmentIds.slice(0, 20) : [candidate?.attachmentId].filter(Boolean),
     sourceMessageId: candidate?.sourceMessageId,
     userText: candidate?.userText,
+    userTexts: Array.isArray(candidate?.userTexts) ? candidate.userTexts.slice(0, 50) : [candidate?.userText].filter(Boolean),
     occurredAt: candidate?.occurredAt,
     score: candidate?.score,
     scoreBreakdown: candidate?.scoreBreakdown ?? null,
