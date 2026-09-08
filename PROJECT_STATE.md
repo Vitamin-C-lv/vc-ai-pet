@@ -1,6 +1,49 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_PRODUCTION_DEPLOYMENT
+Status: FINAL_STATUS=READY_FOR_VISUAL_DEDUP_GITHUB_REVIEW
+
+## 2026-09-09 — Visual Experience Canonical Image Deduplication
+
+基于当前正式视觉 Gallery lineage `fdc3dcb42b694b076f635516822e84eaaae648ef` 建立
+`feat/visual-canonical-dedup`。本次只在 Visual Experience Index/Gallery projection 增加
+canonical occurrence/alias 语义；ConversationStore raw message、原始 attachment、PetMemory、
+Dream、Reflection、Local Brain、Vision model、Chat transport、submissionId、Android、Tailscale
+和 LAN 均未改动。历史迁移为非破坏性 alias resolution，未删除 root、event、term 或 attachment。
+
+```text
+BASE_COMMIT=fdc3dcb42b694b076f635516822e84eaaae648ef
+BRANCH=feat/visual-canonical-dedup
+COMMIT=SEE_GIT_LOG
+REMOTE_HEAD=SEE_REMOTE
+CURRENT_DUP_ROOT_CAUSE=visual_experiences.source_message_id_UNIQUE_caused_one_root_per_user_message; attachment_id_was_only_an_index
+DEDUP_MODEL_CALLS=0
+EXACT_HASH=SHA-256_of_original_attachment_bytes
+PERCEPTUAL_HASH=pHash_plus_dHash_local_deterministic_decode
+PHASH_DISTANCE_MAX=4
+DHASH_DISTANCE_MAX=4
+ASPECT_RATIO_DELTA_MAX=0.02
+VISUAL_OCCURRENCE_TABLE=visual_occurrences
+VISUAL_ALIAS_TABLE=visual_experience_aliases
+EXACT_DUPLICATE=PASS
+REENCODED_DUPLICATE=PASS
+RESIZED_DUPLICATE=PASS
+SIMILAR_DIFFERENT_FRAME_NOT_MERGED=PASS
+SAME_CAT_DIFFERENT_POSE_NOT_MERGED=PASS
+RAW_ARCHIVE_MODIFIED=NO
+RAW_ATTACHMENT_DELETED=NO
+GALLERY_ONE_CANONICAL_ROOT=PASS
+OCCURRENCE_HISTORY_PRESERVED=PASS
+NEW_OBSERVATION_ACCUMULATES=PASS
+LONG_TERM_RECALL_AGGREGATES_OCCURRENCES=PASS
+MIGRATION_IDEMPOTENT=PASS
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+```
+
+新增 `scripts/visual-canonical-dedup.mjs`：默认在 sandbox 临时副本输出 migration preview，
+只有显式 `--apply` 才会写入指定 sandbox。preview 输出 canonical root、duplicate group、alias、
+occurrence、hash distance 和 zero-model invariants。新增 fixture 覆盖猫图重复、蜡笔小新重复/相邻帧、
+重编码、resize、metadata 变体、不同姿势、位置变化和保守裁剪边界。
 
 ## 2026-09-07 — Contextual Historical Visual Recall Follow-up Fix
 

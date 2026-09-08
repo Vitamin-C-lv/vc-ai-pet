@@ -58,6 +58,9 @@ export async function buildVisualDreamContext({
       attachmentId: experience?.attachmentId ?? experience?.attachment_id ?? null,
       sourceMessageId: experience?.sourceMessageId ?? experience?.source_message_id ?? null,
       userText: experience?.userText ?? experience?.user_text ?? '',
+      userTexts: Array.isArray(experience?.userTexts) && experience.userTexts.length > 0
+        ? experience.userTexts
+        : [experience?.userText ?? experience?.user_text ?? ''],
       occurredAt: experience?.occurredAt ?? experience?.occurred_at ?? null,
       observations: safeObservations,
     })
@@ -82,8 +85,11 @@ export function formatVisualExperienceSection(visualContext) {
   ]
   for (const experience of experiences) {
     const time = formatHistoricalTime(experience?.occurredAt)
-    const userText = sanitizeSafeTraceText(experience?.userText, 240) || '（主人未留下文字）'
-    lines.push(`- 主人在 ${time} 发了一张图片，这是事实；主人原话：${userText}`)
+    const userTexts = (Array.isArray(experience?.userTexts) ? experience.userTexts : [experience?.userText])
+      .map((text) => sanitizeSafeTraceText(text, 240))
+      .filter(Boolean)
+    if (userTexts.length === 0) lines.push(`- 主人在 ${time} 发了一张图片，这是事实；主人未留下文字`)
+    else for (const userText of userTexts.slice(0, 8)) lines.push(`- 主人在 ${time} 发了一张图片，这是事实；主人原话：${userText}`)
   }
   lines.push('INFERRED（花花当时的观察，不是事实，只是当时的判断）：')
   for (const experience of experiences) {

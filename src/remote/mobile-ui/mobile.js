@@ -341,6 +341,7 @@ function renderGalleryCard(item) {
   const meta = document.createElement('span')
   meta.className = 'visual-gallery-card-meta'
   const markers = []
+  if (Number(item.occurrenceCount) > 1) markers.push(`看过 ${Number(item.occurrenceCount)} 次`)
   if (item.hasObservation) markers.push('有视觉批注')
   if (item.hasComparison) markers.push('有对照')
   if (item.hasRevisit) markers.push('有复看')
@@ -478,6 +479,23 @@ function renderGalleryDetail(payload) {
   document.querySelector('#visual-gallery-date').textContent = formatInnerLifeTime(payload?.occurredAt)
   document.querySelector('#visual-gallery-owner-text').textContent = payload?.ownerText || '主人当时没有留下文字。'
   document.querySelector('#visual-gallery-owner-provenance').textContent = payload?.ownerTextProvenance === 'raw' ? '原话 · RAW' : '主人文字'
+  const occurrenceList = document.querySelector('#visual-gallery-occurrences')
+  occurrenceList.replaceChildren()
+  const occurrences = Array.isArray(payload?.occurrences) ? payload.occurrences : []
+  occurrences.forEach((occurrence, index) => {
+    const item = document.createElement('div')
+    item.className = 'visual-gallery-occurrence'
+    const time = document.createElement('time')
+    time.textContent = index === 0
+      ? `第一次看到 · ${formatInnerLifeTime(occurrence.occurredAt)}`
+      : index === occurrences.length - 1
+        ? `最近看到 · ${formatInnerLifeTime(occurrence.occurredAt)}`
+        : `再次看到 · ${formatInnerLifeTime(occurrence.occurredAt)}`
+    const text = document.createElement('span')
+    text.textContent = occurrence.userText || '主人这次没有留下文字。'
+    item.append(time, text)
+    occurrenceList.append(item)
+  })
   const eventList = document.querySelector('#visual-gallery-event-list')
   eventList.replaceChildren()
   if (!Array.isArray(payload?.visualEvents) || payload.visualEvents.length === 0) {
