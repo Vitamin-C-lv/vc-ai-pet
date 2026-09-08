@@ -49,7 +49,35 @@
 .inner-life-card-heading time { font-size: 12px; color: #8d7c70; }
 .inner-life-summary { margin: 12px 0; font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
 .inner-life-meta { margin: 0; font-size: 12px; color: #917e96; }
-.inner-life-insight-toggle { margin-top: 12px; padding: 0; border: 0; color: #77647a; background: transparent; font: inherit; font-size: 13px; text-align: left; text-decoration: underline; }
+.inner-life-insight-toggle {
+  margin-top: 12px;
+  padding: 4px 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  color: #77647a;
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transform: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.inner-life-insight-toggle:active {
+  color: #66526d;
+  background: transparent;
+  transform: none;
+  box-shadow: none;
+}
+.inner-life-insight-toggle:focus { background: transparent; }
+.inner-life-insight-toggle:focus-visible {
+  outline: 2px solid rgba(119, 100, 122, .65);
+  outline-offset: 3px;
+}
 .inner-life-insights { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: #f0e9f0; }
 .inner-life-insight, .inner-life-insight-empty { margin: 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
 .inner-life-insight + .inner-life-insight { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2d7e2; }
