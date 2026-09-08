@@ -230,9 +230,7 @@
 }
 
 .composer-action-button[hidden] {
-  display: inline-grid;
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 .emoji-drawer {
