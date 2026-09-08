@@ -13,7 +13,8 @@
   const SUBMISSION_ID_PATTERN = /^[a-z0-9_-]{1,80}$/iu
   const PENDING_SUBMISSION_STORAGE_KEY = 'vc-ai-pet.pending-submission.v1'
   const PENDING_SUBMISSION_SCHEMA_VERSION = 1
-  const PENDING_SUBMISSION_MAX_AGE_MS = 24 * 60 * 60 * 1_000
+  const CLIENT_PENDING_MAX_AGE_MS = 10 * 60 * 1_000
+  const PENDING_SUBMISSION_MAX_AGE_MS = CLIENT_PENDING_MAX_AGE_MS
   const PERSISTED_STAGES = new Set([
     SUBMISSION_STAGE.PRE_UPLOAD,
     SUBMISSION_STAGE.PRE_START,
@@ -135,7 +136,7 @@
         clear()
         return { status: 'invalid', pending: null }
       }
-      if (Number.isFinite(maxAgeMs) && maxAgeMs > 0 && now() - createdAt > maxAgeMs) {
+      if (Number.isFinite(maxAgeMs) && maxAgeMs > 0 && now() - createdAt >= maxAgeMs) {
         clear()
         return { status: 'stale', pending: null, createdAt }
       }
@@ -444,6 +445,7 @@
     POLL_RETRY_DELAYS_MS,
     PENDING_SUBMISSION_STORAGE_KEY,
     PENDING_SUBMISSION_SCHEMA_VERSION,
+    CLIENT_PENDING_MAX_AGE_MS,
     PENDING_SUBMISSION_MAX_AGE_MS,
     createSubmissionId,
     createPendingSubmissionStore,

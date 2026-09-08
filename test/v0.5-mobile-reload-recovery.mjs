@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import vm from 'node:vm'
+import { SERVER_IDEMPOTENCY_TTL_MS } from '../src/remote/chat-submission-idempotency.js'
 
 const root = process.cwd()
 const [submissionJs, mobileJs, indexHtml] = await Promise.all([
@@ -303,6 +304,27 @@ assert.equal(staleY.status, 'stale')
 assert.equal(storageY.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
 assert.equal(serverY.newTurnCount, 0)
 
+// CASE AB: the default frontend pending lifetime is the same as the server
+// registry TTL. At the boundary, stale data is cleared and boot recovery does
+// not get a pending record to reconcile.
+const serverAB = createServer()
+const storageAB = new MemoryStorage()
+const storeAB = createPendingSubmissionStore({ storage: storageAB, now: () => currentTime })
+const pendingCreatedAtAB = currentTime
+storeAB.saveState({
+  submissionId: 'submission-ab', message: '同一 TTL', pendingImage: null,
+  uploadedAttachment: { id: 'attachment-ab' }, stage: SUBMISSION_STAGE.UPLOADED,
+  createdAt: pendingCreatedAtAB, after: 0,
+})
+currentTime = pendingCreatedAtAB + submission.CLIENT_PENDING_MAX_AGE_MS
+const staleAB = storeAB.read()
+assert.equal(staleAB.status, 'stale')
+assert.equal(storageAB.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
+assert.equal(serverAB.newTurnCount, 0)
+assert.equal(submission.CLIENT_PENDING_MAX_AGE_MS, 10 * 60 * 1000)
+assert.equal(submission.CLIENT_PENDING_MAX_AGE_MS, SERVER_IDEMPOTENCY_TTL_MS)
+assert.match(mobileJs, /if \(result\?\.status !== 'pending'\) return/u)
+
 // CASE Z: two independent reload clients with one persisted id converge on
 // one host-side turn even when they recover concurrently.
 const serverZ = createServer()
@@ -347,9 +369,13 @@ console.log('CASE_V_PRE_UPLOAD_RESELECT_NO_FAKE_SEND=PASS')
 console.log('CASE_W_COMPLETE_STORAGE_CLEARED=PASS')
 console.log('CASE_X_FAILED_STORAGE_CLEARED=PASS')
 console.log('CASE_Y_STALE_PENDING_CLEARED_NO_START=PASS')
+console.log('CASE_AB_PENDING_TTL_CLEARED_NO_RECONCILE=PASS')
 console.log('CASE_Z_TWO_CLIENTS_ONE_TURN=PASS')
 console.log('ATTACHMENT_UPLOAD_COUNT_ON_FAILURE_RETRY=1')
 console.log('ATTACHMENT_REUSED=YES')
+console.log('CLIENT_PENDING_MAX_AGE=10_MINUTES')
+console.log('LOCALSTORAGE_USER_MESSAGE_TEXT=YES')
+console.log('LOCALSTORAGE_IMAGE_BASE64=NO')
 console.log('CROSS_WEBVIEW_RELOAD_DUPLICATE_TURN=NO')
 console.log('CROSS_APP_RESTART_DUPLICATE_TURN=NO')
 console.log('START_UNKNOWN_AUTO_RESEND=NO')

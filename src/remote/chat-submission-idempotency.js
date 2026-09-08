@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 
 export const DEFAULT_SUBMISSION_IDEMPOTENCY_MAX_ENTRIES = 256
-export const DEFAULT_SUBMISSION_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
+export const SERVER_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000
+export const DEFAULT_SUBMISSION_IDEMPOTENCY_TTL_MS = SERVER_IDEMPOTENCY_TTL_MS
 
 function conflictError() {
   const error = new Error('submission id payload conflict')

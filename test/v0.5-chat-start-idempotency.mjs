@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { request } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ChatSubmissionIdempotency } from '../src/remote/chat-submission-idempotency.js'
+import { ChatSubmissionIdempotency, SERVER_IDEMPOTENCY_TTL_MS } from '../src/remote/chat-submission-idempotency.js'
 import { startLanServer } from '../src/remote/lan-server.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -103,6 +103,22 @@ try {
   now = 101
   assert.equal(bounded.size(), 0)
 
+  // CASE AA: the default submission registry expires before the existing
+  // PetTurnManager lifecycle, so it cannot replay a stale turn id.
+  const petTurnManagerTtlMs = 15 * 60 * 1000
+  let alignedNow = 0
+  const alignedRegistry = new ChatSubmissionIdempotency({ now: () => alignedNow })
+  alignedRegistry.start({
+    submissionId: 'submission-aa',
+    message: 'TTL 对齐',
+    createTurn: () => ({ turnId: 'turn-aa' }),
+  })
+  alignedNow = SERVER_IDEMPOTENCY_TTL_MS
+  assert.equal(alignedRegistry.get('submission-aa'), null)
+  assert.equal(SERVER_IDEMPOTENCY_TTL_MS <= petTurnManagerTtlMs, true)
+  alignedNow = petTurnManagerTtlMs
+  assert.equal(alignedRegistry.get('submission-aa'), null)
+
   // CASE Z: two independent clients racing with one id converge on one turn.
   const concurrent = await Promise.all([
     call(port, 'POST', '/api/pet/chat/start', { submissionId: 'submission-z', message: '两个客户端' }),
@@ -129,8 +145,13 @@ console.log('CASE_N_SAME_SUBMISSION_SAME_TURN=PASS')
 console.log('CASE_O_SUBMISSION_PAYLOAD_CONFLICT=PASS')
 console.log('CASE_P_DIFFERENT_SUBMISSION_DISTINCT_TURNS=PASS')
 console.log('CASE_Q_REGISTRY_BOUNDED_TTL=PASS')
+console.log('CASE_AA_TTL_ALIGNS_BEFORE_TURN_MANAGER=PASS')
 console.log('CASE_Z_TWO_CLIENTS_ONE_TURN=PASS')
 console.log('SAME_SUBMISSION_START_CALL_COUNT=1')
 console.log('SERVER_IDEMPOTENCY_BOUNDED=MAX_ENTRIES_256')
-console.log('SERVER_IDEMPOTENCY_TTL=24_HOURS')
+console.log('SERVER_IDEMPOTENCY_TTL=10_MINUTES')
+console.log('PET_TURN_MANAGER_TTL=15_MINUTES')
+console.log('PET_TURN_MANAGER_MODIFIED=NO')
+console.log('TTL_ALIGNMENT=PASS')
+console.log('STALE_TURN_REPLAY=NO')
 console.log('GLOBAL_EXACTLY_ONCE_CLAIMED=NO')
