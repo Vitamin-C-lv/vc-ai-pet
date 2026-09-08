@@ -2,6 +2,59 @@
 
 Status: FINAL_STATUS=READY_FOR_GITHUB_REVIEW
 
+## 2026-09-08 — Composer Transport Ambiguity Final Fix
+
+基于用户指定的 `cc8d743f5198e6e4359b1ca046cc80c198fe27b6` 继续在独立
+worktree 修复 mobile composer transport recovery。本轮调查确认 `/api/pet/chat/start`
+先完成 handler 校验，再调用 `runtime.startChatTurn`；`PetRuntime` 委托
+`PetTurnManager.start`，而 `PetTurnManager` 会在异步 run 开始前先把 turn 放入内存
+Map，随后 handler 才返回 202/turnId。因此 start 请求发出后的 response loss 不能
+被推断为未创建 turn。现有 handler 没有可安全关联的 turn-list/reconciliation API，
+本轮不猜测、不修改后端，而是让前端对未知 ownership fail closed。
+
+submission state 现在明确区分 `PRE_UPLOAD`、`UPLOADED`、`PRE_START`、
+`START_IN_FLIGHT`、`START_ACCEPTANCE_UNKNOWN`、`TURN_ACCEPTED`、
+`TURN_COMPLETED` 与 `TURN_FAILED`。start 之前明确可证明的 validation/transport
+unavailable/capacity rejection 才能安全回滚；generic 5xx、无 HTTP response、无效
+start response 均保留 optimistic owner bubble，清空但不恢复为可发送 draft，保留
+RAM 中的 uploaded attachment，禁止 automatic start/upload。accepted poll 的
+transport error 只按 1s/2s/4s 最多三次 bounded same-turn retry，保存并复用同一
+`turnId` 与 `after` cursor；耗尽后保持 paused，`继续等待` 仅调用同一 turn 的
+explicit resume。`TURN_FAILED` 仍保留 owner bubble，不自动重复发送。
+
+没有修改 ConversationStore semantics、Chat backend API、PetTurnManager、Visual
+Memory、Dream、PetMemory、Local Brain、LAN topology 或 Android native，也没有
+production deploy。
+
+FINAL_STATUS=READY_FOR_GITHUB_REVIEW
+BASE_COMMIT=cc8d743f5198e6e4359b1ca046cc80c198fe27b6
+BRANCH=fix/composer-failure-recovery
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-composer-failure-recovery
+COMMIT=RECORDED_IN_GIT
+REMOTE_HEAD=PUSHED_TO_ORIGIN
+WORKTREE_STATUS=CLEAN_AFTER_COMMIT
+AMBIGUOUS_START_ACCEPTANCE_HANDLED=PASS
+START_IN_FLIGHT_STATE=PASS
+START_UNKNOWN_AUTO_RESEND=NO
+START_UNKNOWN_DRAFT_RESTORED=NO
+ACCEPTED_POLL_BOUNDED_RETRY=PASS
+ACCEPTED_POLL_RETRY_START_COUNT=0
+EXPLICIT_RESUME_SAME_TURN=PASS
+ATTACHMENT_UPLOAD_COUNT_ON_FAILURE_RETRY=1
+ATTACHMENT_REUSED=YES
+AUTOMATIC_DUPLICATE_TURN=NO
+SERVER_TURN_FAILED_DUPLICATE=NO
+CASES_A_TO_H=PASS
+CASES_I_TO_M=PASS
+PRODUCTION_DEPLOYED=NO
+
+`test/v0.4-mobile-submission-recovery.mjs` 现在覆盖 A–M：包含 response lost
+unknown、unknown ordinary submit no new start、accepted bounded retry same turn/
+cursor、eventual completion、retry exhaustion 与 explicit resume；既有
+autosize、Plus/Send、IME、Emoji、文字/图片路径继续通过。完整 smoke 等价 Node
+子命令、客户端构建、`lib/client.js` 语法检查和 bundle 校验均已通过；真实
+Android/生产验收不属于本轮边界。
+
 ## 2026-09-08 — Composer Failure Recovery Correctness Fix
 
 基于用户指定的 `3d53660ea923bc7ba0cdd795dc30182b4f1fabc4` 建立独立

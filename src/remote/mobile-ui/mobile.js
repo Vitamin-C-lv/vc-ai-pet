@@ -50,7 +50,10 @@ const SCREEN = globalThis.VcAiPetNavigation?.VC_SCREEN ?? Object.freeze({
 })
 const SUBMISSION_STAGE = globalThis.VcAiPetSubmission?.SUBMISSION_STAGE ?? Object.freeze({
   PRE_UPLOAD: 'PRE_UPLOAD',
+  PRE_START: 'PRE_START',
   UPLOADED: 'UPLOADED',
+  START_IN_FLIGHT: 'START_IN_FLIGHT',
+  START_ACCEPTANCE_UNKNOWN: 'START_ACCEPTANCE_UNKNOWN',
   TURN_ACCEPTED: 'TURN_ACCEPTED',
   TURN_COMPLETED: 'TURN_COMPLETED',
   TURN_FAILED: 'TURN_FAILED',
@@ -121,6 +124,37 @@ function diagnosticError(code, message) {
   error.code = code
   error.diagnosticLogged = true
   return error
+}
+
+const SAFE_START_FAILURE_CODES = new Set([
+  'invalid-image',
+  'invalid-message',
+  'invalid-json',
+  'body-too-large',
+  'turn-transport-unavailable',
+  'turn-capacity',
+])
+
+function markStartFailure(error) {
+  const marked = error instanceof Error ? error : new Error(String(error ?? 'turn start failed'))
+  const status = Number(marked.httpStatus)
+  const code = typeof marked.code === 'string' ? marked.code : ''
+  if ((status >= 400 && status <= 599) && (SAFE_START_FAILURE_CODES.has(code) || [404, 405].includes(status))) {
+    marked.safePreAcceptFailure = true
+  } else {
+    marked.startAcceptanceUnknown = true
+  }
+  return marked
+}
+
+function markPollTransportFailure(error) {
+  const marked = error instanceof Error ? error : new Error(String(error ?? 'turn poll failed'))
+  const status = Number(marked.httpStatus)
+  const transient = !Number.isInteger(status)
+    || [408, 425, 429].includes(status)
+    || (status >= 500 && status <= 599)
+  if (transient) marked.turnPollTransient = true
+  return marked
 }
 
 async function fetchJsonDiagnostic(url, options, requestContext) {
@@ -1060,6 +1094,7 @@ async function runTurnProgress({
   after: initialAfter = 0,
   presentation: initialPresentation = null,
   assistantRendered: initialAssistantRendered = false,
+  onStartInFlight,
   onTurnAccepted,
   onPollProgress,
 } = {}) {
@@ -1073,17 +1108,23 @@ async function runTurnProgress({
   }
   if (!turnId) {
     let started
+    onStartInFlight?.()
     try {
       started = await fetchJsonDiagnostic('/api/pet/chat/start', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
       }, turnContext)
     } catch (error) {
-      if (![404, 405].includes(Number(error?.httpStatus))) throw error
-      const legacy = await fetchJsonDiagnostic('/api/pet/chat', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
-      }, { ...turnContext, stage: 'chat' })
+      if (![404, 405].includes(Number(error?.httpStatus))) throw markStartFailure(error)
+      let legacy
+      try {
+        legacy = await fetchJsonDiagnostic('/api/pet/chat', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ message, ...(attachment ? { attachmentId: attachment.id } : {}) }),
+        }, { ...turnContext, stage: 'chat' })
+      } catch (legacyError) {
+        throw markStartFailure(legacyError)
+      }
       removeThinkingMessage(thinkingMessage)
       const replies = Array.isArray(legacy.payload?.replyMessages) && legacy.payload.replyMessages.length ? legacy.payload.replyMessages : [legacy.payload?.text]
       replies.filter(Boolean).forEach((text, index) => line('pet', text, null, index === replies.length - 1 ? legacy.payload?.reasoning : null))
@@ -1092,7 +1133,7 @@ async function runTurnProgress({
     turnId = typeof started.payload?.turnId === 'string' ? started.payload.turnId : ''
     if (!turnId) {
       recordDiagnostic({ level: 'error', stage: 'turn-start', code: 'TURN_START_INVALID_RESPONSE', details: turnContext })
-      throw diagnosticError('TURN_START_INVALID_RESPONSE', 'turn unavailable')
+      throw markStartFailure(diagnosticError('TURN_START_INVALID_RESPONSE', 'turn unavailable'))
     }
     // This is the ownership boundary: expose the accepted turn before the
     // first poll can fail so recovery cannot restore a new sendable draft.
@@ -1106,7 +1147,12 @@ async function runTurnProgress({
   const presentation = initialPresentation ?? createVisualPresentationState({ currentAttachmentId: attachment?.id })
   const deadline = Date.now() + 15 * 60 * 1000
   while (!pollDone) {
-    const poll = await fetchJsonDiagnostic(`/api/pet/chat/turn/${encodeURIComponent(turnId)}?after=${after}`, {}, { stage: 'turn-poll', turnId, hadImage: Boolean(pendingImage), attachmentId: attachment?.id })
+    let poll
+    try {
+      poll = await fetchJsonDiagnostic(`/api/pet/chat/turn/${encodeURIComponent(turnId)}?after=${after}`, {}, { stage: 'turn-poll', turnId, hadImage: Boolean(pendingImage), attachmentId: attachment?.id })
+    } catch (error) {
+      throw markPollTransportFailure(error)
+    }
     const payload = poll.payload
     const events = Array.isArray(payload?.events) ? payload.events : []
     const validStatus = ['running', 'done', 'error'].includes(payload?.status)
@@ -1159,9 +1205,23 @@ function clearSubmissionStatus() {
   submissionStatusNode = null
 }
 
-function showSubmissionStatus(text) {
+function showSubmissionStatus(text, { resume = false } = {}) {
   clearSubmissionStatus()
   submissionStatusNode = line('pet', text)
+  if (resume) {
+    const bubble = submissionStatusNode.querySelector?.('.message-bubble')
+    if (bubble) {
+      const button = document.createElement('button')
+      button.className = 'submission-resume-button'
+      button.type = 'button'
+      button.textContent = '继续等待'
+      button.addEventListener('click', () => {
+        button.disabled = true
+        resumeActiveSubmission({ explicit: true })
+      })
+      bubble.append(button)
+    }
+  }
   scrollMessagesToBottom()
 }
 
@@ -1206,13 +1266,22 @@ function createMobileSubmissionController() {
       scrollMessagesToBottom()
       setOnline(false)
     },
+    onStartAcceptanceUnknown: (state) => {
+      removeThinkingMessage(state.thinkingMessage)
+      state.thinkingMessage = null
+      input.value = ''
+      clearImageSelection()
+      activeTurnId = null
+      showSubmissionStatus('消息可能已经交给花花了，正在确认……')
+      setOnline(false)
+    },
     onAcceptedFailure: (state) => {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
       input.value = ''
       clearImageSelection()
       activeTurnId = state.turnId
-      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。')
+      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。', { resume: true })
       setOnline(false)
     },
     onServerFailure: (state) => {
@@ -1258,9 +1327,9 @@ async function submitComposer(message = input.value.trim()) {
   }
 }
 
-function resumeActiveSubmission() {
+function resumeActiveSubmission(options = {}) {
   if (!submissionController?.hasActive?.()) return
-  void submissionController.resume()
+  void submissionController.resume(options)
 }
 
 function renderDiagnosticsPanel() {
