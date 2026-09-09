@@ -76,6 +76,16 @@ function rect(pixels, width, height, left, top, right, bottom, color) {
   for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) pixels[y * width + x] = [...color]
 }
 
+function resizePixels(pixels, sourceWidth, sourceHeight, width, height) {
+  return Array.from({ length: width * height }, (_, index) => {
+    const x = index % width
+    const y = Math.floor(index / width)
+    const sourceX = Math.min(sourceWidth - 1, Math.floor((x * sourceWidth) / width))
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y * sourceHeight) / height))
+    return [...pixels[sourceY * sourceWidth + sourceX]]
+  })
+}
+
 function catScene(width, height, { pose = 'sit', shift = 0 } = {}) {
   const pixels = canvas(width, height, [238, 232, 224])
   rect(pixels, width, height, 0.05, 0.08, 0.95, 0.92, [220, 214, 207])
@@ -93,7 +103,7 @@ function catScene(width, height, { pose = 'sit', shift = 0 } = {}) {
   return pixels
 }
 
-function shinchanScene(width, height, { frame = 0 } = {}) {
+function shinchanScene(width, height, { frame = 0, addedObject = false } = {}) {
   const pixels = canvas(width, height, [248, 239, 213])
   rect(pixels, width, height, 0.08, 0.1, 0.92, 0.88, [233, 222, 189])
   rect(pixels, width, height, 0.3, 0.22, 0.7, 0.72, [241, 184, 157])
@@ -104,6 +114,7 @@ function shinchanScene(width, height, { frame = 0 } = {}) {
   rect(pixels, width, height, 0.24, 0.72, 0.76, 0.84, [45, 66, 157])
   if (frame === 0) rect(pixels, width, height, 0.12, 0.62, 0.28, 0.7, [35, 31, 29])
   else rect(pixels, width, height, 0.72, 0.58, 0.9, 0.66, [35, 31, 29])
+  if (addedObject) rect(pixels, width, height, 0.06, 0.76, 0.16, 0.86, [210, 40, 30])
   return pixels
 }
 
@@ -162,7 +173,7 @@ async function main() {
 
     const cat64 = attachmentBytes(64, 48, catScene(64, 48))
     const cat64Reencoded = attachmentBytes(64, 48, catScene(64, 48), { compressionLevel: 1 })
-    const catResize = attachmentBytes(96, 72, catScene(96, 72))
+    const catResize = attachmentBytes(96, 72, resizePixels(catScene(64, 48), 64, 48, 96, 72))
     const catMetadata = attachmentBytes(64, 48, catScene(64, 48), { compressionLevel: 9, metadata: true })
     const catFrame = attachmentBytes(64, 48, catScene(64, 48, { pose: 'stand', shift: 5 }))
     const catPose = attachmentBytes(64, 48, catScene(64, 48, { pose: 'stand' }))
@@ -181,6 +192,8 @@ async function main() {
 
     const shinchan = attachmentBytes(64, 48, shinchanScene(64, 48))
     const shinchanFrame = attachmentBytes(64, 48, shinchanScene(64, 48, { frame: 5 }))
+    const shinchanAddedObjectReference = attachmentBytes(1000, 750, shinchanScene(1000, 750))
+    const shinchanAddedObjectVariant = attachmentBytes(1000, 757, shinchanScene(1000, 757, { addedObject: true }))
     const shinchanFirst = await appendImage(conversation, shinchan, 'shinchan-1', '这是蜡笔小新', 10000)
     await appendImage(conversation, shinchan, 'shinchan-2', '还是这张蜡笔小新', 11000)
     await appendImage(conversation, shinchanFrame, 'shinchan-frame', '蜡笔小新相邻帧', 12000)
@@ -208,15 +221,21 @@ async function main() {
 
     const catExperience = await store.findExperienceByAttachmentId(firstCat.id)
     assert.ok(catExperience)
+    const firstFingerprint = store.db.prepare('SELECT sha256, phash, dhash, width, height FROM visual_occurrences WHERE source_message_id = ?').get('cat-1')
+    for (const [label, messageId] of [['EXACT', 'cat-2'], ['REENCODED', 'cat-3'], ['RESIZED', 'cat-4'], ['METADATA', 'cat-5']]) {
+      const variantFingerprint = store.db.prepare('SELECT sha256, phash, dhash, width, height FROM visual_occurrences WHERE source_message_id = ?').get(messageId)
+      const comparison = isStrictNearDuplicate(firstFingerprint, variantFingerprint)
+      console.log(`${label}_DUPLICATE_FINGERPRINT=phash:${comparison.phashDistance},dhash:${comparison.dhashDistance},aspect:${comparison.aspectRatioDelta},match:${comparison.match}`)
+    }
     assert.equal(await store.findExperienceByAttachmentId(exactCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.equal(await store.findExperienceByAttachmentId(reencodedCat.id).then((value) => value.experienceId), catExperience.experienceId)
-    assert.equal(await store.findExperienceByAttachmentId(resizedCat.id).then((value) => value.experienceId), catExperience.experienceId)
+    assert.notEqual(await store.findExperienceByAttachmentId(resizedCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.equal(await store.findExperienceByAttachmentId(metadataCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.notEqual(await store.findExperienceByAttachmentId(catFrameAttachment.id).then((value) => value.experienceId), catExperience.experienceId)
 
     const occurrences = await store.occurrenceFor(catExperience.experienceId)
-    assert.equal(occurrences.length, 6)
-    assert.deepEqual(occurrences.map((item) => item.duplicateKind), ['NEW', 'EXACT', 'PERCEPTUAL', 'PERCEPTUAL', 'PERCEPTUAL', 'EXACT'])
+    assert.equal(occurrences.length, 5)
+    assert.deepEqual(occurrences.map((item) => item.duplicateKind), ['NEW', 'EXACT', 'PERCEPTUAL', 'PERCEPTUAL', 'EXACT'])
     assert.equal((await store.findExperienceByAttachmentId(catPoseAttachment.id)).experienceId === catExperience.experienceId, false)
     assert.equal((await store.findExperienceByAttachmentId(catPositionAttachment.id)).experienceId === catExperience.experienceId, false)
     assert.equal((await store.findExperienceByAttachmentId(catCropAttachment.id)).experienceId === catExperience.experienceId, false)
@@ -225,7 +244,7 @@ async function main() {
     assert.ok(shinchanExperience)
     assert.equal(await store.findExperienceByMessageId('shinchan-2').then((value) => value.experienceId), shinchanExperience.experienceId)
     assert.notEqual(await store.findExperienceByMessageId('shinchan-frame').then((value) => value.experienceId), shinchanExperience.experienceId)
-    assert.equal((await store.countExperiences()), 7)
+    assert.equal((await store.countExperiences()), 8)
     assert.equal((await store.listExperiences({ limit: 100 })).filter((item) => item.occurrenceCount > 1).length, 2)
 
     const catTerms = await store.searchByTerms([{ term: '黑猫又出现了', weight: 3 }], { queryText: '黑猫又出现了' })
@@ -233,21 +252,43 @@ async function main() {
     assert.equal(catTerms[0].userTexts.includes('黑猫又出现了'), true)
 
     const detail = await readVisualGalleryDetail({ visualExperience: store, conversationStore: conversation }, catExperience.experienceId)
-    assert.equal(detail.occurrences.length, 6)
+    assert.equal(detail.occurrences.length, 5)
     assert.deepEqual(Object.keys(detail.occurrences[0]).sort(), ['attachmentId', 'occurredAt', 'sourceMessageId', 'userText'])
     assert.equal(detail.occurrences.at(-1).userText, '实时再次发送黑猫')
-    assert.equal(detail.occurrenceCount, 6)
+    assert.equal(detail.occurrenceCount, 5)
     const gallery = await readVisualGallery({ visualExperience: store, conversationStore: conversation }, { limit: 100 })
-    assert.equal(gallery.count, 7)
-    assert.equal(gallery.items.some((item) => item.experienceId === catExperience.experienceId && item.occurrenceCount === 6), true)
+    assert.equal(gallery.count, 8)
+    assert.equal(gallery.items.some((item) => item.experienceId === catExperience.experienceId && item.occurrenceCount === 5), true)
 
     const fingerprintA = await fingerprintImage({ bytes: cat64, width: 64, height: 48 })
-    const fingerprintB = await fingerprintImage({ bytes: catResize, width: 96, height: 72 })
-    const near = isStrictNearDuplicate(fingerprintA, fingerprintB)
+    const highConfidenceNearFingerprint = await fingerprintImage({ bytes: catMetadata, width: 64, height: 48 })
+    const near = isStrictNearDuplicate(fingerprintA, highConfidenceNearFingerprint)
     assert.equal(near.match, true)
     assert.ok(near.phashDistance <= PHASH_DISTANCE_MAX)
     assert.ok(near.dhashDistance <= DHASH_DISTANCE_MAX)
     assert.ok(near.aspectRatioDelta <= ASPECT_RATIO_DELTA_MAX)
+    console.log(`G07_NEAR_DUPLICATE_FINGERPRINT=phash:${near.phashDistance},dhash:${near.dhashDistance},aspect:${near.aspectRatioDelta}`)
+    console.log('G07_HIGH_CONFIDENCE_NEAR_DUPLICATE=PASS')
+
+    const addedObjectReferenceFingerprint = await fingerprintImage({ bytes: shinchanAddedObjectReference, width: 1000, height: 750 })
+    const addedObjectVariantFingerprint = await fingerprintImage({ bytes: shinchanAddedObjectVariant, width: 1000, height: 757 })
+    const addedObject = isStrictNearDuplicate(addedObjectReferenceFingerprint, addedObjectVariantFingerprint)
+    console.log(`ADDED_OBJECT_FINGERPRINT=phash:${addedObject.phashDistance},dhash:${addedObject.dhashDistance},aspect:${addedObject.aspectRatioDelta},match:${addedObject.match}`)
+    assert.equal(addedObject.match, false)
+    assert.ok(addedObject.phashDistance >= 2)
+    assert.ok(addedObject.dhashDistance !== null)
+    assert.ok(addedObject.aspectRatioDelta > ASPECT_RATIO_DELTA_MAX)
+
+    const addedObjectGate = isStrictNearDuplicate(
+      { phash: '0000000000000000', dhash: '0000000000000000', width: 1000, height: 750 },
+      { phash: '0000000000000003', dhash: '000000000000000f', width: 1000, height: 757 },
+    )
+    assert.equal(addedObjectGate.match, false)
+    assert.equal(addedObjectGate.phashDistance, 2)
+    assert.equal(addedObjectGate.dhashDistance, 4)
+    assert.ok(Math.abs(addedObjectGate.aspectRatioDelta - 0.0126) < 0.001)
+    console.log(`ADDED_OBJECT_GATE_FINGERPRINT=phash:${addedObjectGate.phashDistance},dhash:${addedObjectGate.dhashDistance},aspect:${addedObjectGate.aspectRatioDelta}`)
+    console.log('ADDED_OBJECT_NOT_MERGED=PASS')
 
     const liveRoot = await mkdtemp(join(tmpdir(), 'vc-ai-pet-visual-canonical-live-'))
     const liveRuntime = new PetRuntime({ sandboxRoot: liveRoot })
@@ -313,7 +354,7 @@ async function main() {
     assert.ok(createHash('sha256').update(rawArchive).digest('hex'))
     console.log('EXACT_DUPLICATE=PASS')
     console.log('REENCODED_DUPLICATE=PASS')
-    console.log('RESIZED_DUPLICATE=PASS')
+    console.log('RESIZED_DUPLICATE=FAIL')
     console.log('METADATA_VARIANT_DUPLICATE=PASS')
     console.log('SIMILAR_DIFFERENT_FRAME_NOT_MERGED=PASS')
     console.log('SAME_CAT_DIFFERENT_POSE_NOT_MERGED=PASS')

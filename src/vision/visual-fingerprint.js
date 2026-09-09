@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 
-export const PHASH_DISTANCE_MAX = 4
-export const DHASH_DISTANCE_MAX = 4
-export const ASPECT_RATIO_DELTA_MAX = 0.02
+export const PHASH_DISTANCE_MAX = 1
+export const DHASH_DISTANCE_MAX = 1
+export const ASPECT_RATIO_DELTA_MAX = 0.005
 
 const PHASH_SIZE = 32
 const DHASH_WIDTH = 9

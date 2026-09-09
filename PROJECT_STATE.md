@@ -27,6 +27,36 @@ PRODUCTION_DEPLOYED=NO
 dedup additions。migration preview 继续只使用 sandbox/temp DB，保持
 `MODEL_CALLS=0`、`PET_MEMORY_WRITES=0`、`DREAM_RUNS=0`。
 
+## 2026-09-09 — Conservative Perceptual Dedup Gate After Real Production-Copy Review
+
+基于 `38b60954d38e1cfa6f34779518b7139bb1cb2e0f` 收紧通用 visual fingerprint gate，禁止
+针对 G05、attachment、owner text 或蜡笔小新做 special-case。默认阈值从 `4/4/0.02`
+改为 `1/1/0.005`，仍保持 model-free、fail-closed 的 PERCEPTUAL matching。
+
+真实 production-copy `41` roots 重新 preview：G05 candidate
+`530979ae-e78f-43b6-9913-16ed3eb7cb88` 不再进入 duplicate group；G07 的
+`pHash=0,dHash=1,aspect=0` near-duplicate 仍进入 group。新增 regression 覆盖
+added-object gate `pHash=2,dHash=4,aspect≈0.0123` 的 NO-MERGE，以及高置信 near-duplicate
+的 YES-MERGE。普通 resize fixture 在新 gate 下实测 `pHash=2,dHash=0,aspect=0`，因此保留
+真实 FAIL 结果，不为让 fixture 通过而放宽阈值。
+
+```text
+SOURCE_COMMIT=38b60954d38e1cfa6f34779518b7139bb1cb2e0f
+PREVIOUS_THRESHOLDS=4/4/0.02
+NEW_THRESHOLDS=1/1/0.005
+G05_FALSE_MERGE_REGRESSION=PASS
+G05_GROUPED=NO
+G07_HIGH_CONFIDENCE_DUPLICATE=PASS
+G07_GROUPED=YES
+RESIZED_DUPLICATE=FAIL
+MODEL_CALLS=0
+PET_MEMORY_WRITES=0
+DREAM_RUNS=0
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+FINAL_STATUS=PERCEPTUAL_THRESHOLD_REVIEW_REQUIRED
+```
+
 ## 2026-09-08 — Final Idempotency TTL Alignment Fix
 
 基于用户指定的 `dcb6c6095ef5eeeef76549135d2f46be465a9db0` 在独立 worktree
