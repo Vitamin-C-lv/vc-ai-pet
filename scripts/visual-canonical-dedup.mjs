@@ -16,6 +16,13 @@ function usage() {
   process.exitCode = 2
 }
 
+function groupClass(group) {
+  const gates = new Set(group.aliases.map((alias) => alias.perceptualGate).filter(Boolean))
+  if (gates.has('resize-safe')) return 'resize-safe'
+  if (gates.has('strict')) return 'strict'
+  return 'exact'
+}
+
 const sourceRoot = argument('--sandbox')
 const apply = process.argv.includes('--apply')
 if (!sourceRoot) {
@@ -50,6 +57,12 @@ if (!sourceRoot) {
     console.log(`MODEL_CALLS=${result.modelCalls}`)
     console.log(`PET_MEMORY_WRITES=${result.petMemoryWrites}`)
     console.log(`DREAM_RUNS=${result.dreamRuns}`)
+    console.log(`EXACT_GROUPS=${result.duplicateGroups.filter((group) => groupClass(group) === 'exact').length}`)
+    console.log(`STRICT_PERCEPTUAL_GROUPS=${result.duplicateGroups.filter((group) => groupClass(group) === 'strict').length}`)
+    console.log(`RESIZE_SAFE_PERCEPTUAL_GROUPS=${result.duplicateGroups.filter((group) => groupClass(group) === 'resize-safe').length}`)
+    for (const gate of [...new Set(result.duplicateGroups.flatMap((group) => group.aliases.map((alias) => alias.perceptualGate).filter(Boolean)))].sort()) {
+      console.log(`PERCEPTUAL_GATE=${gate}`)
+    }
     console.log(`DUPLICATE_GROUP_DETAILS=${JSON.stringify(result.duplicateGroups)}`)
   } finally {
     try { visual?.close() } catch {}

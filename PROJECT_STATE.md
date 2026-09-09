@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_GITHUB_FINAL_REVIEW
+Status: FINAL_STATUS=READY_FOR_VISUAL_DEDUP_PRODUCTION_MIGRATION_REVIEW
 
 ## 2026-09-09 — Visual Canonical Deduplication on Current Production Lineage
 
@@ -55,6 +55,47 @@ DREAM_RUNS=0
 PRODUCTION_DB_MODIFIED=NO
 PRODUCTION_DEPLOYED=NO
 FINAL_STATUS=PERCEPTUAL_THRESHOLD_REVIEW_REQUIRED
+```
+
+## 2026-09-09 — Conservative Two-Gate Perceptual Matching
+
+在不放宽 strict gate 的前提下，新增独立的 resize-safe gate：strict 为
+`pHash<=1,dHash<=1,aspect<=0.005`，resize-safe 为
+`pHash<=2,dHash<=1,aspect<=0.001`。匹配关系是 `strict OR resize-safe`。内部 reason
+区分为 `PERCEPTUAL_STRICT` / `PERCEPTUAL_RESIZE_SAFE`，对外 occurrence 继续返回
+`duplicateKind=PERCEPTUAL`，并提供 `perceptualGate=strict|resize-safe`，保持既有 API
+contract。没有 G05、attachment、owner text 或动画 special-case。
+
+dedup fixture 重新确认 exact、re-encode、metadata 与 ordinary resize 均通过；resize
+实测 `pHash=2,dHash=0,aspect=0` 使用 `resize-safe` gate。G05 boundary
+`2/4/~0.0126`、`2/2/0`、`2/1/>0.005` 与 `3/0/0` 均拒绝。新鲜 production-copy
+包含 `41` roots：G05 不再分组，G07 的 `0/1/0` strict near-duplicate 保持分组。
+唯一非 EXACT group 为 G07，contact sheet 人工复核未发现明显内容变化。
+
+```text
+BASE_COMMIT=819fb2ce33013c86ae2ccfb56bdad2dfa8d6e60a
+SOURCE_COMMIT=096845609497daad1e93756d7f2825c85688b101
+STRICT_GATE=1/1/0.005
+RESIZE_SAFE_GATE=2/1/0.001
+ROOTS_BEFORE=41
+DUPLICATE_GROUPS=10
+ROOTS_AFTER_CANONICAL_VIEW=26
+EXACT_GROUPS=9
+STRICT_PERCEPTUAL_GROUPS=1
+RESIZE_SAFE_PERCEPTUAL_GROUPS=0
+G05_GROUPED=NO
+G07_GROUPED=YES
+FALSE_MERGE_FOUND=NO
+SECOND_APPLY_ALIASES_CREATED=0
+SECOND_APPLY_OCCURRENCES_CREATED=0
+SECOND_APPLY_NEW_ROOT=0
+MODEL_CALLS=0
+PET_MEMORY_WRITES=0
+DREAM_RUNS=0
+ANDROID_COMPANION_MODIFIED_BY_DEDUP=NO
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+FINAL_STATUS=READY_FOR_VISUAL_DEDUP_PRODUCTION_MIGRATION_REVIEW
 ```
 
 ## 2026-09-08 — Final Idempotency TTL Alignment Fix

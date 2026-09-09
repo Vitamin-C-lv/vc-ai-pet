@@ -1,9 +1,18 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 
-export const PHASH_DISTANCE_MAX = 1
-export const DHASH_DISTANCE_MAX = 1
-export const ASPECT_RATIO_DELTA_MAX = 0.005
+export const STRICT_PHASH_DISTANCE_MAX = 1
+export const STRICT_DHASH_DISTANCE_MAX = 1
+export const STRICT_ASPECT_RATIO_DELTA_MAX = 0.005
+
+// Keep the original exports as the strict-gate compatibility names.
+export const PHASH_DISTANCE_MAX = STRICT_PHASH_DISTANCE_MAX
+export const DHASH_DISTANCE_MAX = STRICT_DHASH_DISTANCE_MAX
+export const ASPECT_RATIO_DELTA_MAX = STRICT_ASPECT_RATIO_DELTA_MAX
+
+export const RESIZE_SAFE_PHASH_DISTANCE_MAX = 2
+export const RESIZE_SAFE_DHASH_DISTANCE_MAX = 1
+export const RESIZE_SAFE_ASPECT_RATIO_DELTA_MAX = 0.001
 
 const PHASH_SIZE = 32
 const DHASH_WIDTH = 9
@@ -171,6 +180,21 @@ export function isStrictNearDuplicate(left, right, {
     phashDistance,
     dhashDistance,
     aspectRatioDelta: ratioDelta,
+  }
+}
+
+export function isPerceptualNearDuplicate(left, right) {
+  const strict = isStrictNearDuplicate(left, right)
+  if (strict.match) return { ...strict, perceptualGate: 'strict' }
+
+  const resizeSafe = isStrictNearDuplicate(left, right, {
+    phashDistanceMax: RESIZE_SAFE_PHASH_DISTANCE_MAX,
+    dhashDistanceMax: RESIZE_SAFE_DHASH_DISTANCE_MAX,
+    aspectRatioDeltaMax: RESIZE_SAFE_ASPECT_RATIO_DELTA_MAX,
+  })
+  return {
+    ...resizeSafe,
+    perceptualGate: resizeSafe.match ? 'resize-safe' : null,
   }
 }
 

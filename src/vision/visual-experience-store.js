@@ -8,12 +8,9 @@ import {
   ownerExactPhraseMatches,
 } from './visual-keywords.js'
 import {
-  ASPECT_RATIO_DELTA_MAX,
-  DHASH_DISTANCE_MAX,
-  PHASH_DISTANCE_MAX,
   aspectRatio,
   fingerprintImage,
-  isStrictNearDuplicate,
+  isPerceptualNearDuplicate,
   parseImageDataUrl,
 } from './visual-fingerprint.js'
 
@@ -24,6 +21,34 @@ export const VISUAL_BACKFILL_CURSOR_KEY = 'backfill_sequence'
 const EVENT_KINDS = new Set(VISUAL_EVENT_KINDS)
 const TERM_SOURCE_KINDS = new Set(['user_text', 'observation'])
 const EVIDENCE_KINDS = new Set(['inferred', 'raw'])
+const PERCEPTUAL_GATE_REASONS = Object.freeze({
+  PERCEPTUAL_STRICT: 'strict',
+  PERCEPTUAL_RESIZE_SAFE: 'resize-safe',
+})
+
+function publicDuplicateKind(value) {
+  return value === 'PERCEPTUAL_STRICT' || value === 'PERCEPTUAL_RESIZE_SAFE'
+    ? 'PERCEPTUAL'
+    : value ?? null
+}
+
+function perceptualGateForReason(value) {
+  return PERCEPTUAL_GATE_REASONS[value] ?? null
+}
+
+function perceptualReasonForGate(gate) {
+  return gate === 'strict'
+    ? 'PERCEPTUAL_STRICT'
+    : gate === 'resize-safe'
+      ? 'PERCEPTUAL_RESIZE_SAFE'
+      : 'PERCEPTUAL'
+}
+
+function storedDuplicateKind(duplicateKind, perceptualGate) {
+  return duplicateKind === 'PERCEPTUAL'
+    ? perceptualReasonForGate(perceptualGate)
+    : duplicateKind
+}
 
 function cleanText(value, maxLength = 1200) {
   return String(value ?? '').trim().slice(0, maxLength)
@@ -78,7 +103,8 @@ function rowToOccurrence(row) {
     dhash: row.dhash ?? null,
     width: row.width ?? null,
     height: row.height ?? null,
-    duplicateKind: row.duplicate_kind ?? null,
+    duplicateKind: publicDuplicateKind(row.duplicate_kind),
+    perceptualGate: perceptualGateForReason(row.duplicate_kind),
     createdAt: row.created_at,
   }
 }
@@ -432,7 +458,16 @@ export class VisualExperienceStore {
       `).all(fingerprint.sha256)
       for (const row of rows) {
         const canonical = this.#canonicalId(row.experience_id)
-        if (canonical && canonical !== excluded) return { experienceId: canonical, duplicateKind: 'EXACT', phashDistance: 0, dhashDistance: 0, aspectRatioDelta: 0, occurrence: rowToOccurrence(row) }
+        if (canonical && canonical !== excluded) return {
+          experienceId: canonical,
+          duplicateKind: 'EXACT',
+          perceptualGate: null,
+          perceptualReason: 'EXACT',
+          phashDistance: 0,
+          dhashDistance: 0,
+          aspectRatioDelta: 0,
+          occurrence: rowToOccurrence(row),
+        }
       }
     }
 
@@ -447,14 +482,12 @@ export class VisualExperienceStore {
     for (const row of rows) {
       const canonical = this.#canonicalId(row.experience_id)
       if (!canonical || canonical === excluded) continue
-      const comparison = isStrictNearDuplicate(fingerprint, row, {
-        phashDistanceMax: PHASH_DISTANCE_MAX,
-        dhashDistanceMax: DHASH_DISTANCE_MAX,
-        aspectRatioDeltaMax: ASPECT_RATIO_DELTA_MAX,
-      })
+      const comparison = isPerceptualNearDuplicate(fingerprint, row)
       if (comparison.match) return {
         experienceId: canonical,
         duplicateKind: 'PERCEPTUAL',
+        perceptualGate: comparison.perceptualGate,
+        perceptualReason: perceptualReasonForGate(comparison.perceptualGate),
         phashDistance: comparison.phashDistance,
         dhashDistance: comparison.dhashDistance,
         aspectRatioDelta: comparison.aspectRatioDelta,
@@ -485,7 +518,7 @@ export class VisualExperienceStore {
     return { created: inserted?.experience_id === experienceId, experienceId: inserted?.experience_id ?? null }
   }
 
-  #insertOccurrence(message, experienceId, fingerprint, duplicateKind) {
+  #insertOccurrence(message, experienceId, fingerprint, duplicateKind, perceptualGate = null) {
     const occurrenceId = this.#newId('occurrence')
     const sourceMessageId = String(message.id ?? '').trim()
     const attachmentId = String(message.attachment?.id ?? '').trim()
@@ -507,7 +540,7 @@ export class VisualExperienceStore {
       fingerprint?.dhash ?? null,
       fingerprint?.width ?? positiveInteger(message.attachment?.width),
       fingerprint?.height ?? positiveInteger(message.attachment?.height),
-      duplicateKind,
+      storedDuplicateKind(duplicateKind, perceptualGate),
       timestamp(this.now(), Date.now()),
     )
     const inserted = this.db.prepare('SELECT * FROM visual_occurrences WHERE source_message_id = ?').get(sourceMessageId)
@@ -566,7 +599,7 @@ export class VisualExperienceStore {
       createdExperience = inserted.created
     }
 
-    const insertedOccurrence = this.#insertOccurrence(message, match.experienceId, fingerprint, match.duplicateKind)
+    const insertedOccurrence = this.#insertOccurrence(message, match.experienceId, fingerprint, match.duplicateKind, match.perceptualGate)
     if (insertedOccurrence.created && tokenizeText) {
       const userText = cleanText(message.text)
       const terms = await tokenizeText(userText, {
@@ -696,12 +729,14 @@ export class VisualExperienceStore {
 
       const match = this.#findDuplicateCandidate(fingerprint, { excludeExperienceId: root.experience_id })
       if (!match) continue
-      if (this.#insertAlias(root.experience_id, match.experienceId, match.duplicateKind)) aliasesCreated += 1
+      const reason = match.perceptualReason ?? match.duplicateKind
+      if (this.#insertAlias(root.experience_id, match.experienceId, reason)) aliasesCreated += 1
       const canonical = this.#canonicalId(root.experience_id)
       if (!duplicateGroups.has(canonical)) duplicateGroups.set(canonical, [])
       duplicateGroups.get(canonical).push({
         aliasExperienceId: root.experience_id,
-        reason: match.duplicateKind,
+        reason,
+        perceptualGate: match.perceptualGate ?? null,
         hashDistances: {
           phash: match.phashDistance,
           dhash: match.dhashDistance,
@@ -717,6 +752,7 @@ export class VisualExperienceStore {
       groups.get(alias.canonical_experience_id).push({
         aliasExperienceId: alias.alias_experience_id,
         reason: alias.reason,
+        perceptualGate: perceptualGateForReason(alias.reason),
         hashDistances: duplicateGroups.get(alias.canonical_experience_id)?.find((item) => item.aliasExperienceId === alias.alias_experience_id)?.hashDistances ?? null,
       })
     }

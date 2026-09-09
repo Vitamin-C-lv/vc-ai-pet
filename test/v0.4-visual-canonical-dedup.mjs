@@ -13,7 +13,7 @@ import {
   DHASH_DISTANCE_MAX,
   PHASH_DISTANCE_MAX,
   fingerprintImage,
-  isStrictNearDuplicate,
+  isPerceptualNearDuplicate,
 } from '../src/vision/visual-fingerprint.js'
 import { VisualExperienceStore } from '../src/vision/visual-experience-store.js'
 
@@ -224,18 +224,19 @@ async function main() {
     const firstFingerprint = store.db.prepare('SELECT sha256, phash, dhash, width, height FROM visual_occurrences WHERE source_message_id = ?').get('cat-1')
     for (const [label, messageId] of [['EXACT', 'cat-2'], ['REENCODED', 'cat-3'], ['RESIZED', 'cat-4'], ['METADATA', 'cat-5']]) {
       const variantFingerprint = store.db.prepare('SELECT sha256, phash, dhash, width, height FROM visual_occurrences WHERE source_message_id = ?').get(messageId)
-      const comparison = isStrictNearDuplicate(firstFingerprint, variantFingerprint)
-      console.log(`${label}_DUPLICATE_FINGERPRINT=phash:${comparison.phashDistance},dhash:${comparison.dhashDistance},aspect:${comparison.aspectRatioDelta},match:${comparison.match}`)
+      const comparison = isPerceptualNearDuplicate(firstFingerprint, variantFingerprint)
+      console.log(`${label}_DUPLICATE_FINGERPRINT=phash:${comparison.phashDistance},dhash:${comparison.dhashDistance},aspect:${comparison.aspectRatioDelta},match:${comparison.match},gate:${comparison.perceptualGate ?? 'none'}`)
     }
     assert.equal(await store.findExperienceByAttachmentId(exactCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.equal(await store.findExperienceByAttachmentId(reencodedCat.id).then((value) => value.experienceId), catExperience.experienceId)
-    assert.notEqual(await store.findExperienceByAttachmentId(resizedCat.id).then((value) => value.experienceId), catExperience.experienceId)
+    assert.equal(await store.findExperienceByAttachmentId(resizedCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.equal(await store.findExperienceByAttachmentId(metadataCat.id).then((value) => value.experienceId), catExperience.experienceId)
     assert.notEqual(await store.findExperienceByAttachmentId(catFrameAttachment.id).then((value) => value.experienceId), catExperience.experienceId)
 
     const occurrences = await store.occurrenceFor(catExperience.experienceId)
-    assert.equal(occurrences.length, 5)
-    assert.deepEqual(occurrences.map((item) => item.duplicateKind), ['NEW', 'EXACT', 'PERCEPTUAL', 'PERCEPTUAL', 'EXACT'])
+    assert.equal(occurrences.length, 6)
+    assert.deepEqual(occurrences.map((item) => item.duplicateKind), ['NEW', 'EXACT', 'PERCEPTUAL', 'PERCEPTUAL', 'PERCEPTUAL', 'EXACT'])
+    assert.deepEqual(occurrences.map((item) => item.perceptualGate), [null, null, 'strict', 'resize-safe', 'strict', null])
     assert.equal((await store.findExperienceByAttachmentId(catPoseAttachment.id)).experienceId === catExperience.experienceId, false)
     assert.equal((await store.findExperienceByAttachmentId(catPositionAttachment.id)).experienceId === catExperience.experienceId, false)
     assert.equal((await store.findExperienceByAttachmentId(catCropAttachment.id)).experienceId === catExperience.experienceId, false)
@@ -244,7 +245,7 @@ async function main() {
     assert.ok(shinchanExperience)
     assert.equal(await store.findExperienceByMessageId('shinchan-2').then((value) => value.experienceId), shinchanExperience.experienceId)
     assert.notEqual(await store.findExperienceByMessageId('shinchan-frame').then((value) => value.experienceId), shinchanExperience.experienceId)
-    assert.equal((await store.countExperiences()), 8)
+    assert.equal((await store.countExperiences()), 7)
     assert.equal((await store.listExperiences({ limit: 100 })).filter((item) => item.occurrenceCount > 1).length, 2)
 
     const catTerms = await store.searchByTerms([{ term: '黑猫又出现了', weight: 3 }], { queryText: '黑猫又出现了' })
@@ -252,18 +253,19 @@ async function main() {
     assert.equal(catTerms[0].userTexts.includes('黑猫又出现了'), true)
 
     const detail = await readVisualGalleryDetail({ visualExperience: store, conversationStore: conversation }, catExperience.experienceId)
-    assert.equal(detail.occurrences.length, 5)
+    assert.equal(detail.occurrences.length, 6)
     assert.deepEqual(Object.keys(detail.occurrences[0]).sort(), ['attachmentId', 'occurredAt', 'sourceMessageId', 'userText'])
     assert.equal(detail.occurrences.at(-1).userText, '实时再次发送黑猫')
-    assert.equal(detail.occurrenceCount, 5)
+    assert.equal(detail.occurrenceCount, 6)
     const gallery = await readVisualGallery({ visualExperience: store, conversationStore: conversation }, { limit: 100 })
-    assert.equal(gallery.count, 8)
-    assert.equal(gallery.items.some((item) => item.experienceId === catExperience.experienceId && item.occurrenceCount === 5), true)
+    assert.equal(gallery.count, 7)
+    assert.equal(gallery.items.some((item) => item.experienceId === catExperience.experienceId && item.occurrenceCount === 6), true)
 
     const fingerprintA = await fingerprintImage({ bytes: cat64, width: 64, height: 48 })
     const highConfidenceNearFingerprint = await fingerprintImage({ bytes: catMetadata, width: 64, height: 48 })
-    const near = isStrictNearDuplicate(fingerprintA, highConfidenceNearFingerprint)
+    const near = isPerceptualNearDuplicate(fingerprintA, highConfidenceNearFingerprint)
     assert.equal(near.match, true)
+    assert.equal(near.perceptualGate, 'strict')
     assert.ok(near.phashDistance <= PHASH_DISTANCE_MAX)
     assert.ok(near.dhashDistance <= DHASH_DISTANCE_MAX)
     assert.ok(near.aspectRatioDelta <= ASPECT_RATIO_DELTA_MAX)
@@ -272,14 +274,14 @@ async function main() {
 
     const addedObjectReferenceFingerprint = await fingerprintImage({ bytes: shinchanAddedObjectReference, width: 1000, height: 750 })
     const addedObjectVariantFingerprint = await fingerprintImage({ bytes: shinchanAddedObjectVariant, width: 1000, height: 757 })
-    const addedObject = isStrictNearDuplicate(addedObjectReferenceFingerprint, addedObjectVariantFingerprint)
+    const addedObject = isPerceptualNearDuplicate(addedObjectReferenceFingerprint, addedObjectVariantFingerprint)
     console.log(`ADDED_OBJECT_FINGERPRINT=phash:${addedObject.phashDistance},dhash:${addedObject.dhashDistance},aspect:${addedObject.aspectRatioDelta},match:${addedObject.match}`)
     assert.equal(addedObject.match, false)
     assert.ok(addedObject.phashDistance >= 2)
     assert.ok(addedObject.dhashDistance !== null)
     assert.ok(addedObject.aspectRatioDelta > ASPECT_RATIO_DELTA_MAX)
 
-    const addedObjectGate = isStrictNearDuplicate(
+    const addedObjectGate = isPerceptualNearDuplicate(
       { phash: '0000000000000000', dhash: '0000000000000000', width: 1000, height: 750 },
       { phash: '0000000000000003', dhash: '000000000000000f', width: 1000, height: 757 },
     )
@@ -287,8 +289,39 @@ async function main() {
     assert.equal(addedObjectGate.phashDistance, 2)
     assert.equal(addedObjectGate.dhashDistance, 4)
     assert.ok(Math.abs(addedObjectGate.aspectRatioDelta - 0.0126) < 0.001)
+    assert.equal(addedObjectGate.perceptualGate, null)
     console.log(`ADDED_OBJECT_GATE_FINGERPRINT=phash:${addedObjectGate.phashDistance},dhash:${addedObjectGate.dhashDistance},aspect:${addedObjectGate.aspectRatioDelta}`)
     console.log('ADDED_OBJECT_NOT_MERGED=PASS')
+
+    const pHashTwoDHashTwo = isPerceptualNearDuplicate(
+      { phash: '0000000000000000', dhash: '0000000000000000', width: 1000, height: 1000 },
+      { phash: '0000000000000003', dhash: '0000000000000003', width: 1000, height: 1000 },
+    )
+    assert.equal(pHashTwoDHashTwo.match, false)
+    assert.equal(pHashTwoDHashTwo.phashDistance, 2)
+    assert.equal(pHashTwoDHashTwo.dhashDistance, 2)
+    assert.equal(pHashTwoDHashTwo.aspectRatioDelta, 0)
+    console.log('RESIZE_SAFE_BOUNDARY_PHASH_2_DHASH_2_NOT_MERGED=PASS')
+
+    const pHashTwoAspectDelta = isPerceptualNearDuplicate(
+      { phash: '0000000000000000', dhash: '0000000000000000', width: 1000, height: 1000 },
+      { phash: '0000000000000003', dhash: '0000000000000001', width: 1000, height: 994 },
+    )
+    assert.equal(pHashTwoAspectDelta.match, false)
+    assert.equal(pHashTwoAspectDelta.phashDistance, 2)
+    assert.equal(pHashTwoAspectDelta.dhashDistance, 1)
+    assert.ok(pHashTwoAspectDelta.aspectRatioDelta > 0.005)
+    console.log(`RESIZE_SAFE_BOUNDARY_PHASH_2_ASPECT_${pHashTwoAspectDelta.aspectRatioDelta.toFixed(6)}_NOT_MERGED=PASS`)
+
+    const pHashThree = isPerceptualNearDuplicate(
+      { phash: '0000000000000000', dhash: '0000000000000000', width: 1000, height: 1000 },
+      { phash: '0000000000000007', dhash: '0000000000000000', width: 1000, height: 1000 },
+    )
+    assert.equal(pHashThree.match, false)
+    assert.equal(pHashThree.phashDistance, 3)
+    assert.equal(pHashThree.dhashDistance, 0)
+    assert.equal(pHashThree.aspectRatioDelta, 0)
+    console.log('RESIZE_SAFE_BOUNDARY_PHASH_3_NOT_MERGED=PASS')
 
     const liveRoot = await mkdtemp(join(tmpdir(), 'vc-ai-pet-visual-canonical-live-'))
     const liveRuntime = new PetRuntime({ sandboxRoot: liveRoot })
@@ -354,7 +387,8 @@ async function main() {
     assert.ok(createHash('sha256').update(rawArchive).digest('hex'))
     console.log('EXACT_DUPLICATE=PASS')
     console.log('REENCODED_DUPLICATE=PASS')
-    console.log('RESIZED_DUPLICATE=FAIL')
+    console.log('RESIZED_DUPLICATE=PASS')
+    console.log('RESIZE_SAFE_PERCEPTUAL=PASS')
     console.log('METADATA_VARIANT_DUPLICATE=PASS')
     console.log('SIMILAR_DIFFERENT_FRAME_NOT_MERGED=PASS')
     console.log('SAME_CAT_DIFFERENT_POSE_NOT_MERGED=PASS')
