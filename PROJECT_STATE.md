@@ -2,6 +2,51 @@
 
 Status: FINAL_STATUS=VISUAL_CANONICAL_DEDUP_PRODUCTION_ACCEPTED
 
+## 2026-09-09 — Independent Visual Dedup Audit Bundle (No Production Mutation)
+
+按独立审计要求，使用真实 production data copy 与指定的历史源码快照
+`38b60954d38e1cfa6f34779518b7139bb1cb2e0f` 生成可外部复核的 benchmark、production-copy
+preview/apply replay、provenance/reopen/recall audit、contact sheets、完整测试日志与
+SHA256 manifest。所有 `ground_truth` 保持 `UNREVIEWED`；本轮没有写 production DB、没有
+production migration、没有 deploy，也没有把 production DB、archive、Conversation Store 或
+PetMemory 放入 ZIP。当前生产运行时单独记录为 `3847c1d4adc044490996f0b8485617a0d9c356cd`，
+不得与审计用的 38b algorithm prediction 混淆。
+
+```text
+AUDIT_FINAL_STATUS=READY_FOR_EXTERNAL_VISUAL_DEDUP_AUDIT
+AUDIT_SOURCE_COMMIT=38b60954d38e1cfa6f34779518b7139bb1cb2e0f
+PRODUCTION_RUNTIME_COMMIT=3847c1d4adc044490996f0b8485617a0d9c356cd
+GROUND_TRUTH_STATUS=UNREVIEWED
+ROOTS_BEFORE=41
+DUPLICATE_GROUPS=10
+ROOTS_AFTER_CANONICAL_VIEW=25
+ALIASES_CREATED_FIRST=16
+OCCURRENCES_CREATED_FIRST=41
+ALIASES_CREATED_SECOND=0
+OCCURRENCES_CREATED_SECOND=0
+NEW_ROOT_SECOND=0
+BENCHMARK_PAIRS=36
+PREDICTED_MERGES=21
+PREDICTED_NON_MERGES=15
+CONTACT_SHEETS=25
+REOPEN_GROUPS_PASS=10
+RECALL_AGGREGATION_AUDIT=PASS
+MODEL_CALLS=0
+PET_MEMORY_WRITES=0
+DREAM_RUNS=0
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+AUDIT_ZIP=vc-ai-pet-visual-dedup-audit-20260909-115223.zip
+AUDIT_ZIP_SIZE_BYTES=14373281
+AUDIT_ZIP_SHA256=6b0d977baac8657763cec0fa1899e6ca02efe0b6402b2d78b69a57ff39e70013
+```
+
+38b production-copy replay 中 G05 的 `2/4/0.012605042016806678` 仍是
+`MERGE_PREDICTED`，G07 的 `0/1/0` 也是 `MERGE_PREDICTED`；这两项均没有被写入人工
+真值。补充的 current runtime read-only comparison（3847）记录 G05 不分组、G07 分组，
+仅供 lineage/runtime 差异复核。审计包位于桌面工作目录，source bundle 只含请求指定的
+源码与 package scripts；六项 npm regression/client bundle 日志均为退出码 0。
+
 ## 2026-09-09 — Visual Canonical Deduplication on Current Production Lineage
 
 基于当前正式 lineage `819fb2ce33013c86ae2ccfb56bdad2dfa8d6e60a` 建立
