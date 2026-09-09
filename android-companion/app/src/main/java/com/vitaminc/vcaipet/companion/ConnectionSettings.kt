@@ -17,19 +17,49 @@ data class EndpointSettings(
     val remoteEndpoint: LanAddress,
     val mode: ConnectionMode = ConnectionMode.AUTO,
     val lastSuccessfulEndpoint: LanAddress? = null,
+    val learnedLanEndpoint: LanAddress? = null,
 ) {
-    fun candidates(): List<LanAddress> {
-        val configured = listOf(lanEndpoint, remoteEndpoint).distinct()
+    fun candidateEntries(): List<EndpointCandidate> {
+        val configured = listOf(
+            EndpointCandidate(lanEndpoint, EndpointRoute.WIFI),
+            EndpointCandidate(remoteEndpoint, EndpointRoute.DEFAULT),
+        )
         return when (mode) {
-            ConnectionMode.LAN -> listOf(lanEndpoint)
-            ConnectionMode.REMOTE -> listOf(remoteEndpoint)
+            ConnectionMode.LAN -> listOf(EndpointCandidate(lanEndpoint, EndpointRoute.WIFI))
+            ConnectionMode.REMOTE -> listOf(EndpointCandidate(remoteEndpoint, EndpointRoute.DEFAULT))
             ConnectionMode.AUTO -> {
-                val preferred = lastSuccessfulEndpoint
-                listOfNotNull(preferred) + configured.filterNot { it == preferred }
+                val preferred = lastSuccessfulEndpoint?.let {
+                    EndpointCandidate(it, routeFor(it))
+                }
+                val learned = learnedLanEndpoint?.let {
+                    EndpointCandidate(it, EndpointRoute.WIFI)
+                }
+                (listOfNotNull(preferred, learned) + configured).distinctBy { it.address }
             }
         }
     }
+
+    fun candidates(): List<LanAddress> {
+        return candidateEntries().map { it.address }
+    }
+
+    private fun routeFor(address: LanAddress): EndpointRoute {
+        return when {
+            address == lanEndpoint || address == learnedLanEndpoint -> EndpointRoute.WIFI
+            else -> EndpointRoute.DEFAULT
+        }
+    }
 }
+
+enum class EndpointRoute {
+    WIFI,
+    DEFAULT,
+}
+
+data class EndpointCandidate(
+    val address: LanAddress,
+    val route: EndpointRoute,
+)
 
 fun firstReachableEndpoint(
     settings: EndpointSettings,
@@ -48,4 +78,5 @@ object ConnectionPreferenceKeys {
     const val REMOTE_ENDPOINT = "REMOTE_ENDPOINT"
     const val CONNECTION_MODE = "CONNECTION_MODE"
     const val LAST_SUCCESSFUL_ENDPOINT = "lastSuccessfulEndpoint"
+    const val LEARNED_LAN_ENDPOINT = "LEARNED_LAN_ENDPOINT"
 }

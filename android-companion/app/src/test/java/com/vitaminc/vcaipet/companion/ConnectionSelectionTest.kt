@@ -86,4 +86,44 @@ class ConnectionSelectionTest {
         assertEquals(lan, selected)
         assertEquals(listOf(remote, lan), attempted)
     }
+
+    @Test
+    fun autoTriesLearnedLanAfterLastSuccessBeforeConfiguredLan() {
+        val learnedLan = LanAddress.parse("192.168.1.4:17870")
+        val settings = EndpointSettings(
+            lanEndpoint = lan,
+            remoteEndpoint = remote,
+            lastSuccessfulEndpoint = remote,
+            learnedLanEndpoint = learnedLan,
+        )
+
+        assertEquals(
+            listOf(remote, learnedLan, lan),
+            settings.candidates(),
+        )
+        assertEquals(
+            listOf(EndpointRoute.DEFAULT, EndpointRoute.WIFI, EndpointRoute.WIFI),
+            settings.candidateEntries().map { it.route },
+        )
+    }
+
+    @Test
+    fun learnedLanSuccessCanBeSelectedWithoutAConfiguredLanMatch() {
+        val learnedLan = LanAddress.parse("192.168.1.4:17870")
+        val attempted = mutableListOf<LanAddress>()
+        val selected = firstReachableEndpoint(
+            EndpointSettings(
+                lanEndpoint = lan,
+                remoteEndpoint = remote,
+                lastSuccessfulEndpoint = remote,
+                learnedLanEndpoint = learnedLan,
+            ),
+        ) {
+            attempted += it
+            it == learnedLan
+        }
+
+        assertEquals(learnedLan, selected)
+        assertEquals(listOf(remote, learnedLan), attempted)
+    }
 }

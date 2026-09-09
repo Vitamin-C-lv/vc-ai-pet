@@ -1,6 +1,8 @@
 package com.vitaminc.vcaipet.companion
 
 import android.annotation.SuppressLint
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -32,8 +34,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var editAddressButton: Button
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
+    private val connectivityManager by lazy {
+        getSystemService(ConnectivityManager::class.java)
+    }
     private val endpointProbeExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
     private var activeEndpoint: LanAddress? = null
+    private var activeEndpointNetwork: Network? = null
     private var endpointProbeGeneration = 0L
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
 
@@ -119,7 +125,7 @@ class MainActivity : ComponentActivity() {
             if (address == null || readEndpointSettings().mode == ConnectionMode.AUTO) {
                 connectUsingConfiguredEndpoints()
             } else {
-                loadPet(address)
+                loadPet(address, activeEndpointNetwork)
             }
         }
         editAddressButton.setOnClickListener {
@@ -152,26 +158,60 @@ class MainActivity : ComponentActivity() {
             hostInput.error = getString(R.string.invalid_address)
             return
         }
-        loadPet(address)
+        loadPet(address, network = null)
     }
 
     private fun connectUsingConfiguredEndpoints(settings: EndpointSettings = readEndpointSettings()) {
         endpointProbeGeneration += 1
         val generation = endpointProbeGeneration
         endpointProbeExecutor.execute {
-            val selected = firstReachableEndpoint(settings) { endpoint ->
-                EndpointProbe.isAvailable(endpoint)
+            val wifiNetwork = WifiLanDiscovery.findWifiNetwork(connectivityManager)
+            val known = settings.candidateEntries().firstOrNull { candidate ->
+                if (candidate.route == EndpointRoute.WIFI && wifiNetwork == null) {
+                    return@firstOrNull false
+                }
+                val network = if (candidate.route == EndpointRoute.WIFI) wifiNetwork?.network else null
+                EndpointProbe.isAvailable(candidate.address, network = network)
+            }
+            val discovered = if (known == null && settings.mode != ConnectionMode.REMOTE) {
+                wifiNetwork?.let(::discoverLanEndpoint)
+            } else {
+                null
+            }
+            val selected = known ?: discovered?.let {
+                EndpointCandidate(it, EndpointRoute.WIFI)
             }
             runOnUiThread {
                 if (generation != endpointProbeGeneration || isFinishing || isDestroyed) return@runOnUiThread
                 if (selected == null) {
                     activeEndpoint = null
+                    activeEndpointNetwork = null
                     showConnectionError()
                 } else {
-                    rememberSuccessfulEndpoint(selected)
-                    loadPet(selected)
+                    val network = if (selected.route == EndpointRoute.WIFI) {
+                        wifiNetwork?.network
+                    } else {
+                        null
+                    }
+                    rememberSuccessfulEndpoint(selected.address, learnedLan = discovered != null)
+                    loadPet(selected.address, network)
                 }
             }
+        }
+    }
+
+    private fun discoverLanEndpoint(wifiNetwork: WifiNetworkSnapshot): LanAddress? {
+        val candidates = WifiLanDiscovery.candidateAddresses(
+            address = wifiNetwork.ipv4Address,
+            prefixLength = wifiNetwork.prefixLength,
+        ) ?: return null
+        return WifiLanDiscovery.discover(candidates) { endpoint ->
+            EndpointProbe.isAvailable(
+                address = endpoint,
+                connectTimeoutMs = EndpointProbe.DISCOVERY_CONNECT_TIMEOUT_MS,
+                readTimeoutMs = EndpointProbe.DISCOVERY_READ_TIMEOUT_MS,
+                network = wifiNetwork.network,
+            )
         }
     }
 
@@ -187,6 +227,11 @@ class MainActivity : ComponentActivity() {
         val mode = ConnectionMode.fromPreference(
             preferences.getString(ConnectionPreferenceKeys.CONNECTION_MODE, null),
         )
+        val learnedLanEndpoint = preferences.getString(
+            ConnectionPreferenceKeys.LEARNED_LAN_ENDPOINT,
+            null,
+        )?.let { runCatching { LanAddress.parse(it) }.getOrNull() }
+            ?.takeIf { LanAddress.isPrivateLanIpv4(it.host) }
         val lastSuccessfulEndpoint = listOf(
             preferences.getString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, null),
             preferences.getString(PREFERENCE_HOST, null),
@@ -205,6 +250,12 @@ class MainActivity : ComponentActivity() {
                 lastSuccessfulEndpoint.hostPort,
             )
         }
+        if (learnedLanEndpoint != null) {
+            preferenceEditor.putString(
+                ConnectionPreferenceKeys.LEARNED_LAN_ENDPOINT,
+                learnedLanEndpoint.hostPort,
+            )
+        }
         preferenceEditor.apply()
 
         return EndpointSettings(
@@ -212,6 +263,7 @@ class MainActivity : ComponentActivity() {
             remoteEndpoint = remoteEndpoint,
             mode = mode,
             lastSuccessfulEndpoint = lastSuccessfulEndpoint,
+            learnedLanEndpoint = learnedLanEndpoint,
         )
     }
 
@@ -221,15 +273,20 @@ class MainActivity : ComponentActivity() {
             .getOrElse { LanAddress.parse(fallback) }
     }
 
-    private fun rememberSuccessfulEndpoint(address: LanAddress) {
-        preferences.edit()
+    private fun rememberSuccessfulEndpoint(address: LanAddress, learnedLan: Boolean = false) {
+        val editor = preferences.edit()
             .putString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, address.hostPort)
             .putString(PREFERENCE_HOST, address.hostPort)
-            .apply()
+        if (learnedLan) {
+            editor.putString(ConnectionPreferenceKeys.LEARNED_LAN_ENDPOINT, address.hostPort)
+        }
+        editor.apply()
     }
 
-    private fun loadPet(address: LanAddress) {
+    private fun loadPet(address: LanAddress, network: Network? = null) {
+        connectivityManager.bindProcessToNetwork(network)
         activeEndpoint = address
+        activeEndpointNetwork = network
         preferences.edit()
             .putString(PREFERENCE_HOST, address.hostPort)
             .putString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, address.hostPort)

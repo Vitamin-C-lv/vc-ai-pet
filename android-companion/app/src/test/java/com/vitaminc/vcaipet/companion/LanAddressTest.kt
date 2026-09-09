@@ -35,6 +35,15 @@ class LanAddressTest {
     }
 
     @Test
+    fun discoveryPrivateLanCheckDoesNotTreatTailscaleAsWifiLan() {
+        assertTrue(LanAddress.isPrivateLanIpv4("192.168.1.4"))
+        assertTrue(LanAddress.isPrivateLanIpv4("172.20.0.5"))
+        assertTrue(LanAddress.isPrivateLanIpv4("10.0.0.7"))
+        assertTrue(!LanAddress.isPrivateLanIpv4("100.69.220.26"))
+        assertTrue(!LanAddress.isPrivateLanIpv4("8.8.8.8"))
+    }
+
+    @Test
     fun preservesPortRangeValidation() {
         assertThrows(IllegalArgumentException::class.java) { LanAddress.parse("100.69.220.26:0") }
         assertThrows(IllegalArgumentException::class.java) { LanAddress.parse("100.69.220.26:65536") }

@@ -76,14 +76,21 @@ class LanAddress private constructor(
             return localHostPattern.matches(host)
         }
 
-        private fun isPrivateIpv4(host: String): Boolean {
+        fun isPrivateLanIpv4(host: String): Boolean {
             if (!ipv4Pattern.matches(host)) return false
             val octets = host.split('.').map(String::toInt)
             if (octets.any { it !in 0..255 }) return false
             return octets[0] == 10
                 || (octets[0] == 172 && octets[1] in 16..31)
                 || (octets[0] == 192 && octets[1] == 168)
-                || (octets[0] == 100 && octets[1] in 64..127)
+        }
+
+        private fun isPrivateIpv4(host: String): Boolean {
+            if (isPrivateLanIpv4(host)) return true
+            if (!ipv4Pattern.matches(host)) return false
+            val octets = host.split('.').map(String::toInt)
+            return octets.all { it in 0..255 }
+                && octets[0] == 100 && octets[1] in 64..127
         }
     }
 }

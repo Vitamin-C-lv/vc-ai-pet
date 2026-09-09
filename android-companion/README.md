@@ -13,7 +13,9 @@ Android APK
 
 ## 连接
 
-首次启动会自动探测两个保存的 endpoint：`LAN_ENDPOINT=192.168.1.175:17870` 与 `REMOTE_ENDPOINT=100.69.220.26:17870`。连接模式 `CONNECTION_MODE` 默认为 `AUTO`，优先探测 `lastSuccessfulEndpoint`，失败后再探测另一个 endpoint；探测只发送短超时的 `GET /api/pet/state`，第一个 HTTP 200 的地址成为 `activeEndpoint` 并保存为 `lastSuccessfulEndpoint`。用户仍可手动输入合法地址，保存到 `SharedPreferences` 的连接信息不包含账号或密码。
+首次启动会自动探测两个保存的 endpoint：`LAN_ENDPOINT=192.168.1.175:17870` 与 `REMOTE_ENDPOINT=100.69.220.26:17870`。连接模式 `CONNECTION_MODE` 默认为 `AUTO`，候选顺序是 `lastSuccessfulEndpoint`、`LEARNED_LAN_ENDPOINT`、配置的 LAN endpoint、remote endpoint；候选会去重。LAN 候选尽可能绑定当前 `TRANSPORT_WIFI` 网络，remote endpoint 继续使用系统默认/VPN 网络。探测只接受具有当前 `/api/pet/state` 稳定结构的 HTTP 200 响应，不会把任意开放端口当成花花的电脑。
+
+如果所有已知候选都失败，`AUTO`/`LAN` 会根据当前 Wi-Fi IPv4 和 prefix 只扫描本地 subnet，最多扫描 512 个主机，并使用 20 个并发的短超时 probe。找到合法的 VC-AI-PET state 后，地址会保存为 `LEARNED_LAN_ENDPOINT`、`lastSuccessfulEndpoint` 和 `pet_host`；下一次启动会优先快速探测这个 learned endpoint，不要求用户清缓存或重新输入地址。过大的 subnet 会直接跳过 discovery。
 
 默认端口是 `17870`。允许的地址是 `localhost`、`127.0.0.1`、私有 IPv4 网段 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、Tailscale CGNAT `100.64.0.0/10`，以及手工输入的 `*.local` 主机名。地址会规范化为 `http://host:port/`。WebView 主导航只允许当前配置的 HTTP origin；公网、HTTPS、`file:`、`content:`、`intent:`、`javascript:` 和 `data:` 导航都会被拦截。
 
@@ -41,7 +43,7 @@ adb devices
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-不需要 `READ_EXTERNAL_STORAGE`、`WRITE_EXTERNAL_STORAGE`、`MANAGE_EXTERNAL_STORAGE`、`CAMERA`、`RECORD_AUDIO`、`POST_NOTIFICATIONS` 或位置权限；Manifest 只声明 `INTERNET`。LAN HTTP 由应用自己的 `network_security_config.xml` 允许，WebViewClient 仍执行当前 origin 的导航边界。
+不需要 `READ_EXTERNAL_STORAGE`、`WRITE_EXTERNAL_STORAGE`、`MANAGE_EXTERNAL_STORAGE`、`CAMERA`、`RECORD_AUDIO`、`POST_NOTIFICATIONS` 或位置权限；Manifest 只声明 `INTERNET`、用于读取当前网络拓扑的 `ACCESS_NETWORK_STATE`，以及在 LAN WebView 加载时绑定当前 Wi-Fi、在 remote/手工连接时恢复 default network 的 `CHANGE_NETWORK_STATE`。LAN HTTP 由应用自己的 `network_security_config.xml` 允许，WebViewClient 仍执行当前 origin 的导航边界。
 
 ## 人工验收
 
