@@ -309,7 +309,7 @@ h1 {
 
 #pet-sprite {
   width: clamp(192px, 30dvh, 240px);
-  height: auto;
+  height: clamp(192px, 30dvh, 240px);
   max-width: min(78vw, 240px);
   max-height: 100%;
   image-rendering: pixelated;
@@ -318,7 +318,7 @@ h1 {
 }
 
 #pet-sprite.active {
-  transform: scale(1.04);
+  transform: scale(1.02);
 }
 
 .stage-status {
@@ -925,6 +925,7 @@ button:disabled {
 
   #pet-sprite {
     width: clamp(176px, 32dvh, 210px);
+    height: clamp(176px, 32dvh, 210px);
     max-width: min(70vw, 210px);
   }
 }
@@ -963,6 +964,7 @@ button:disabled {
 
   #pet-sprite {
     width: min(52vw, 170px);
+    height: min(52vw, 170px);
     max-width: min(52vw, 170px);
   }
 }

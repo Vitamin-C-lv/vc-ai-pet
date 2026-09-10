@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "canvas": [
+    384,
+    384
+  ],
+  "baseline": 0.859375,
+  "centerX": 0.5,
+  "states": {
+    "idle": {
+      "frames": [
+        "home-idle-01.png",
+        "home-idle-02.png",
+        "home-idle-03.png",
+        "home-idle-04.png"
+      ],
+      "durations": [
+        560,
+        300,
+        360,
+        820
+      ]
+    },
+    "thinking": {
+      "frames": [
+        "home-thinking-01.png",
+        "home-thinking-02.png",
+        "home-thinking-03.png",
+        "home-thinking-04.png"
+      ],
+      "durations": [
+        520,
+        330,
+        380,
+        720
+      ]
+    },
+    "happy": {
+      "frames": [
+        "home-happy-01.png",
+        "home-happy-02.png",
+        "home-happy-03.png",
+        "home-happy-04.png"
+      ],
+      "durations": [
+        360,
+        240,
+        320,
+        520
+      ]
+    },
+    "excited": {
+      "frames": [
+        "home-excited-01.png",
+        "home-excited-02.png",
+        "home-excited-03.png",
+        "home-excited-04.png"
+      ],
+      "durations": [
+        280,
+        220,
+        270,
+        430
+      ]
+    },
+    "relaxed": {
+      "frames": [
+        "home-relaxed-01.png",
+        "home-relaxed-02.png",
+        "home-relaxed-03.png",
+        "home-relaxed-04.png"
+      ],
+      "durations": [
+        680,
+        390,
+        460,
+        760
+      ]
+    },
+    "waiting": {
+      "frames": [
+        "home-waiting-01.png",
+        "home-waiting-02.png",
+        "home-waiting-03.png",
+        "home-waiting-04.png"
+      ],
+      "durations": [
+        640,
+        360,
+        420,
+        760
+      ]
+    },
+    "curious": {
+      "frames": [
+        "home-curious-01.png",
+        "home-curious-02.png",
+        "home-curious-03.png",
+        "home-curious-04.png"
+      ],
+      "durations": [
+        460,
+        280,
+        360,
+        620
+      ]
+    },
+    "confused": {
+      "frames": [
+        "home-confused-01.png",
+        "home-confused-02.png",
+        "home-confused-03.png",
+        "home-confused-04.png"
+      ],
+      "durations": [
+        430,
+        260,
+        340,
+        580
+      ]
+    },
+    "sleep": {
+      "frames": [
+        "home-sleep-01.png",
+        "home-sleep-02.png",
+        "home-sleep-03.png",
+        "home-sleep-04.png"
+      ],
+      "durations": [
+        740,
+        430,
+        520,
+        900
+      ]
+    },
+    "dreaming": {
+      "frames": [
+        "home-dreaming-01.png",
+        "home-dreaming-02.png",
+        "home-dreaming-03.png",
+        "home-dreaming-04.png"
+      ],
+      "durations": [
+        780,
+        470,
+        560,
+        930
+      ]
+    },
+    "walk": {
+      "frames": [
+        "home-walk-01.png",
+        "home-walk-02.png",
+        "home-walk-03.png",
+        "home-walk-04.png",
+        "home-walk-05.png",
+        "home-walk-06.png"
+      ],
+      "durations": [
+        180,
+        180,
+        180,
+        180,
+        180,
+        180
+      ]
+    }
+  }
+}

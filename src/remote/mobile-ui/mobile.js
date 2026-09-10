@@ -35,6 +35,7 @@ let diagnosticsCopyFallback
 let diagnosticsCopyButton
 let diagnosticsClearButton
 let diagnosticsCloseButton
+let homeSpriteAnimator
 
 const MAX_LONG_EDGE = 1920
 const THUMBNAIL_MAX_EDGE = 256
@@ -230,7 +231,10 @@ function bindKeyboardState() {
   globalThis.addEventListener?.('resize', () => scheduleKeyboardState(true))
   globalThis.addEventListener?.('orientationchange', () => scheduleKeyboardState(true))
   globalThis.addEventListener?.('pageshow', () => scheduleKeyboardState())
-  document.addEventListener('visibilitychange', () => scheduleKeyboardState())
+  document.addEventListener('visibilitychange', () => {
+    scheduleKeyboardState()
+    homeSpriteAnimator?.setActive(currentScreen === SCREEN.HOME && document.visibilityState !== 'hidden')
+  })
   visualViewport?.addEventListener('resize', () => scheduleKeyboardState(true))
   visualViewport?.addEventListener('scroll', () => scheduleKeyboardState(true))
   scheduleKeyboardState()
@@ -349,6 +353,7 @@ function renderScreen(screen, params = {}) {
   if (appHeader) appHeader.hidden = nextScreen !== SCREEN.HOME
   petApp?.classList.toggle('chat-active', nextScreen === SCREEN.CHAT)
   if (petApp) petApp.dataset.screen = nextScreen
+  homeSpriteAnimator?.setActive(nextScreen === SCREEN.HOME && document.visibilityState !== 'hidden')
   const focusTarget = nextScreen === SCREEN.HOUSE ? '#house-back'
     : nextScreen === SCREEN.CHAT ? '#chat-home'
       : nextScreen === SCREEN.DREAMS ? '#inner-life-back'
@@ -1053,12 +1058,19 @@ async function chooseImage() {
 async function refresh() {
   try {
     const { payload: state } = await fetchJsonDiagnostic('/api/pet/state', { cache: 'no-store' }, { stage: 'state' })
-    stateLabel.textContent = `当前状态：${state.visualState || 'idle'}`
-    happiness.textContent = number(state.emotion?.happiness)
-    energy.textContent = number(state.emotion?.energy)
-    if (state.sprite) sprite.src = `/assets/${state.sprite}`
+    renderPetPresentation(state)
     setOnline(true)
   } catch { setOnline(false) }
+}
+
+function renderPetPresentation(state = {}) {
+  const visualState = state.visualState || 'idle'
+  const fallbackSprite = state.sprite || 'idle-front.png'
+  stateLabel.textContent = `当前状态：${visualState}`
+  happiness.textContent = number(state.emotion?.happiness)
+  energy.textContent = number(state.emotion?.energy)
+  if (homeSpriteAnimator) homeSpriteAnimator.setPresentation(visualState, fallbackSprite)
+  else sprite.src = `/assets/${fallbackSprite}`
 }
 
 async function loadHistory() {
@@ -1097,7 +1109,8 @@ async function uploadImage(image) {
 
 async function action(action) {
   try {
-    await fetchJsonDiagnostic('/api/pet/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) }, { stage: 'action' })
+    const { payload } = await fetchJsonDiagnostic('/api/pet/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) }, { stage: 'action' })
+    renderPetPresentation(payload)
     sprite.classList.add('active'); setTimeout(() => sprite.classList.remove('active'), 240)
     await refresh()
   } catch { setOnline(false) }
@@ -1486,6 +1499,13 @@ function installDiagnosticHooks() {
 function bindDom() {
   stateLabel = document.querySelector('#state-label')
   sprite = document.querySelector('#pet-sprite')
+  homeSpriteAnimator = globalThis.VcAiPetHomeSpriteAnimations?.createHomeSpriteAnimator?.({
+    image: sprite,
+    onFrameError: ({ state, frame, fallback }) => recordDiagnostic({
+      level: 'error', stage: 'image-load', code: 'HOME_SPRITE_FRAME_FAILURE',
+      details: { visualState: state, frame, fallback },
+    }),
+  }) ?? null
   happiness = document.querySelector('#happiness')
   energy = document.querySelector('#energy')
   connection = document.querySelector('#connection')
