@@ -13,6 +13,110 @@ class WifiLanDiscoveryTest {
     private val phoneAddress = InetAddress.getByName("192.168.1.3") as Inet4Address
 
     @Test
+    fun physicalWifiCandidateIsSelected() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(candidate("wlan0", interfaceName = "wlan0")),
+        )
+
+        assertEquals("wlan0", selected?.network)
+    }
+
+    @Test
+    fun vpnOverWifiCandidateIsRejected() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(
+                candidate(
+                    network = "tun0",
+                    hasVpnTransport = true,
+                    interfaceName = "tun0",
+                    address = "172.19.0.1",
+                    prefixLength = 30,
+                ),
+            ),
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun physicalWifiWinsWhenVpnNetworkAppearsFirst() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(
+                candidate(
+                    network = "vpn",
+                    hasVpnTransport = true,
+                    interfaceName = "tun0",
+                    address = "172.19.0.1",
+                    prefixLength = 30,
+                ),
+                candidate("physical", interfaceName = "wlan0"),
+            ),
+        )
+
+        assertEquals("physical", selected?.network)
+    }
+
+    @Test
+    fun physicalWifiWinsWhenReturnedAfterVpnNetwork() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(
+                candidate("physical", interfaceName = "wlan0"),
+                candidate(
+                    network = "vpn",
+                    hasVpnTransport = true,
+                    interfaceName = "tun0",
+                    address = "172.19.0.1",
+                    prefixLength = 30,
+                ),
+            ),
+        )
+
+        assertEquals("physical", selected?.network)
+    }
+
+    @Test
+    fun wlan0AndPrivateIpv4ArePreferredAmongPhysicalCandidates() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(
+                candidate(
+                    network = "public",
+                    interfaceName = "eth0",
+                    address = "8.8.8.8",
+                ),
+                candidate(
+                    network = "wlan1",
+                    interfaceName = "wlan1",
+                    address = "192.168.1.8",
+                ),
+                candidate(
+                    network = "wlan0",
+                    interfaceName = "wlan0",
+                    address = "192.168.1.3",
+                ),
+            ),
+        )
+
+        assertEquals("wlan0", selected?.network)
+    }
+
+    @Test
+    fun onlyVpnOverWifiCandidatesFailClosed() {
+        val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+            listOf(
+                candidate(
+                    network = "vpn",
+                    hasVpnTransport = true,
+                    interfaceName = "tun0",
+                    address = "172.19.0.1",
+                    prefixLength = 30,
+                ),
+            ),
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
     fun slash24ExcludesNetworkBroadcastAndDeviceAddress() {
         val candidates = WifiLanDiscovery.candidateAddresses(phoneAddress, 24)
 
@@ -48,5 +152,24 @@ class WifiLanDiscoveryTest {
         val selected = WifiLanDiscovery.discover(candidates) { it.host == "192.168.1.2" }
 
         assertEquals("192.168.1.2", selected?.host)
+    }
+
+    private fun candidate(
+        network: String,
+        hasWifiTransport: Boolean = true,
+        hasVpnTransport: Boolean = false,
+        interfaceName: String = "wlan0",
+        address: String = "192.168.1.3",
+        prefixLength: Int = 24,
+    ): WifiNetworkCandidate<String> {
+        return WifiNetworkCandidate(
+            network = network,
+            networkId = network,
+            hasWifiTransport = hasWifiTransport,
+            hasVpnTransport = hasVpnTransport,
+            interfaceName = interfaceName,
+            ipv4Address = InetAddress.getByName(address) as Inet4Address,
+            prefixLength = prefixLength,
+        )
     }
 }

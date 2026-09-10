@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -294,14 +295,36 @@ class MainActivity : ComponentActivity() {
         val candidates = WifiLanDiscovery.candidateAddresses(
             address = wifiNetwork.ipv4Address,
             prefixLength = wifiNetwork.prefixLength,
-        ) ?: return null
+        ) ?: run {
+            Log.i(
+                WIFI_DISCOVERY_LOG_TAG,
+                "WIFI_DISCOVERY_SUBNET network=${wifiNetwork.network} " +
+                    "ipv4=${wifiNetwork.ipv4Address.hostAddress}/${wifiNetwork.prefixLength} " +
+                    "candidateCount=NONE",
+            )
+            return null
+        }
+        Log.i(
+            WIFI_DISCOVERY_LOG_TAG,
+            "WIFI_DISCOVERY_SUBNET network=${wifiNetwork.network} " +
+                "ipv4=${wifiNetwork.ipv4Address.hostAddress}/${wifiNetwork.prefixLength} " +
+                "candidateCount=${candidates.size}",
+        )
         return WifiLanDiscovery.discover(candidates) { endpoint ->
-            EndpointProbe.isAvailable(
+            val available = EndpointProbe.isAvailable(
                 address = endpoint,
                 connectTimeoutMs = EndpointProbe.DISCOVERY_CONNECT_TIMEOUT_MS,
                 readTimeoutMs = EndpointProbe.DISCOVERY_READ_TIMEOUT_MS,
                 network = wifiNetwork.network,
             )
+            if (available) {
+                Log.i(
+                    WIFI_DISCOVERY_LOG_TAG,
+                    "WIFI_DISCOVERY_PROBE_PASS endpoint=${endpoint.hostPort} " +
+                        "method=GET path=/api/pet/state",
+                )
+            }
+            available
         }
     }
 
@@ -600,6 +623,7 @@ class MainActivity : ComponentActivity() {
         private const val PREFERENCE_HOST = "pet_host"
         private const val SPLASH_FOUND_MESSAGE_MS = 300L
         private const val SPLASH_FADE_DURATION_MS = 250L
+        private const val WIFI_DISCOVERY_LOG_TAG = "WifiLanDiscovery"
         private val DISCOVERY_RETRY_OFFSETS_MS = longArrayOf(4_000L, 9_000L, 14_000L)
         private val IMAGE_MIME_TYPES = arrayOf(
             "image/jpeg",

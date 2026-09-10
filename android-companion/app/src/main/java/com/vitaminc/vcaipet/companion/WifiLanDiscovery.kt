@@ -3,6 +3,7 @@ package com.vitaminc.vcaipet.companion
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.util.Log
 import java.net.Inet4Address
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorCompletionService
@@ -14,28 +15,89 @@ data class WifiNetworkSnapshot(
     val prefixLength: Int,
 )
 
+internal data class WifiNetworkCandidate<T>(
+    val network: T,
+    val networkId: String,
+    val hasWifiTransport: Boolean,
+    val hasVpnTransport: Boolean,
+    val interfaceName: String?,
+    val ipv4Address: Inet4Address?,
+    val prefixLength: Int?,
+)
+
 object WifiLanDiscovery {
     const val MAX_DISCOVERY_HOSTS = 512
     const val DISCOVERY_CONCURRENCY = 20
 
     fun findWifiNetwork(connectivityManager: ConnectivityManager): WifiNetworkSnapshot? {
-        return connectivityManager.allNetworks.asSequence()
-            .mapNotNull { network ->
-                val capabilities = connectivityManager.getNetworkCapabilities(network)
-                    ?: return@mapNotNull null
-                if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                    return@mapNotNull null
-                }
-                val linkAddress = connectivityManager.getLinkProperties(network)
-                    ?.linkAddresses
-                    ?.firstOrNull { it.address is Inet4Address }
-                    ?: return@mapNotNull null
-                WifiNetworkSnapshot(
-                    network = network,
-                    ipv4Address = linkAddress.address as Inet4Address,
-                    prefixLength = linkAddress.prefixLength,
-                )
+        val candidates = connectivityManager.allNetworks.mapNotNull { network ->
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+                ?: return@mapNotNull null
+            val linkProperties = connectivityManager.getLinkProperties(network)
+            val linkAddress = linkProperties
+                ?.linkAddresses
+                ?.firstOrNull { it.address is Inet4Address }
+            WifiNetworkCandidate(
+                network = network,
+                networkId = network.toString(),
+                hasWifiTransport = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                hasVpnTransport = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                interfaceName = linkProperties?.interfaceName,
+                ipv4Address = linkAddress?.address as? Inet4Address,
+                prefixLength = linkAddress?.prefixLength,
+            )
+        }
+
+        val selected = selectPhysicalWifiCandidate(candidates)
+        candidates.forEach { candidate ->
+            logCandidate(
+                candidate = candidate,
+                selected = candidate === selected,
+            )
+        }
+
+        return selected?.let { candidate ->
+            val ipv4Address = candidate.ipv4Address ?: return@let null
+            val prefixLength = candidate.prefixLength ?: return@let null
+            WifiNetworkSnapshot(
+                network = candidate.network,
+                ipv4Address = ipv4Address,
+                prefixLength = prefixLength,
+            )
+        }
+    }
+
+    /**
+     * Selects a physical Wi-Fi candidate without relying on ConnectivityManager
+     * network enumeration order. VPN-over-Wi-Fi is deliberately rejected.
+     */
+    internal fun <T> selectPhysicalWifiCandidate(
+        candidates: List<WifiNetworkCandidate<T>>,
+    ): WifiNetworkCandidate<T>? {
+        return candidates
+            .asSequence()
+            .filter { candidate ->
+                candidate.hasWifiTransport &&
+                    !candidate.hasVpnTransport &&
+                    !isVirtualInterface(candidate.interfaceName) &&
+                    candidate.ipv4Address != null &&
+                    candidate.prefixLength?.let { it in 0..32 } == true
             }
+            .sortedWith(
+                compareBy<WifiNetworkCandidate<T>>(
+                    { if (it.interfaceName.equals("wlan0", ignoreCase = true)) 0 else 1 },
+                    {
+                        if (it.ipv4Address?.hostAddress?.let(LanAddress::isPrivateLanIpv4) == true) {
+                            0
+                        } else {
+                            1
+                        }
+                    },
+                    { it.interfaceName ?: "" },
+                    { it.ipv4Address?.hostAddress ?: "" },
+                    { it.networkId },
+                ),
+            )
             .firstOrNull()
     }
 
@@ -117,4 +179,40 @@ object WifiLanDiscovery {
         return listOf(24, 16, 8, 0)
             .joinToString(".") { shift -> ((value shr shift) and 0xff).toString() }
     }
+
+    private fun isVirtualInterface(interfaceName: String?): Boolean {
+        val normalized = interfaceName?.trim()?.lowercase() ?: return true
+        return normalized.isEmpty() ||
+            normalized.startsWith("tun") ||
+            normalized.startsWith("vpn")
+    }
+
+    private fun logCandidate(
+        candidate: WifiNetworkCandidate<Network>,
+        selected: Boolean,
+    ) {
+        val reason = when {
+            !candidate.hasWifiTransport -> "NO_WIFI_TRANSPORT"
+            candidate.hasVpnTransport -> "VPN_TRANSPORT"
+            isVirtualInterface(candidate.interfaceName) -> "VIRTUAL_INTERFACE"
+            candidate.ipv4Address == null -> "NO_IPV4"
+            candidate.prefixLength?.let { it !in 0..32 } == true -> "INVALID_PREFIX"
+            selected -> "SELECTED_WIFI"
+            else -> "LOWER_PRIORITY"
+        }
+        Log.i(
+            TAG,
+            "WIFI_DISCOVERY_NETWORK_CANDIDATE " +
+                "network=${candidate.networkId} " +
+                "wifi=${candidate.hasWifiTransport} " +
+                "vpn=${candidate.hasVpnTransport} " +
+                "iface=${candidate.interfaceName ?: "unknown"} " +
+                "ipv4=${candidate.ipv4Address?.hostAddress ?: "none"}/" +
+                "${candidate.prefixLength ?: "none"} " +
+                "selected=$selected " +
+                "reason=$reason",
+        )
+    }
+
+    private const val TAG = "WifiLanDiscovery"
 }
