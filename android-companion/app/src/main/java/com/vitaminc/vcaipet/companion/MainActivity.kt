@@ -1,10 +1,14 @@
 package com.vitaminc.vcaipet.companion
 
 import android.annotation.SuppressLint
+import android.graphics.drawable.AnimationDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -12,6 +16,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -21,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 class MainActivity : ComponentActivity() {
     private lateinit var petWebView: WebView
@@ -28,19 +34,32 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectionPrompt: TextView
     private lateinit var hostInput: EditText
     private lateinit var connectButton: Button
-    private lateinit var connectionError: TextView
-    private lateinit var errorActions: View
-    private lateinit var retryButton: Button
-    private lateinit var editAddressButton: Button
+    private lateinit var splashOverlay: View
+    private lateinit var splashAnimation: ImageView
+    private lateinit var splashTitle: TextView
+    private lateinit var splashSubtitle: TextView
+    private lateinit var splashRetryButton: Button
+    private lateinit var splashAdvancedButton: Button
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE) }
     private val connectivityManager by lazy {
         getSystemService(ConnectivityManager::class.java)
     }
     private val endpointProbeExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val splashTimingCoordinator = SplashTimingCoordinator()
     private var activeEndpoint: LanAddress? = null
     private var activeEndpointNetwork: Network? = null
     private var endpointProbeGeneration = 0L
+    private var activeProbeFuture: Future<*>? = null
+    private var discoveryInFlightGeneration: Long? = null
+    private var currentSplashAttempt: SplashTimingCoordinator.Attempt? = null
+    private var attemptClosed = false
+    private var nextDiscoveryRetryIndex = 0
+    private var connectionUiState = ConnectionUiState.SEARCHING
+    private var recoveryDeadlineRunnable: Runnable? = null
+    private var discoveryRetryRunnable: Runnable? = null
+    private var revealRunnable: Runnable? = null
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -59,22 +78,20 @@ class MainActivity : ComponentActivity() {
         connectionPrompt = findViewById(R.id.connection_prompt)
         hostInput = findViewById(R.id.host_input)
         connectButton = findViewById(R.id.connect_button)
-        connectionError = findViewById(R.id.connection_error)
-        errorActions = findViewById(R.id.error_actions)
-        retryButton = findViewById(R.id.retry_button)
-        editAddressButton = findViewById(R.id.edit_address_button)
+        splashOverlay = findViewById(R.id.splash_overlay)
+        splashAnimation = findViewById(R.id.splash_animation)
+        splashTitle = findViewById(R.id.splash_title)
+        splashSubtitle = findViewById(R.id.splash_subtitle)
+        splashRetryButton = findViewById(R.id.splash_retry_button)
+        splashAdvancedButton = findViewById(R.id.splash_advanced_button)
 
         configureWebView()
         configureConnectionUi()
+        configureSplashUi()
         installBackNavigation()
         hideSystemBars()
 
-        val settings = readEndpointSettings()
-        val initialHost = settings.lastSuccessfulEndpoint?.hostPort
-            ?: preferences.getString(PREFERENCE_HOST, null)
-            ?: settings.lanEndpoint.hostPort
-        showConnectionForm(initialHost)
-        connectUsingConfiguredEndpoints(settings)
+        startAutomaticAttempt()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -120,27 +137,20 @@ class MainActivity : ComponentActivity() {
 
     private fun configureConnectionUi() {
         connectButton.setOnClickListener { connectFromInput() }
-        retryButton.setOnClickListener {
-            val address = activeEndpoint
-            if (address == null || readEndpointSettings().mode == ConnectionMode.AUTO) {
-                connectUsingConfiguredEndpoints()
-            } else {
-                loadPet(address, activeEndpointNetwork)
-            }
-        }
-        editAddressButton.setOnClickListener {
-            val settings = readEndpointSettings()
-            showConnectionForm(
-                activeEndpoint?.hostPort
-                    ?: settings.lastSuccessfulEndpoint?.hostPort
-                    ?: hostInput.text.toString().ifBlank { settings.lanEndpoint.hostPort },
-            )
-        }
+    }
+
+    private fun configureSplashUi() {
+        splashRetryButton.setOnClickListener { startAutomaticAttempt() }
+        splashAdvancedButton.setOnClickListener { openAdvancedSettings() }
     }
 
     private fun installBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (connectionUiState == ConnectionUiState.ADVANCED_SETTINGS) {
+                    showSplashFailure()
+                    return
+                }
                 if (petWebView.visibility == View.VISIBLE && petWebView.canGoBack()) {
                     petWebView.goBack()
                 } else {
@@ -151,25 +161,51 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectFromInput() {
-        endpointProbeGeneration += 1
         hostInput.error = null
         val address = runCatching { LanAddress.parse(hostInput.text.toString()) }.getOrNull()
         if (address == null) {
             hostInput.error = getString(R.string.invalid_address)
             return
         }
+
+        val attempt = beginAttempt()
         val network = if (LanAddress.isPrivateLanIpv4(address.host)) {
             WifiLanDiscovery.findWifiNetwork(connectivityManager)?.network
         } else {
             null
         }
-        loadPet(address, network)
+        loadPet(address, network, attempt)
     }
 
-    private fun connectUsingConfiguredEndpoints(settings: EndpointSettings = readEndpointSettings()) {
-        endpointProbeGeneration += 1
-        val generation = endpointProbeGeneration
-        endpointProbeExecutor.execute {
+    private fun startAutomaticAttempt() {
+        val settings = readEndpointSettings()
+        val attempt = beginAttempt()
+        connectUsingConfiguredEndpoints(settings, attempt)
+        scheduleNextDiscoveryPass(attempt)
+    }
+
+    private fun beginAttempt(): SplashTimingCoordinator.Attempt {
+        cancelAttemptCallbacks()
+        cancelProbeWork()
+        val attempt = splashTimingCoordinator.startAttempt(SystemClock.elapsedRealtime())
+        endpointProbeGeneration = attempt.generation
+        currentSplashAttempt = attempt
+        attemptClosed = false
+        nextDiscoveryRetryIndex = 0
+        connectionUiState = ConnectionUiState.SEARCHING
+        showSplashSearching()
+        scheduleRecoveryDeadline(attempt)
+        return attempt
+    }
+
+    private fun connectUsingConfiguredEndpoints(
+        settings: EndpointSettings,
+        attempt: SplashTimingCoordinator.Attempt,
+    ) {
+        if (!isAttemptOpen(attempt) || discoveryInFlightGeneration == attempt.generation) return
+        val generation = attempt.generation
+        discoveryInFlightGeneration = generation
+        activeProbeFuture = endpointProbeExecutor.submit {
             val wifiNetwork = WifiLanDiscovery.findWifiNetwork(connectivityManager)
             val known = settings.candidateEntries().firstOrNull { candidate ->
                 if (candidate.route == EndpointRoute.WIFI && wifiNetwork == null) {
@@ -187,22 +223,71 @@ class MainActivity : ComponentActivity() {
                 EndpointCandidate(it, EndpointRoute.WIFI)
             }
             runOnUiThread {
-                if (generation != endpointProbeGeneration || isFinishing || isDestroyed) return@runOnUiThread
-                if (selected == null) {
-                    activeEndpoint = null
-                    activeEndpointNetwork = null
-                    showConnectionError()
-                } else {
-                    val network = if (selected.route == EndpointRoute.WIFI) {
-                        wifiNetwork?.network
-                    } else {
-                        null
-                    }
-                    rememberSuccessfulEndpoint(selected.address, learnedLan = discovered != null)
-                    loadPet(selected.address, network)
+                if (discoveryInFlightGeneration == generation) {
+                    discoveryInFlightGeneration = null
+                    activeProbeFuture = null
                 }
+                if (!isAttemptOpen(attempt) || generation != endpointProbeGeneration) return@runOnUiThread
+                if (selected == null) return@runOnUiThread
+
+                val network = if (selected.route == EndpointRoute.WIFI) {
+                    wifiNetwork?.network
+                } else {
+                    null
+                }
+                rememberSuccessfulEndpoint(selected.address, learnedLan = discovered != null)
+                loadPet(selected.address, network, attempt)
             }
         }
+    }
+
+    private fun scheduleNextDiscoveryPass(attempt: SplashTimingCoordinator.Attempt) {
+        if (!isAttemptOpen(attempt) || nextDiscoveryRetryIndex >= DISCOVERY_RETRY_OFFSETS_MS.size) {
+            return
+        }
+        val targetElapsedMs = DISCOVERY_RETRY_OFFSETS_MS[nextDiscoveryRetryIndex]
+        val elapsedMs = (SystemClock.elapsedRealtime() - attempt.startedAtMs).coerceAtLeast(0L)
+        val delayMs = (targetElapsedMs - elapsedMs).coerceAtLeast(0L)
+        val runnable = Runnable {
+            discoveryRetryRunnable = null
+            if (!isAttemptOpen(attempt)) return@Runnable
+            nextDiscoveryRetryIndex += 1
+            connectUsingConfiguredEndpoints(readEndpointSettings(), attempt)
+            scheduleNextDiscoveryPass(attempt)
+        }
+        discoveryRetryRunnable = runnable
+        mainHandler.postDelayed(runnable, delayMs)
+    }
+
+    private fun scheduleRecoveryDeadline(attempt: SplashTimingCoordinator.Attempt) {
+        val runnable = Runnable {
+            recoveryDeadlineRunnable = null
+            if (!isAttemptOpen(attempt)) return@Runnable
+            val remainingMs = splashTimingCoordinator.recoveryRemaining(
+                attempt,
+                SystemClock.elapsedRealtime(),
+            )
+            if (remainingMs > 0L) {
+                scheduleRecoveryDeadline(attempt)
+                return@Runnable
+            }
+            if (!splashTimingCoordinator.isRecoveryDue(attempt, SystemClock.elapsedRealtime())) {
+                return@Runnable
+            }
+            attemptClosed = true
+            endpointProbeGeneration += 1
+            cancelDiscoveryAndRecoveryCallbacks()
+            cancelProbeWork()
+            showSplashFailure()
+        }
+        recoveryDeadlineRunnable = runnable
+        mainHandler.postDelayed(
+            runnable,
+            splashTimingCoordinator.recoveryRemaining(
+                attempt,
+                SystemClock.elapsedRealtime(),
+            ),
+        )
     }
 
     private fun discoverLanEndpoint(wifiNetwork: WifiNetworkSnapshot): LanAddress? {
@@ -288,7 +373,12 @@ class MainActivity : ComponentActivity() {
         editor.apply()
     }
 
-    private fun loadPet(address: LanAddress, network: Network? = null) {
+    private fun loadPet(
+        address: LanAddress,
+        network: Network?,
+        attempt: SplashTimingCoordinator.Attempt,
+    ) {
+        if (!isAttemptOpen(attempt)) return
         connectivityManager.bindProcessToNetwork(network)
         activeEndpoint = address
         activeEndpointNetwork = network
@@ -296,37 +386,185 @@ class MainActivity : ComponentActivity() {
             .putString(PREFERENCE_HOST, address.hostPort)
             .putString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, address.hostPort)
             .apply()
-        petWebView.webViewClient = PetWebViewClient(address) {
-            runOnUiThread {
-                if (activeEndpoint == address) showConnectionError()
-            }
-        }
+        petWebView.webViewClient = PetWebViewClient(
+            petAddress = address,
+            onMainFrameReady = { onPetPageReady(attempt, address) },
+            onMainFrameError = { onPetPageError(attempt, address) },
+        )
         connectionPanel.visibility = View.GONE
         petWebView.visibility = View.VISIBLE
         petWebView.loadUrl(address.url)
     }
 
-    private fun showConnectionForm(value: String) {
-        connectionPanel.visibility = View.VISIBLE
+    private fun onPetPageReady(
+        attempt: SplashTimingCoordinator.Attempt,
+        address: LanAddress,
+    ) {
+        if (!isAttemptOpen(attempt) || activeEndpoint != address) return
+        val decision = splashTimingCoordinator.markPageReady(
+            attempt,
+            SystemClock.elapsedRealtime(),
+        ) ?: return
+        attemptClosed = true
+        endpointProbeGeneration += 1
+        cancelDiscoveryAndRecoveryCallbacks()
+        cancelProbeWork()
+        connectionUiState = decision.state
+        if (decision.revealDelayMs == 0L) {
+            revealSplash(attempt)
+        } else {
+            val runnable = Runnable {
+                revealRunnable = null
+                revealSplash(attempt)
+            }
+            revealRunnable = runnable
+            mainHandler.postDelayed(runnable, decision.revealDelayMs)
+        }
+    }
+
+    private fun onPetPageError(
+        attempt: SplashTimingCoordinator.Attempt,
+        address: LanAddress,
+    ) {
+        if (!isAttemptOpen(attempt) || activeEndpoint != address) return
+        petWebView.stopLoading()
         petWebView.visibility = View.GONE
+    }
+
+    private fun revealSplash(attempt: SplashTimingCoordinator.Attempt) {
+        if (!isCurrentAttempt(attempt) ||
+            !splashTimingCoordinator.canReveal(attempt, SystemClock.elapsedRealtime())
+        ) {
+            return
+        }
+        connectionUiState = ConnectionUiState.CONNECTED
+        splashOverlay.animate().cancel()
+        splashOverlay.visibility = View.VISIBLE
+        splashOverlay.alpha = 1f
+        splashTitle.setText(R.string.splash_found_title)
+        splashSubtitle.setText(R.string.splash_found_subtitle)
+        splashRetryButton.visibility = View.GONE
+        splashAdvancedButton.visibility = View.GONE
+        startSplashAnimation()
+
+        val runnable = Runnable {
+            revealRunnable = null
+            if (!isCurrentAttempt(attempt) || connectionUiState != ConnectionUiState.CONNECTED) {
+                return@Runnable
+            }
+            splashOverlay.animate()
+                .alpha(0f)
+                .setDuration(SPLASH_FADE_DURATION_MS)
+                .withEndAction {
+                    splashOverlay.visibility = View.GONE
+                    splashOverlay.alpha = 1f
+                    stopSplashAnimation()
+                }
+                .start()
+        }
+        revealRunnable = runnable
+        mainHandler.postDelayed(runnable, SPLASH_FOUND_MESSAGE_MS)
+    }
+
+    private fun showSplashSearching() {
+        splashOverlay.animate().cancel()
+        splashOverlay.visibility = View.VISIBLE
+        splashOverlay.alpha = 1f
+        connectionPanel.visibility = View.GONE
+        petWebView.stopLoading()
+        petWebView.visibility = View.GONE
+        splashTitle.setText(R.string.splash_searching_title)
+        splashSubtitle.setText(R.string.splash_searching_subtitle)
+        splashRetryButton.visibility = View.GONE
+        splashAdvancedButton.visibility = View.GONE
+        startSplashAnimation()
+    }
+
+    private fun showSplashFailure() {
+        connectionUiState = ConnectionUiState.FAILED_RETRYABLE
+        splashOverlay.animate().cancel()
+        splashOverlay.visibility = View.VISIBLE
+        splashOverlay.alpha = 1f
+        connectionPanel.visibility = View.GONE
+        petWebView.stopLoading()
+        petWebView.visibility = View.GONE
+        splashTitle.setText(R.string.splash_failed_title)
+        splashSubtitle.setText(R.string.splash_failed_subtitle)
+        splashRetryButton.visibility = View.VISIBLE
+        splashAdvancedButton.visibility = View.VISIBLE
+        startSplashAnimation()
+    }
+
+    private fun openAdvancedSettings() {
+        val settings = readEndpointSettings()
+        attemptClosed = true
+        endpointProbeGeneration += 1
+        cancelAttemptCallbacks()
+        cancelProbeWork()
+        splashTimingCoordinator.invalidate()
+        currentSplashAttempt = null
+        val value = activeEndpoint?.hostPort
+            ?: settings.lastSuccessfulEndpoint?.hostPort
+            ?: hostInput.text.toString().ifBlank { settings.lanEndpoint.hostPort }
+        connectionUiState = ConnectionUiState.ADVANCED_SETTINGS
+        showConnectionForm(value)
+    }
+
+    private fun showConnectionForm(value: String) {
+        stopSplashAnimation()
+        splashOverlay.animate().cancel()
+        splashOverlay.visibility = View.GONE
+        petWebView.stopLoading()
+        petWebView.visibility = View.GONE
+        connectionPanel.visibility = View.VISIBLE
         connectionPrompt.visibility = View.VISIBLE
         hostInput.visibility = View.VISIBLE
         connectButton.visibility = View.VISIBLE
-        connectionError.visibility = View.GONE
-        errorActions.visibility = View.GONE
         hostInput.setText(value)
         hostInput.setSelection(hostInput.length())
     }
 
-    private fun showConnectionError() {
-        petWebView.stopLoading()
-        petWebView.visibility = View.GONE
-        connectionPanel.visibility = View.VISIBLE
-        connectionPrompt.visibility = View.GONE
-        hostInput.visibility = View.GONE
-        connectButton.visibility = View.GONE
-        connectionError.visibility = View.VISIBLE
-        errorActions.visibility = View.VISIBLE
+    private fun isCurrentAttempt(attempt: SplashTimingCoordinator.Attempt): Boolean {
+        return currentSplashAttempt == attempt &&
+            splashTimingCoordinator.isCurrent(attempt) &&
+            !isFinishing &&
+            !isDestroyed
+    }
+
+    private fun isAttemptOpen(attempt: SplashTimingCoordinator.Attempt): Boolean {
+        return isCurrentAttempt(attempt) && !attemptClosed
+    }
+
+    private fun cancelDiscoveryAndRecoveryCallbacks() {
+        discoveryRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+        discoveryRetryRunnable = null
+        recoveryDeadlineRunnable?.let { mainHandler.removeCallbacks(it) }
+        recoveryDeadlineRunnable = null
+    }
+
+    private fun cancelAttemptCallbacks() {
+        cancelDiscoveryAndRecoveryCallbacks()
+        revealRunnable?.let { mainHandler.removeCallbacks(it) }
+        revealRunnable = null
+    }
+
+    private fun cancelProbeWork() {
+        activeProbeFuture?.cancel(true)
+        activeProbeFuture = null
+        discoveryInFlightGeneration = null
+    }
+
+    private fun startSplashAnimation() {
+        val drawable = splashAnimation.drawable as? AnimationDrawable ?: return
+        if (splashAnimation.isAttachedToWindow) {
+            drawable.start()
+        } else {
+            splashAnimation.post { if (splashOverlay.visibility == View.VISIBLE) drawable.start() }
+        }
+    }
+
+    private fun stopSplashAnimation() {
+        (splashAnimation.drawable as? AnimationDrawable)?.stop()
     }
 
     private fun hideSystemBars() {
@@ -343,9 +581,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         endpointProbeGeneration += 1
+        cancelAttemptCallbacks()
+        cancelProbeWork()
+        splashTimingCoordinator.invalidate()
         endpointProbeExecutor.shutdownNow()
         pendingFileCallback?.onReceiveValue(null)
         pendingFileCallback = null
+        stopSplashAnimation()
         if (::petWebView.isInitialized) {
             petWebView.stopLoading()
             petWebView.destroy()
@@ -356,6 +598,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val PREFERENCES_NAME = "pet_connection"
         private const val PREFERENCE_HOST = "pet_host"
+        private const val SPLASH_FOUND_MESSAGE_MS = 300L
+        private const val SPLASH_FADE_DURATION_MS = 250L
+        private val DISCOVERY_RETRY_OFFSETS_MS = longArrayOf(4_000L, 9_000L, 14_000L)
         private val IMAGE_MIME_TYPES = arrayOf(
             "image/jpeg",
             "image/png",

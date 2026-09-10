@@ -11,6 +11,7 @@ import java.util.Locale
 
 class PetWebViewClient(
     private val petAddress: LanAddress,
+    private val onMainFrameReady: () -> Unit,
     private val onMainFrameError: () -> Unit,
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -31,6 +32,11 @@ class PetWebViewClient(
             return
         }
         super.onPageStarted(view, url, favicon)
+    }
+
+    override fun onPageCommitVisible(view: WebView?, url: String?) {
+        super.onPageCommitVisible(view, url)
+        if (isAllowedPetUrl(url?.let(Uri::parse), petAddress)) onMainFrameReady()
     }
 
     override fun onReceivedError(
