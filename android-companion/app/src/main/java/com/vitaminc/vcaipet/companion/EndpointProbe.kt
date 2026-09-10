@@ -51,20 +51,16 @@ object EndpointProbe {
 
     fun isVcAiPetStateResponse(body: String): Boolean {
         val state = runCatching { JSONObject(body) }.getOrNull() ?: return false
-        if (!hasExactKeys(state, "visualState", "emotion", "dream", "sprite")) return false
-        if ((state.optString("visualState").isBlank()) || state.get("visualState") !is String) {
-            return false
-        }
-        if (state.get("dream") !is Boolean) return false
-        if (state.optString("sprite").isBlank() || state.get("sprite") !is String) return false
+        if (!hasNonBlankString(state, "visualState")) return false
+        if (state.opt("dream") !is Boolean) return false
+        if (!hasNonBlankString(state, "sprite")) return false
 
-        val emotion = state.optJSONObject("emotion") ?: return false
-        if (!hasExactKeys(emotion, "happiness", "energy")) return false
-        return emotion.get("happiness") is Number && emotion.get("energy") is Number
+        val emotion = state.opt("emotion") as? JSONObject ?: return false
+        return emotion.opt("happiness") is Number && emotion.opt("energy") is Number
     }
 
-    private fun hasExactKeys(json: JSONObject, vararg keys: String): Boolean {
-        return json.length() == keys.size && keys.all(json::has)
+    private fun hasNonBlankString(json: JSONObject, key: String): Boolean {
+        return json.opt(key) is String && json.optString(key).isNotBlank()
     }
 
     private fun readResponseBody(connection: HttpURLConnection): String? {

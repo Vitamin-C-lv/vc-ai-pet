@@ -126,4 +126,23 @@ class ConnectionSelectionTest {
         assertEquals(learnedLan, selected)
         assertEquals(listOf(remote, learnedLan), attempted)
     }
+
+    @Test
+    fun classifiesCustomRfc1918LastSuccessAsWifiAndTailscaleAsDefault() {
+        val cases = listOf(
+            "192.168.1.20:17870" to EndpointRoute.WIFI,
+            "10.0.0.20:17870" to EndpointRoute.WIFI,
+            "172.16.10.20:17870" to EndpointRoute.WIFI,
+            "100.69.220.26:17870" to EndpointRoute.DEFAULT,
+        )
+
+        cases.forEach { (host, route) ->
+            val settings = EndpointSettings(
+                lanEndpoint = lan,
+                remoteEndpoint = remote,
+                lastSuccessfulEndpoint = LanAddress.parse(host),
+            )
+            assertEquals(route, settings.candidateEntries().first().route)
+        }
+    }
 }

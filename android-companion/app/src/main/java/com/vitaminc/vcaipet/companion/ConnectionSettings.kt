@@ -44,9 +44,10 @@ data class EndpointSettings(
     }
 
     private fun routeFor(address: LanAddress): EndpointRoute {
-        return when {
-            address == lanEndpoint || address == learnedLanEndpoint -> EndpointRoute.WIFI
-            else -> EndpointRoute.DEFAULT
+        return if (LanAddress.isPrivateLanIpv4(address.host)) {
+            EndpointRoute.WIFI
+        } else {
+            EndpointRoute.DEFAULT
         }
     }
 }

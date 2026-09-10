@@ -158,7 +158,12 @@ class MainActivity : ComponentActivity() {
             hostInput.error = getString(R.string.invalid_address)
             return
         }
-        loadPet(address, network = null)
+        val network = if (LanAddress.isPrivateLanIpv4(address.host)) {
+            WifiLanDiscovery.findWifiNetwork(connectivityManager)?.network
+        } else {
+            null
+        }
+        loadPet(address, network)
     }
 
     private fun connectUsingConfiguredEndpoints(settings: EndpointSettings = readEndpointSettings()) {
