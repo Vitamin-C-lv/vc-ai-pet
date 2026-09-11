@@ -1,6 +1,29 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=HOUSEHOLD_IDENTITY_PHASE1B_IMPLEMENTATION_COMPLETE
+Status: FINAL_STATUS=HOUSEHOLD_IDENTITY_PHASE1B_1_CLI_HARDENING_COMPLETE
+
+## 2026-09-11 — Household Identity Phase 1B.1 TTY CLI Lifecycle Hardening
+
+基于 `ae160578d4ff2b3a003239daaa383ce0920b4210`，本轮只修复
+`identity:create-person` 的真实 TTY hidden-password reader。`askHidden()` 现在在进入时
+快照 `stdin.isRaw` 与 `stdin.readableFlowing`，退出时幂等地先移除 listener、恢复 raw
+mode、仅在进入前不是 flowing 时 `pause()`，并只写一个换行；Enter、Ctrl+C、decoder/TTY
+异常与 reject 都走同一恢复路径。输入使用 `StringDecoder('utf8')`，退格按 JS Unicode
+code point 删除；没有增加 `--password`、环境变量密码或 pipe password 模式。
+
+新增 `test/v0.6-identity-cli.mjs`，使用系统已有 `script` pseudo-TTY 在 5 秒边界内覆盖
+no-TTY 拒绝、ASCII 创建、确认不一致无 DB 行、Ctrl+C 自然退出、密码不回显，以及首个
+UTF-8 多字节序列跨写入分段后的创建与 `IdentityStore.verifyPassword()`。本轮未改
+IdentityStore/schema/crypto、HTTP/runtime、Android/network，也未创建 production identity DB。
+
+```text
+BASE_COMMIT=ae160578d4ff2b3a003239daaa383ce0920b4210
+IDENTITY_STORE_MODIFIED=NO
+IDENTITY_SCHEMA_MODIFIED=NO
+IDENTITY_CRYPTO_MODIFIED=NO
+PRODUCTION_DB_MODIFIED=NO
+DEPLOYED=NO
+```
 
 ## 2026-09-11 — Household Identity Phase 1B Foundation
 

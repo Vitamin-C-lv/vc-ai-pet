@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
+import { StringDecoder } from 'node:string_decoder'
 import { IdentityStore } from '../src/identity/identity-store.js'
 
 function usage() {
@@ -25,43 +26,86 @@ async function ask(prompt) {
 
 async function askHidden(prompt) {
   if (!stdin.isTTY || !stdout.isTTY) throw new Error('IDENTITY_CLI_TTY_REQUIRED')
+  const wasRaw = stdin.isRaw
+  const wasFlowing = stdin.readableFlowing
+  const decoder = new StringDecoder('utf8')
   stdout.write(prompt)
   return new Promise((resolveAnswer, rejectAnswer) => {
     let answer = ''
-    const wasRaw = stdin.isRaw === true
+    let restored = false
     const restore = () => {
-      stdin.off('data', onData)
-      stdin.setRawMode(wasRaw)
-      stdout.write('\n')
+      if (restored) return
+      restored = true
+      let restoreError = null
+      try {
+        stdin.off('data', onData)
+      } catch (error) {
+        restoreError = error
+      }
+      try {
+        stdin.setRawMode(Boolean(wasRaw))
+      } catch (error) {
+        restoreError ??= error
+      }
+      if (wasFlowing !== true) {
+        try {
+          stdin.pause()
+        } catch (error) {
+          restoreError ??= error
+        }
+      }
+      try {
+        stdout.write('\n')
+      } catch (error) {
+        restoreError ??= error
+      }
+      if (restoreError) throw restoreError
     }
     const fail = (error) => {
-      restore()
-      rejectAnswer(error)
-    }
-    const finish = () => {
-      restore()
-      resolveAnswer(answer)
-    }
-    const onData = (chunk) => {
-      for (const character of chunk.toString('utf8')) {
-        if (character === '\u0003') {
-          fail(new Error('IDENTITY_CLI_CANCELLED'))
-          return
-        }
-        if (character === '\r' || character === '\n') {
-          finish()
-          return
-        }
-        if (character === '\b' || character === '\u007f') {
-          answer = answer.slice(0, -1)
-          continue
-        }
-        answer += character
+      try {
+        restore()
+        rejectAnswer(error)
+      } catch (restoreError) {
+        rejectAnswer(restoreError)
       }
     }
-    stdin.setRawMode(true)
-    stdin.resume()
-    stdin.on('data', onData)
+    const finish = () => {
+      try {
+        answer += decoder.end()
+        restore()
+        resolveAnswer(answer)
+      } catch (error) {
+        fail(error)
+      }
+    }
+    const onData = (chunk) => {
+      try {
+        for (const character of decoder.write(chunk)) {
+          if (character === '\u0003') {
+            fail(new Error('IDENTITY_CLI_CANCELLED'))
+            return
+          }
+          if (character === '\r' || character === '\n') {
+            finish()
+            return
+          }
+          if (character === '\b' || character === '\u007f') {
+            answer = Array.from(answer).slice(0, -1).join('')
+            continue
+          }
+          answer += character
+        }
+      } catch (error) {
+        fail(error)
+      }
+    }
+    try {
+      stdin.setRawMode(true)
+      stdin.resume()
+      stdin.on('data', onData)
+    } catch (error) {
+      fail(error)
+    }
   })
 }
 
