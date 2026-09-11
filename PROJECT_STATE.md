@@ -1389,3 +1389,23 @@ RETRIEVAL_MODIFIED=NO
 PRODUCTION_DATA_MODIFIED=NO
 PRODUCTION_DEPLOYED=NO
 ```
+
+## Household Identity Phase 1C — Session Authentication Foundation
+
+Household credentials can now create opaque, SHA-256-at-rest sessions through
+the LAN HTTP boundary. This phase adds only `/api/auth/login`,
+`/api/auth/logout`, `/api/auth/me`, and a frozen server-side ActorContext.
+Existing pet routes remain deliberately unauthenticated until Phase 1D, while
+guest bootstrap and all actor provenance remain deferred.
+
+```text
+FINAL_STATUS=HOUSEHOLD_IDENTITY_PHASE1C_AUTH_FOUNDATION_COMPLETE
+BASE_COMMIT=f70f7fb490a81d165f2c990c323735c675010b43
+SESSION_TOKEN=randomBytes(32)-base64url
+SESSION_TOKEN_AT_REST=SHA-256_ONLY
+SESSION_TTL=30_days
+AUTH_ENFORCEMENT_FOR_EXISTING_PET_ROUTES=NO
+GUEST_IMPLEMENTED=NO
+PRODUCTION_DB_MODIFIED=NO
+DEPLOYED=NO
+```

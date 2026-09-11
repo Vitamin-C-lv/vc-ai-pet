@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 
 export const PASSWORD_ALGORITHM = 'scrypt'
@@ -12,6 +12,8 @@ export const PASSWORD_PARAMS = Object.freeze({
 
 const PASSWORD_SALT_BYTES = 32
 const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024
+export const SESSION_TOKEN_BYTES = 32
+const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u
 const scrypt = promisify(scryptCallback)
 
 function supportedParams(value) {
@@ -37,6 +39,15 @@ function asBuffer(value) {
 
 export function createPersonId() {
   return `person_${randomUUID().replaceAll('-', '')}`
+}
+
+export function createSessionToken() {
+  return randomBytes(SESSION_TOKEN_BYTES).toString('base64url')
+}
+
+export function hashSessionToken(token) {
+  if (typeof token !== 'string' || !SESSION_TOKEN_PATTERN.test(token)) return null
+  return createHash('sha256').update(token, 'ascii').digest()
 }
 
 export async function hashPassword(password) {

@@ -1,10 +1,20 @@
 import { chmod, mkdir } from 'node:fs/promises'
 import { relative, resolve, sep, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createPersonId, hashPassword, verifyPasswordHash } from './identity-crypto.js'
+import {
+  createPersonId,
+  createSessionToken,
+  hashPassword,
+  hashSessionToken,
+  verifyPasswordHash,
+} from './identity-crypto.js'
 import { IDENTITY_MIGRATIONS } from './identity-schema.js'
 
 export const IDENTITY_DATABASE_FILENAME = 'identity.sqlite'
+export const HOUSEHOLD_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+export const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000
+export const MAX_ACTIVE_SESSIONS_PER_PERSON = 20
+export const REVOKED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
 const ACCOUNT_TYPES = new Set(['household', 'guest'])
 const PERSON_ID_PATTERN = /^[a-z0-9_-]{1,80}$/u
@@ -74,6 +84,11 @@ function safePerson(row) {
   }
 }
 
+function sessionReference(value) {
+  const hash = Buffer.isBuffer(value) ? value : Buffer.from(value)
+  return `session_${hash.toString('hex')}`
+}
+
 const PERSON_SELECT = `
   SELECT person_id, account_type, username, display_name, relationship,
          pet_address_name, avatar_ref, enabled, created_at, updated_at
@@ -81,16 +96,19 @@ const PERSON_SELECT = `
 `
 
 export class IdentityStore {
-  constructor(sandboxRoot, { now = () => Date.now(), idFactory = createPersonId } = {}) {
+  constructor(sandboxRoot, { now = () => Date.now(), idFactory = createPersonId, onDummyPasswordVerification = null } = {}) {
     if (!sandboxRoot) throw new TypeError('IDENTITY_SANDBOX_ROOT_REQUIRED')
     if (typeof now !== 'function') throw new TypeError('IDENTITY_CLOCK_INVALID')
     if (typeof idFactory !== 'function') throw new TypeError('IDENTITY_ID_FACTORY_INVALID')
+    if (onDummyPasswordVerification !== null && typeof onDummyPasswordVerification !== 'function') throw new TypeError('IDENTITY_DUMMY_VERIFIER_INVALID')
 
     this.sandboxRoot = resolve(sandboxRoot)
     this.dbPath = assertInside(this.sandboxRoot, resolve(this.sandboxRoot, IDENTITY_DATABASE_FILENAME))
     this.now = now
     this.idFactory = idFactory
+    this.onDummyPasswordVerification = onDummyPasswordVerification
     this.db = null
+    this.dummyCredential = null
     this.initialized = false
     this.initializing = null
   }
@@ -125,6 +143,13 @@ export class IdentityStore {
           try { db.exec('ROLLBACK') } catch {}
           throw error
         }
+        const dummy = await hashPassword(createSessionToken())
+        this.dummyCredential = {
+          passwordAlgorithm: dummy.algorithm,
+          passwordHash: dummy.hash,
+          passwordSalt: dummy.salt,
+          passwordParams: dummy.params,
+        }
         this.db = db
         this.initialized = true
         return this
@@ -145,6 +170,7 @@ export class IdentityStore {
     if (!this.db) return
     this.db.close()
     this.db = null
+    this.dummyCredential = null
     this.initialized = false
   }
 
@@ -273,5 +299,132 @@ export class IdentityStore {
       passwordParams: row.password_params,
     })
     return valid ? { ok: true, person: safePerson(row) } : { ok: false }
+  }
+
+  async verifyHouseholdLogin({ username, password }) {
+    await this.initialize()
+    const value = typeof username === 'string' ? username.trim() : ''
+    const candidatePassword = typeof password === 'string' ? password : ''
+    const row = value
+      ? this.db.prepare(`
+          SELECT p.person_id, p.account_type, p.username, p.display_name, p.relationship,
+                 p.pet_address_name, p.avatar_ref, p.enabled, p.created_at, p.updated_at,
+                 c.password_algorithm, c.password_hash, c.password_salt, c.password_params
+          FROM people p
+          LEFT JOIN credentials c ON c.person_id = p.person_id
+          WHERE lower(p.username) = lower(?)
+        `).get(value)
+      : null
+    if (!row || row.account_type !== 'household' || !row.enabled || !row.password_algorithm) {
+      this.onDummyPasswordVerification?.()
+      await verifyPasswordHash(candidatePassword, this.dummyCredential)
+      return { ok: false }
+    }
+    const valid = await verifyPasswordHash(candidatePassword, {
+      passwordAlgorithm: row.password_algorithm,
+      passwordHash: row.password_hash,
+      passwordSalt: row.password_salt,
+      passwordParams: row.password_params,
+    })
+    return valid ? { ok: true, person: safePerson(row) } : { ok: false }
+  }
+
+  async createSession(personId, { ttlMs = HOUSEHOLD_SESSION_TTL_MS } = {}) {
+    await this.initialize()
+    const id = cleanPersonId(personId)
+    if (!id) throw identityError('IDENTITY_PERSON_NOT_FOUND')
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw identityError('IDENTITY_INVALID_SESSION_TTL')
+    const person = await this.personById(id)
+    if (!person) throw identityError('IDENTITY_PERSON_NOT_FOUND')
+    if (!person.enabled || person.accountType !== 'household') throw identityError('IDENTITY_PERSON_DISABLED')
+
+    const token = createSessionToken()
+    const tokenHash = hashSessionToken(token)
+    const createdAt = this.now()
+    const expiresAt = createdAt + ttlMs
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.#purgeExpiredSessionsAt(createdAt)
+      const active = this.db.prepare(`
+        SELECT session_id_hash
+        FROM sessions
+        WHERE person_id = ? AND revoked_at IS NULL AND expires_at > ?
+        ORDER BY created_at ASC, session_id_hash ASC
+      `).all(id, createdAt)
+      const excess = Math.max(0, active.length - MAX_ACTIVE_SESSIONS_PER_PERSON + 1)
+      const revoke = this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE session_id_hash = ? AND revoked_at IS NULL')
+      for (const session of active.slice(0, excess)) revoke.run(createdAt, session.session_id_hash)
+      this.db.prepare(`
+        INSERT INTO sessions(session_id_hash, person_id, created_at, expires_at, last_seen_at, revoked_at)
+        VALUES (?, ?, ?, ?, ?, NULL)
+      `).run(tokenHash, id, createdAt, expiresAt, createdAt)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      try { this.db.exec('ROLLBACK') } catch {}
+      throw error
+    }
+    return { token, session: { person, createdAt, expiresAt } }
+  }
+
+  async resolveSession(token) {
+    await this.initialize()
+    const tokenHash = hashSessionToken(token)
+    if (!tokenHash) return null
+    const timestamp = this.now()
+    const row = this.db.prepare(`
+      SELECT s.session_id_hash, s.created_at, s.expires_at, s.last_seen_at,
+             p.person_id, p.account_type, p.username, p.display_name, p.relationship,
+             p.pet_address_name, p.avatar_ref, p.enabled, p.created_at, p.updated_at
+      FROM sessions s
+      JOIN people p ON p.person_id = s.person_id
+      WHERE s.session_id_hash = ?
+        AND s.revoked_at IS NULL
+        AND s.expires_at > ?
+        AND p.enabled = 1
+        AND p.account_type = 'household'
+    `).get(tokenHash, timestamp)
+    if (!row) return null
+    let lastSeenAt = row.last_seen_at
+    if (timestamp - lastSeenAt >= SESSION_TOUCH_INTERVAL_MS) {
+      this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE session_id_hash = ? AND revoked_at IS NULL').run(timestamp, tokenHash)
+      lastSeenAt = timestamp
+    }
+    return {
+      person: safePerson(row),
+      sessionId: sessionReference(row.session_id_hash),
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      lastSeenAt,
+    }
+  }
+
+  async revokeSession(token) {
+    await this.initialize()
+    const tokenHash = hashSessionToken(token)
+    if (!tokenHash) return false
+    const result = this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE session_id_hash = ? AND revoked_at IS NULL').run(this.now(), tokenHash)
+    return result.changes > 0
+  }
+
+  async revokeSessionsForPerson(personId) {
+    await this.initialize()
+    const id = cleanPersonId(personId)
+    if (!id) return 0
+    const result = this.db.prepare('UPDATE sessions SET revoked_at = ? WHERE person_id = ? AND revoked_at IS NULL').run(this.now(), id)
+    return result.changes
+  }
+
+  async purgeExpiredSessions() {
+    await this.initialize()
+    return this.#purgeExpiredSessionsAt(this.now())
+  }
+
+  #purgeExpiredSessionsAt(timestamp) {
+    const result = this.db.prepare(`
+      DELETE FROM sessions
+      WHERE expires_at <= ?
+         OR (revoked_at IS NOT NULL AND revoked_at <= ?)
+    `).run(timestamp, timestamp - REVOKED_SESSION_RETENTION_MS)
+    return result.changes
   }
 }
