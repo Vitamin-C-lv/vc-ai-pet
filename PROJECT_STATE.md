@@ -1,6 +1,35 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_VISUAL_DEDUP_PRODUCTION_MIGRATION_REVIEW
+Status: FINAL_STATUS=HOUSEHOLD_IDENTITY_PHASE1B_IMPLEMENTATION_COMPLETE
+
+## 2026-09-11 — Household Identity Phase 1B Foundation
+
+基于 production lineage `4a3b8ef91d6fa806616a4b29825405b8fe02d938` 新建
+`feat/household-identity-phase1b`。本轮仅新增独立 `identity.sqlite` 的 Person Registry
+基础：`schema_migrations`、`people`、`credentials`、`sessions`、`guest_devices`，以及
+受控 `identity:create-person` CLI。没有默认账户，没有 production sandbox 写入；CLI 必须
+显式给出 `--sandbox-root`，且只在 TTY 内无回显读取/确认密码。
+
+密码使用 Node built-in `crypto.scrypt`（versioned `N=32768,r=8,p=1,keyLength=64`、32-byte
+random salt、`timingSafeEqual`）；本机一次 scrypt 实测约 88 ms。人类账号创建在单个 SQLite
+事务内完成 person 与 credential 写入，用户名规范化为小写并以 `lower(username)` partial
+unique index 保证大小写无关唯一；人员只可 disable，不提供 public hard delete。Session 与
+guest device 仅建 schema，尚未实现 HTTP auth、cookie、guest bootstrap 或 actor provenance。
+
+临时 sandbox 测试确认 `identity.001` 两次初始化不重复、identity DB mode 为 `0600`、无默认
+账号、scrypt verify/disabled rejection/safe DTO 均正确；`conversation-archive.db`、
+`visual-experience.db`、`memory/pet-memory.db` fixture 未被改写。既有 smoke、chat-start
+idempotency、visual-memory、client bundle 回归通过。未修改 Android、LAN/network、runtime、
+conversation、visual、PetMemory、Dream；未 deploy/restart。
+
+```text
+BASE_COMMIT=4a3b8ef91d6fa806616a4b29825405b8fe02d938
+BRANCH=feat/household-identity-phase1b
+MIGRATION_ID=identity.001
+PRODUCTION_DB_MODIFIED=NO
+PRODUCTION_DEPLOYED=NO
+NEXT_PHASE=1C_SESSION_AUTH_AND_ACTOR_CONTEXT
+```
 
 ## 2026-09-09 — Visual Canonical Deduplication on Current Production Lineage
 
