@@ -5,10 +5,17 @@ import { ensurePetIdentity } from '../core/pet-identity.js'
 import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
 import { LocalBrain } from '../brain/local-brain.js'
-import { RecentConversation } from '../conversation/recent-conversation.js'
-import { ConversationStore } from '../conversation/conversation-store.js'
+import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
+import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
 import { RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { selectContextTurns } from '../conversation/context-budget.js'
+import { resolveMemoryPipelineConfig } from '../memory/memory-pipeline-config.js'
+import { ExplicitMemoryController } from '../memory/explicit-memory-controller.js'
+import { ExplicitMemoryQueue } from '../memory/explicit-memory-queue.js'
+import { ExperienceBuffer } from '../experience/experience-buffer.js'
+import { ExperienceConsolidator } from '../experience/experience-consolidator.js'
+import { buildRecentExperienceContext, withExperienceDeclaration } from '../experience/experience-dream-context.js'
 import { PetTurnOrchestrator } from './pet-turn-orchestrator.js'
 import { PetTurnManager } from './pet-turn-manager.js'
 import { createTurnId } from './pet-turn-events.js'
@@ -93,8 +100,71 @@ function reflectionEligibility(memory, { now, minNewMemories = REFLECTION_MIN_NE
   }
 }
 
+/**
+ * Experience-aware reflection trigger.
+ *
+ * The raw-memory criteria are unchanged and remain the baseline. On top of them
+ * the buffer adds the three signals the owner asked for, so a fresh day of life
+ * can be reflected on before anything has been written to PetMemory:
+ *
+ *   A. enough new experiences accumulated (count trigger);
+ *   B. the owner explicitly asked for something to be remembered (HIGH priority);
+ *   C. a repeated behaviour or a significant emotion event was observed.
+ *
+ * Skipping is never wrong here: the next scheduled pass re-evaluates. What would
+ * be wrong is reflecting *without* raw sources, which the engine's lease and
+ * `isRawEvidenceRow` guards still enforce.
+ */
+async function experienceAwareReflectionEligibility(runtime, memory, options = {}) {
+  const base = reflectionEligibility(memory, options)
+  const config = runtime.pipelineConfig
+  if (!config?.reflectionOnExperience || !runtime.experienceBuffer || !runtime.experienceBufferReady) {
+    return { ...base, experienceSourceCount: 0, experienceReason: 'experience-buffer-unavailable' }
+  }
+
+  let pending = []
+  try {
+    pending = (await runtime.experienceBuffer.pendingExperience({ limit: 200 })) ?? []
+  } catch {
+    return { ...base, experienceSourceCount: 0, experienceReason: 'experience-buffer-read-failed' }
+  }
+
+  const explicitCount = pending.filter((row) => row.sourceType === 'explicit_memory').length
+  const repeatedCount = pending.filter((row) => row.sourceType === 'repeated_behavior').length
+  const emotionCount = pending.filter((row) => row.sourceType === 'emotion_event').length
+  const threshold = config.reflectionNewExperienceTrigger
+
+  // Priority order matches importance: an instruction the owner gave outranks
+  // a quantity threshold, which in turn outranks an inferred pattern.
+  const experienceReason = explicitCount > 0
+    ? 'explicit-memory-pending'
+    : pending.length >= threshold
+      ? 'new-experience-threshold'
+      : repeatedCount > 0
+        ? 'repeated-behaviour-observed'
+        : emotionCount > 0
+          ? 'emotion-event-observed'
+          : 'no-new-experience'
+
+  const experienceEligible = explicitCount > 0
+    || pending.length >= threshold
+    || repeatedCount > 0
+    || emotionCount > 0
+
+  return {
+    ...base,
+    eligible: base.eligible || experienceEligible,
+    reason: base.eligible ? base.reason : experienceEligible ? experienceReason : base.reason,
+    experienceReason,
+    experienceSourceCount: pending.length,
+    experienceExplicitCount: explicitCount,
+    experienceRepeatedCount: repeatedCount,
+    experienceEmotionCount: emotionCount,
+  }
+}
+
 export class PetRuntime {
-  constructor({ sandboxRoot, logger = null }) {
+  constructor({ sandboxRoot, logger = null, memoryPipeline = null, env = process.env }) {
     this.sandbox = new PetSandbox(sandboxRoot)
     this.logger = logger
     this.memory = null
@@ -102,11 +172,33 @@ export class PetRuntime {
     this.brain = null
     this.state = null
     this.identity = null
-    this.conversation = new RecentConversation({ maxTurns: 12 })
+    // The Experience-aware Memory Pipeline resolves every context/retention knob
+    // once, here, so no two modules can disagree about the working window.
+    this.pipelineConfig = resolveMemoryPipelineConfig({ config: memoryPipeline, env })
+    this.conversation = new RecentConversation({ maxTurns: this.pipelineConfig.shortTermContextTurns })
     this.conversationStore = new ConversationStore(this.sandbox.root)
     this.recentVisualResolver = new RecentVisualResolver()
     this.visualExperience = new VisualExperienceStore(this.sandbox.root)
     this.longTermVisualResolver = new LongTermVisualResolver({ experienceStore: this.visualExperience })
+    // Experience Buffer: recent life that has not (yet) become a memory row.
+    this.experienceBuffer = this.pipelineConfig.experienceBufferEnabled
+      ? new ExperienceBuffer({
+          root: this.sandbox.root,
+          retentionMs: this.pipelineConfig.experienceBufferRetentionMs,
+        })
+      : null
+    this.experienceBufferReady = false
+    this.experienceConsolidator = null
+    this.consolidationInFlight = false
+    // Explicit Memory Queue: the owner's own instruction outranks a model that
+    // is merely too shy to volunteer a candidate. The registry keeps the
+    // pipeline metadata (priority/source/phrase/content) that the queue itself
+    // does not model, so the queue module stays untouched.
+    this.explicitMemoryEntries = new Map()
+    this.explicitMemoryQueue = new ExplicitMemoryQueue()
+    this.explicitMemoryQueue.explicitMemoryEntry = (id) => this.explicitMemoryEntries.get(id) ?? null
+    this.explicitMemoryQueue.snapshot = () => [...this.explicitMemoryEntries.values()].map((entry) => ({ ...entry }))
+    this.explicitMemoryController = new ExplicitMemoryController()
     this.turnManager = new PetTurnManager()
     this.turnOrchestrator = null
     this.conversationPersistenceReady = false
@@ -125,6 +217,22 @@ export class PetRuntime {
     await this.sandbox.initialize()
     await this.conversationStore.initialize()
     await this.visualExperience.initialize()
+    // The experience store is additive and never blocks waking up: if it cannot
+    // be opened the pet still chats, it just does not remember recent life.
+    if (this.experienceBuffer) {
+      try {
+        await this.experienceBuffer.initialize()
+        this.experienceBufferReady = true
+      } catch (error) {
+        this.experienceBufferReady = false
+        this.logger?.warn?.(
+          `vc-ai-pet: experience buffer unavailable code=${String(error?.code ?? error?.name ?? 'UNKNOWN').slice(0, 60)}`,
+        )
+      }
+    }
+    if (this.pipelineConfig.diagnostics.length > 0) {
+      this.logger?.warn?.(`vc-ai-pet: memory pipeline config diagnostics=${this.pipelineConfig.diagnostics.join(',')}`)
+    }
     this.conversationPersistenceReady = true
     // Zero-inference backfill of the Visual Experience Index: walks raw user
     // messages with attachments, indexes the owner's original wording, and
@@ -169,21 +277,42 @@ export class PetRuntime {
       experienceStore: this.visualExperience,
     })
     this.memoryGate = new MemoryGate({ memory: this.memory })
+    // Consolidation is the "repeated experience becomes understanding" step. It
+    // only exists when the buffer does; without it Dream/Reflection still work
+    // exactly as before.
+    this.experienceConsolidator = this.experienceBuffer
+      ? new ExperienceConsolidator({
+          buffer: this.experienceBuffer,
+          memory: this.memory,
+          logger: this.logger,
+        })
+      : null
     const visualContextProvider = ({ query }) => buildVisualDreamContext({
       experienceStore: this.visualExperience,
       query,
     })
+    // Dream and Reflection keep their prompts and schemas untouched; the only
+    // change is that recent lived experience is prepended to the context they
+    // already receive. It is rendered with its own declaration so neither engine
+    // can mistake a recent experience for a verified long-term memory.
+    const experienceAwareContextProvider = async (request) => {
+      const visualSection = await visualContextProvider(request)
+      const recent = await this.recentExperienceContext({ limit: this.pipelineConfig.dreamRecentExperienceLimit })
+      const experienceSection = withExperienceDeclaration(recent.rendered)
+      if (!visualSection && !experienceSection) return null
+      return [visualSection, experienceSection].filter(Boolean).join('\n\n')
+    }
     this.dreamEngine = new DreamEngine({
       memory: this.memory,
       brain: this.brain,
       gate: new DreamGate({ memory: this.memory }),
-      visualContextProvider,
+      visualContextProvider: experienceAwareContextProvider,
     })
     this.reflectionEngine = new ReflectionEngine({
       memory: this.memory,
       brain: this.brain,
       gate: new ReflectionGate({ memory: this.memory }),
-      visualContextProvider,
+      visualContextProvider: experienceAwareContextProvider,
     })
     this.dreamScheduler = new DreamScheduler({
       memory: this.memory,
@@ -191,7 +320,7 @@ export class PetRuntime {
       reflectionEngine: this.reflectionEngine,
       eligibility: (options) => dreamEligibility(this.memory, options),
       deepDreamEligibility: (options) => deepDreamEligibility(this.memory, options),
-      reflectionEligibility: (options) => reflectionEligibility(this.memory, options),
+      reflectionEligibility: (options) => experienceAwareReflectionEligibility(this, this.memory, options),
     })
     await this.persist()
     return this.snapshot()
@@ -256,6 +385,13 @@ export class PetRuntime {
     this.state = advanceState(this.state, now)
     this.emotion = advanceEmotion(this.emotion, now)
     await this.persist()
+
+    // Experience consolidation runs before Dream/Reflection and only while the
+    // pet is idle. It is the step that turns *repeated* recent life into raw
+    // PetMemory rows; Dream and Reflection then work on ordinary raw evidence,
+    // so their prompts, schemas and invariants stay exactly as they were.
+    await this.consolidateExperiences()
+
     const schedulerState = {
       state: this.snapshot(),
       chatInFlight: this.chatInFlight > 0,
@@ -407,7 +543,7 @@ export class PetRuntime {
         userText: promptText,
         image: effectiveVisionImage,
         visualContext,
-        recentMessages: this.conversation.messages(),
+        recentMessages: this.#shortTermContext(),
       })
 
       if (!result?.ok) return result
@@ -418,11 +554,67 @@ export class PetRuntime {
         this.memory.beliefs?.consider(result.beliefCandidates, ownerMessage)
       }
 
+      // Explicit Memory Queue: an instruction the owner actually gave outranks
+      // a model that is merely too conservative to volunteer a candidate, and it
+      // keeps covering the follow-up sentence that carries no keyword at all
+      // ("记住我们家的猫叫黑莓" -> "我们家的猫叫黑莓").
+      const explicit = ownerText.trim()
+        ? this.explicitMemoryController.resolve(ownerText)
+        : { decision: 'none', evidence: null, priority: null, source: null, phrase: null }
+      let explicitEntry = null
+      if (explicit.decision !== 'none') {
+        const queued = this.explicitMemoryQueue.enqueue({
+          userText: ownerText,
+          messageId: ownerMessage?.id ?? null,
+          turnId,
+          candidate: null,
+          phrase: explicit.phrase,
+          reason: explicit.decision,
+        })
+        if (queued) {
+          // Normalise the metadata the pipeline contract promises, without
+          // editing the queue module's own record shape.
+          queued.priority = explicit.priority ?? 'HIGH'
+          queued.source = explicit.source ?? 'USER_EXPLICIT'
+          queued.decision = explicit.decision
+          queued.content = explicit.content ?? null
+          queued.evidence = explicit.evidence ?? null
+          queued.enqueuedAt = queued.enqueuedAt ?? Date.now()
+          explicitEntry = queued
+          this.explicitMemoryEntries.set(queued.id, queued)
+        }
+      }
+
       const gate = effectiveVisionImage
         ? { status: 'skipped', reason: 'vision-context' }
         : ownerText.trim()
-          ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate, { messageId: ownerMessage?.id })
+          ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate, {
+              messageId: ownerMessage?.id,
+              explicitFallback: explicit.decision === 'none'
+                ? null
+                : {
+                    level: explicit.level ?? 'fact',
+                    content: explicit.content ?? '',
+                    importance: 3,
+                    keywords: [],
+                    confidence: 1,
+                    evidence: explicit.accumulatedEvidence ?? explicit.evidence,
+                  },
+            })
           : { status: 'skipped', reason: 'empty-message' }
+
+      if (explicitEntry) {
+        // Persisted-or-already-known both mean the instruction was honoured.
+        // The controller window is intentionally left open: a restatement in a
+        // following turn is normal, and deduplication in the gate absorbs it.
+        if (gate.status === 'written') {
+          this.explicitMemoryQueue.markWritten(explicitEntry.id, { memoryId: gate.id ?? null })
+        } else if (gate.status === 'duplicate') {
+          this.explicitMemoryQueue.markWritten(explicitEntry.id, { memoryId: gate.id ?? null })
+        } else {
+          this.explicitMemoryQueue.markRejected(explicitEntry.id, gate.reason ?? gate.status)
+        }
+      }
 
       const recentUserText = currentVisionImage
         ? `[主人发送了一张图片]${ownerText.trim() ? ` ${ownerText.trim()}` : ''}`
@@ -443,6 +635,21 @@ export class PetRuntime {
         }
       }
 
+      // Experience Buffer: record the lived turn so Reflection can later find
+      // what repeated and what mattered. Low-value chitchat is rejected by the
+      // store's own admission rule, so "not every chat becomes a memory" holds
+      // even for the buffer. This is fire-and-forget: a buffer failure must
+      // never fail the owner's turn.
+      this.#recordExperience({
+        turnId,
+        ownerText: recentUserText,
+        assistantText: semanticReplies.join('\n'),
+        hadVision: Boolean(effectiveVisionImage),
+        messageId: ownerMessage?.id ?? null,
+        explicitMemoryRequest: explicit.decision !== 'none',
+        currentVisionImage,
+      })
+
       // Never expose the candidate/evidence or internal gate details to the
       // browser. Reasoning metadata is additive UI telemetry persisted only as
       // optional ConversationStore message metadata.
@@ -453,6 +660,7 @@ export class PetRuntime {
         text: result.text,
         ...(replyMessages.length ? { replyMessages } : {}),
         memoryWrite: gate.status,
+        ...(gate.source ? { memoryPriority: gate.priority, memorySource: gate.source } : {}),
         ...(effectiveVisionImage && gate.reason ? { memoryWriteReason: gate.reason } : {}),
         ...(reasoning ? { reasoning } : {}),
       }
@@ -552,11 +760,168 @@ export class PetRuntime {
       chatInFlight: this.chatInFlight > 0,
       dreamInFlight: this.dreamEngine?.isInFlight?.() ?? false,
       reflectionInFlight: this.reflectionEngine?.isInFlight?.() ?? false,
+    }).then(async (result) => {
+      await this.#markExperiencesConsumed(result)
+      return result
     })
+  }
+
+  /**
+   * A completed reflection pass has *consumed* the experiences it was shown, so
+   * they are marked processed and stop being re-fed on every later pass. Only a
+   * completed pass marks anything: a skipped or failed reflection must leave the
+   * buffer intact or the life it was supposed to reflect on is lost.
+   */
+  async #markExperiencesConsumed(result) {
+    if (!this.experienceBuffer || !this.experienceBufferReady) return 0
+    if (result?.status !== 'completed' || result?.ok !== true) return 0
+    try {
+      const pending = await this.experienceBuffer.pendingExperience({ limit: 200 })
+      const ids = (pending ?? []).map((row) => row.id).filter((id) => Number.isInteger(id))
+      if (ids.length === 0) return 0
+      await this.experienceBuffer.markProcessed(ids)
+      return ids.length
+    } catch (error) {
+      this.logger?.warn?.(
+        `vc-ai-pet: experience mark-processed failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`,
+      )
+      return 0
+    }
+  }
+
+  /**
+   * Turn repeated recent experience into raw PetMemory rows.
+   *
+   * Deliberately conservative and idempotent: the consolidator only promotes
+   * something that appeared more than once across different conversations, it
+   * deduplicates against existing memory, and it never runs while a chat, dream
+   * or reflection is in flight. A failure is logged, never thrown — this is a
+   * background tidy-up, not part of answering the owner.
+   */
+  async consolidateExperiences({ limit = 50 } = {}) {
+    if (!this.experienceBuffer || !this.experienceBufferReady || !this.experienceConsolidator) {
+      return { status: 'skipped', ok: false, reason: 'consolidator-unavailable' }
+    }
+    if (this.chatInFlight > 0 || this.dreamEngine?.isInFlight?.() || this.reflectionEngine?.isInFlight?.()) {
+      return { status: 'skipped', ok: false, reason: 'pet-busy' }
+    }
+    if (this.consolidationInFlight) return { status: 'skipped', ok: false, reason: 'consolidation-in-flight' }
+    this.consolidationInFlight = true
+    try {
+      const result = await this.experienceConsolidator.consolidate({ limit })
+      if (result?.written > 0) {
+        this.logger?.info?.(
+          `vc-ai-pet: experience consolidation written=${result.written} candidates=${result.candidates} scanned=${result.scanned}`,
+        )
+      }
+      return result
+    } catch (error) {
+      this.logger?.warn?.(
+        `vc-ai-pet: experience consolidation failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`,
+      )
+      return { status: 'failed', ok: false, reason: String(error?.code ?? 'consolidation-failed') }
+    } finally {
+      this.consolidationInFlight = false
+    }
+  }
+
+  /**
+   * The working window sent to the model.
+   *
+   * `RecentConversation` still owns and bounds the short-term memory; this only
+   * decides what fits in the token budget. When the budget is exceeded, casual
+   * chitchat is dropped before anything the owner stated as a fact, and the most
+   * recent turns are never dropped at all — a pet that forgets what was just
+   * said is worse than one that forgets an old greeting.
+   *
+   * Any failure falls back to the unbounded window: trimming is an optimisation,
+   * never a reason to answer with less context than before.
+   */
+  #shortTermContext() {
+    const turns = this.conversation?.snapshot?.() ?? []
+    try {
+      const selected = selectContextTurns(turns, {
+        maxTurns: this.pipelineConfig.shortTermContextTurns,
+        maxChars: this.pipelineConfig.shortTermContextChars,
+      })
+      if (Array.isArray(selected?.turns) && selected.turns.length > 0) {
+        return selected.turns.flatMap(({ user, assistant }) => [
+          { role: 'user', content: user },
+          { role: 'assistant', content: assistant },
+        ])
+      }
+    } catch (error) {
+      this.logger?.warn?.(`vc-ai-pet: context budget selection failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
+    }
+    return this.conversation.messages()
   }
 
   recall(query, k = 5) {
     return this.memory.recall(query, k)
+  }
+
+  /**
+   * Recent lived experience for Dream / Reflection input. Read-only and safe to
+   * call when the buffer is unavailable: the caller gets an empty context rather
+   * than an exception in the middle of a background pass.
+   */
+  async recentExperienceContext({ limit = this.pipelineConfig.dreamRecentExperienceLimit } = {}) {
+    if (!this.experienceBuffer || !this.experienceBufferReady) {
+      return buildRecentExperienceContext({ entries: [], limit })
+    }
+    try {
+      const entries = typeof this.experienceBuffer.recent === 'function'
+        ? await this.experienceBuffer.recent({ limit })
+        : await this.experienceBuffer.pendingExperience({ limit })
+      return buildRecentExperienceContext({ entries: entries ?? [], limit })
+    } catch (error) {
+      this.logger?.warn?.(`vc-ai-pet: recent experience read failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
+      return buildRecentExperienceContext({ entries: [], limit })
+    }
+  }
+
+  /**
+   * Write one lived turn into the Experience Buffer. Deliberately synchronous
+   * and swallowed: the buffer is a memory aid, never a precondition for talking.
+   */
+  #recordExperience({
+    turnId = null,
+    ownerText = '',
+    assistantText = '',
+    hadVision = false,
+    messageId = null,
+    explicitMemoryRequest = false,
+    currentVisionImage = null,
+  } = {}) {
+    if (!this.experienceBuffer || !this.experienceBufferReady) return null
+    try {
+      const emotion = this.emotion && typeof this.emotion === 'object'
+        ? { mood: this.emotion.mood ?? null, intensity: this.emotion.intensity ?? null }
+        : null
+      // The store owns the canonical `experience_events` column names. The
+      // runtime only supplies the values, and supplies both the canonical name
+      // and the pre-rename alias so a schema migration behind this store cannot
+      // silently drop the content.
+      const payload = {
+        conversationId: turnId,
+        turnId,
+        messageId,
+        actorId: 'owner',
+        actor: 'owner',
+        content: ownerText,
+        ownerText,
+        assistantText,
+        hadVision: Boolean(hadVision),
+        visionSummary: hadVision && currentVisionImage ? '主人这一轮发送了图片' : null,
+        emotion,
+        explicitMemoryRequest,
+        sourceType: explicitMemoryRequest ? 'explicit_memory' : null,
+      }
+      return this.experienceBuffer.record(payload)
+    } catch (error) {
+      this.logger?.warn?.(`vc-ai-pet: experience record failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
+      return null
+    }
   }
 
   async conversationHistory(limit = 50) {
@@ -571,9 +936,16 @@ export class PetRuntime {
 
   async restoreRecentConversation() {
     if (!this.conversationPersistenceReady) return
+    // Each turn contributes roughly two archived messages (owner + final
+    // assistant reply), so restoring the configured working window means asking
+    // for twice as many messages. 48 messages could only ever rebuild 24 turns.
+    const restoreMessages = Math.min(
+      CONVERSATION_MAX_MESSAGES,
+      Math.max(48, this.pipelineConfig.shortTermContextTurns * 2 + 4),
+    )
     const persisted = typeof this.conversationStore.semanticHistory === 'function'
-      ? await this.conversationStore.semanticHistory(48)
-      : await this.conversationStore.list(24)
+      ? await this.conversationStore.semanticHistory(restoreMessages)
+      : await this.conversationStore.list(restoreMessages)
     this.conversation.clear()
     const entries = []
     const keyed = new Map()

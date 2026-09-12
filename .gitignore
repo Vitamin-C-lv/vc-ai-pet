@@ -6,6 +6,11 @@ pet-data/
 *.db
 *.db-wal
 *.db-shm
+# The Experience Buffer is a life-data SQLite store created at runtime inside the
+# sandbox; it must never be committed.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 conversation-store.json
 conversation-assets/
 !sandbox-template/

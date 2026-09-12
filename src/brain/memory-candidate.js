@@ -69,49 +69,193 @@ memory：
 
 const LEVELS = new Set(MEMORY_WRITE_LEVELS)
 
+export const EXPLICIT_MEMORY_PHRASES = Object.freeze([
+  '记住',
+  '记下来',
+  '不要忘',
+  '别忘了',
+  '以后叫',
+  '以后知道',
+  '记一下',
+  '记着',
+  '记好',
+])
+
+// "别记" / "不用记" are the short forms of "别记住" / "不用记住" and were
+// already covered by the previous opt-out rule; keeping them matters because an
+// opt-out that stops matching silently turns "forget this" into "store this".
+const EXPLICIT_MEMORY_OPT_OUT = /(?:不要|别|不用|不必|不需要|不许)[^忘]{0,8}(?:记住|记下来|记一下|记着|记好|记(?!者)|保存|存下来|存储|存)/iu
+const EXPLICIT_MEMORY_QUESTION = /[?？]/u
+const EXPLICIT_MEMORY_COMPLETION = /^(?:了|啦|喽|过|吗|么|呢|没有|了吗)/u
+const LEADING_MEMORY_DIRECTIVE = /^(?:(?:请|帮我)?(?:你)?(?:要|一定要|千万|务必)?(?:记住|记下来|记一下|记着|记好|不要忘|不要忘记|别忘了|别忘记)(?:一下|哦|吧|啊|呀)?)[，,、:：\s]*/u
+const TRAILING_MEMORY_DIRECTIVE = /[，,、；;。\s]+(?:(?:请|帮我)?(?:你)?(?:要|一定要|千万|务必)?(?:记住|记下来|记一下|记着|记好|不要忘|不要忘记|别忘了|别忘记)(?:一下|哦|吧|啊|呀)?)[。！？!?，,、\s]*$/u
+/** "你以后知道猫叫黑莓" — the pet is the directive's subject, not the fact. */
+const LEADING_PET_DIRECTIVE = /^(?:你|花花|李花花)?(?:以后|今后)(?:要|会|得)?(?:知道|记住|记得)[，,、\s]*/u
+
+function matchingExplicitPhrase(text) {
+  return [...EXPLICIT_MEMORY_PHRASES]
+    .sort((left, right) => right.length - left.length)
+    .find((phrase) => text.includes(phrase)) ?? null
+}
+
+function isQuestionLike(text) {
+  return EXPLICIT_MEMORY_QUESTION.test(text) || /(?:吗|么)\s*$/u.test(text)
+}
+
+function hasSubstantiveClaim(claim, utterance) {
+  const remaining = String(claim ?? '')
+    .replace(/记住|记下来|记一下|记着|记好|不要忘|不要忘记|别忘了|别忘记|以后叫|以后知道|以后|知道|记得/gu, '')
+    .replace(/[，,。:：;；!！？?\s]+/gu, '')
+  return remaining.length >= 2
+    && /[\u4e00-\u9fffA-Za-z0-9]/u.test(remaining)
+    && String(utterance ?? '').length > remaining.length
+}
+
+/**
+ * Possessive 我-forms that may be rewritten to "主人…". "我们家的" is a household
+ * possessive ("我们家的猫叫黑莓" means the household cat). A bare "我们" is
+ * deliberately absent: "我们一起去过海边" is a shared experience, not ownership.
+ */
+const OWNER_POSSESSIVE_FORMS = Object.freeze(['我们家的', '我家的', '我的'])
+
+/**
+ * Render the durable content conservatively.
+ *
+ * A first-person claim ("我的猫叫黑莓", "我最喜欢的颜色是群青色") becomes
+ * "主人…": the leading 我 is dropped and, when it was acting as a possessive
+ * (我的/我家的), one 的 is kept so the result stays grammatical.
+ *
+ * 我们-forms are excluded on purpose. "我们家的猫叫黑莓" is about the household
+ * cat, and slicing one character off produced the corrupted
+ * "主人们家的猫猫叫黑莓" that shipped before. Anything not positively
+ * understood keeps the owner's verbatim words behind an explicit prefix, so a
+ * mis-parse can never silently invent a different subject.
+ */
+export function explicitMemoryContent(claim) {
+  const text = String(claim ?? '').trim()
+  if (!text) return ''
+  if (/^我(?!们)/u.test(text)) {
+    // "我的X" / "我家的X" keep their 的; "我叫X" simply gains the prefix.
+    return `主人${text.slice(1)}`
+  }
+  return `主人明确要求记住：${text}`
+}
+
+/**
+ * The single content normalisation shared by every write path.
+ *
+ * Precedence, in order:
+ *   1. a verbatim owner quote — the gate's invariant is that only what the
+ *      owner actually said may become a raw fact, so a verified quote always
+ *      wins and always lands as "主人说：<quote>";
+ *   2. an explicit request that was recognised by rule but had no quotable
+ *      claim ("以后叫它黑莓") — keep its explicit phrasing;
+ *   3. the model's own summary, used only when nothing else exists.
+ */
+export function formatMemoryContent({ evidence = '', content = '', explicitContent = '' } = {}) {
+  const quote = String(evidence ?? '').trim()
+  if (quote) return `主人说：${quote}`
+  const explicit = String(explicitContent ?? '').trim()
+  if (explicit) return explicit
+  return String(content ?? '').trim()
+}
+
+/**
+ * Explicit requests describe a stable fact about the owner or the household,
+ * so they are promoted to `user` level rather than a one-off `fact`.
+ *
+ * Any first-person claim starting with 我 qualifies ("我的猫叫黑莓",
+ * "我最喜欢的颜色是群青色") — except 我们-forms, where the subject is plural
+ * and the claim is about a shared experience rather than the owner: that would
+ * be a `fact`, and rewriting it to "主人…" would misstate who it is about.
+ */
+function looksLikeStableIdentityClaim(claim) {
+  const text = String(claim ?? '').trim()
+  if (!text) return false
+  return /^我(?!们)/u.test(text)
+}
+
+export function detectExplicitMemoryRequest(userText) {
+  const text = String(userText ?? '').trim()
+  const optOut = EXPLICIT_MEMORY_OPT_OUT.test(text)
+  const phrase = matchingExplicitPhrase(text)
+  if (optOut || !phrase || isQuestionLike(text)) {
+    return { explicit: false, phrase, optOut, stableIntent: false }
+  }
+
+  const phraseIndex = text.indexOf(phrase)
+  const afterPhrase = text.slice(phraseIndex + phrase.length).trimStart()
+  // Completed recollections such as "我记住了" are not requests to store memory.
+  if (EXPLICIT_MEMORY_COMPLETION.test(afterPhrase)) {
+    return { explicit: false, phrase, optOut: false, stableIntent: false }
+  }
+
+  const evidence = explicitMemoryStatement(text)
+  if (!hasSubstantiveClaim(evidence, text)) {
+    return { explicit: false, phrase, optOut: false, stableIntent: false }
+  }
+
+  return {
+    explicit: true,
+    phrase,
+    optOut: false,
+    stableIntent: looksLikeStableIdentityClaim(evidence),
+  }
+}
+
 export function userOptedOutOfMemory(userText) {
-  const text = String(userText ?? '')
-  return /(?:不要|别|不用|不许).{0,8}(?:记住|记下来|记|保存|存下来)/u.test(text)
+  return EXPLICIT_MEMORY_OPT_OUT.test(String(userText ?? ''))
 }
 
 export function userExplicitlyRequestsMemory(userText) {
-  if (userOptedOutOfMemory(userText)) return false
-  return /(?:帮我)?(?:你)?(?:记住|记下来|记一下|记着|记好)/u.test(String(userText ?? ''))
+  return detectExplicitMemoryRequest(userText).explicit
 }
 
 export function containsSensitiveMemoryText(text) {
   return /密码|password|token|api\s*key|apikey|密钥|secret|验证码/iu.test(String(text ?? ''))
 }
 
-function explicitMemoryStatement(userText) {
-  return String(userText ?? '')
+export function explicitMemoryStatement(userText) {
+  let text = String(userText ?? '')
     .trim()
     .replace(/^(?:花花|李花花)[，,、\s]*/u, '')
-    .replace(/^(?:(?:请|帮我)?(?:你)?(?:记住|记下来|记一下|记着|记好)(?:一下|哦|吧)?)[，,:：\s]*/u, '')
-    .trim()
+
+  // Directives can stack ("花花，你记住哦，记住我的猫叫黑莓"), and removing the
+  // outer one can expose another. Loop until stable rather than guessing a depth.
+  for (let pass = 0; pass < 4; pass += 1) {
+    const stripped = text
+      .replace(LEADING_PET_DIRECTIVE, '')
+      .replace(LEADING_MEMORY_DIRECTIVE, '')
+      .trim()
+    if (stripped === text) break
+    text = stripped
+  }
+
+  return text.replace(TRAILING_MEMORY_DIRECTIVE, '').replace(/^[，,。:：;；!！\s]+/u, '').trim()
 }
 
-export function createExplicitMemoryFallbackCandidate(userText) {
-  if (userOptedOutOfMemory(userText) || !userExplicitlyRequestsMemory(userText)) return null
+export function highPriorityMemoryCandidate(userText, { modelCandidate = null } = {}) {
+  // Deliberately derive the candidate from the owner's words, never from a
+  // model summary. The modelCandidate parameter keeps the gate call stable.
+  void modelCandidate
+  const detection = detectExplicitMemoryRequest(userText)
+  if (!detection.explicit || detection.optOut || containsSensitiveMemoryText(userText)) return null
 
   const evidence = explicitMemoryStatement(userText)
   if (!evidence || containsSensitiveMemoryText(evidence)) return null
 
-  const isOwnerStatement = /^(?:我|我的)/u.test(evidence)
-  const content = evidence.startsWith('我的')
-    ? `主人${evidence.slice(1)}`
-    : evidence.startsWith('我')
-      ? `主人${evidence.slice(1)}`
-      : `主人明确要求记住：${evidence}`
-
   return {
-    level: isOwnerStatement ? 'user' : 'fact',
-    content,
+    level: detection.stableIntent ? 'user' : 'fact',
+    content: explicitMemoryContent(evidence),
     importance: 3,
     keywords: [],
     confidence: 1,
     evidence,
   }
+}
+
+export function createExplicitMemoryFallbackCandidate(userText) {
+  return highPriorityMemoryCandidate(userText)
 }
 
 export function validateMemoryCandidate(raw, userText) {

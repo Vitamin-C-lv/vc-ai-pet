@@ -1,6 +1,55 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_VISUAL_DEDUP_PRODUCTION_MIGRATION_REVIEW
+Status: FINAL_STATUS=READY_FOR_EXPERIENCE_AWARE_MEMORY_PIPELINE_REVIEW
+
+## 2026-09-12 — Experience-aware Memory Pipeline（Memory Pipeline v2）
+
+用户报告的故障：告诉花花「我们家的猫猫叫黑莓，你要记住」，之后花花「不知道猫叫什么」。
+
+Phase 0 审计 + Root 现场探针（/tmp 临时 sandbox，生产 DB 全程未触碰）裁定：
+**唯一主根因是显式记忆意图没有跨 turn 传播**——主人给一次指令后正常谈论那件事，
+第二句（`我们家的猫叫黑莓`）没有关键词，旧 Gate 只能按普通消息处理，
+模型 `model-skip` 时不写 PetMemory。次要因素：旧 Gate 白名单对
+`importance-low/confidence-low/level-denied` 不兜底、旧 fallback 把
+`我们家的…` 写成 `主人们家的…`、以及 `recall('猫')` 单字不入索引（非「没有记忆」的证据）。
+真实 archive 无 candidate 字段，故「低分候选实际触发比例」标注为**无法验证**。
+
+本轮交付（新 branch `feat/life-experience-buffer`，base 4a3b8ef）：
+
+```text
+WORKTREE=/home/vitamin_c/projects/personal/vc-ai-pet-life-experience
+BRANCH=feat/life-experience-buffer
+BASE_COMMIT=4a3b8ef（= 生产 Pet 当前 HEAD）
+ARCHITECTURE_CHANGED=Conversation Archive -> Experience Buffer -> Consolidator -> Reflection -> PetMemory
+PET_MEMORY_SCHEMA_CHANGED=NO
+CONVERSATION_ARCHIVE_SCHEMA_CHANGED=NO
+DREAM_GENERATION_LOGIC_CHANGED=NO
+MEMORY_GATE_VALIDATION_WEAKENED=NO
+
+NEW_DB=experience-buffer.sqlite (table experience_events + experience_buffer_meta)
+NEW_FILES=src/experience/experience-buffer.js, src/experience/experience-consolidator.js,
+          src/experience/experience-dream-context.js, src/memory/explicit-memory-queue.js,
+          src/memory/explicit-memory-controller.js, src/memory/memory-pipeline-config.js,
+          src/conversation/context-budget.js, scripts/migrate-experience-buffer.mjs
+MIGRATION=npm run migrate:experience-buffer（默认 DRY-RUN，只读探查；--apply 才写；schema drift 拒绝）
+MIGRATION_DRY_RUN_VERIFIED=YES
+SHORT_TERM_CONTEXT_TURNS=48（配置化，token budget 动态上限，低优先级先裁剪，最近 6 轮永不裁剪）
+EXPLICIT_MEMORY_METADATA=priority:HIGH source:USER_EXPLICIT
+EXPERIENCE_BUFFER_RETENTION=14d
+
+TEST_RESULT=ALL_PASS
+  新增 8 个测试 exit=0（npm run test:experience-aware-memory）
+  5 个用户点名验收用例全 PASS（CASE_1..CASE_5）
+  既有回归全 exit=0：core / long-life / visual-memory 1.1+1.2 / mobile / conversation persistence
+  npm run smoke exit=0
+PRODUCTION_DEPLOYED=NO
+PRODUCTION_RESTARTED=NO
+PUSHED=NO
+FINAL_STATUS=READY_FOR_USER_REVIEW
+```
+
+风险与未决事项见 `docs/DEVLOG_MEMORY_PIPELINE_V2.md` 第 8、9 节；
+完整 Phase 0 审计见 `docs/AUDIT_MEMORY_PIPELINE_V2.md`。
 
 ## 2026-09-09 — Visual Canonical Deduplication on Current Production Lineage
 
