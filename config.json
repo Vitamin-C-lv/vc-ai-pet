@@ -44,13 +44,13 @@
     }
   },
   "memoryPipeline": {
-    "shortTermContextTurns": 48,
-    "shortTermContextChars": 24000,
+    "shortTermContextTurns": 50,
+    "shortTermContextChars": 18000,
     "experienceBufferEnabled": true,
     "experienceBufferRetentionDays": 14,
     "reflectionOnExperience": true,
     "reflectionNewExperienceTrigger": 10,
-    "dreamRecentExperienceLimit": 12
+    "dreamRecentExperienceLimit": 80
   },
   "petVisual": {
     "nightStartHour": 23,

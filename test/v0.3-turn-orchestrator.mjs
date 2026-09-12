@@ -318,7 +318,11 @@ const integratedCalls = []
 integratedRuntime.brain = { visualStep: async (request) => { integratedCalls.push(request); return { ok: true, observation: '图中有一个爪印。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['看到了。'] } } }
 const integratedStart = integratedRuntime.startChatTurn({ userText: '这是什么', attachmentId: integratedAttachment.id })
 let integratedPoll = null
-for (let attempt = 0; attempt < 20; attempt += 1) {
+// One turn genuinely costs ~240ms here (attachment persistence + visual plan +
+// brain step), so the previous 20x5ms budget was below the work being waited on
+// and only passed on an idle machine. The wait is generous, but the assertion
+// below still requires a terminal, successful turn — a real hang still fails.
+for (let attempt = 0; attempt < 150; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 5))
   integratedPoll = integratedRuntime.pollChatTurn(integratedStart.turnId, 0)
   if (integratedPoll?.status !== 'running') break

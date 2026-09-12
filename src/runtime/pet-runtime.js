@@ -122,9 +122,13 @@ async function experienceAwareReflectionEligibility(runtime, memory, options = {
     return { ...base, experienceSourceCount: 0, experienceReason: 'experience-buffer-unavailable' }
   }
 
+  // The window has to be the same one Dream and Reflection are shown, otherwise
+  // an experience past the window could keep the trigger permanently "eligible"
+  // without ever being read or consumed.
+  const windowLimit = Math.max(1, Number(config.dreamRecentExperienceLimit) || 1)
   let pending = []
   try {
-    pending = (await runtime.experienceBuffer.pendingExperience({ limit: 200 })) ?? []
+    pending = (await runtime.experienceBuffer.pendingExperience({ limit: windowLimit })) ?? []
   } catch {
     return { ...base, experienceSourceCount: 0, experienceReason: 'experience-buffer-read-failed' }
   }
@@ -164,6 +168,8 @@ async function experienceAwareReflectionEligibility(runtime, memory, options = {
 }
 
 export class PetRuntime {
+  #experienceWriteQueue = Promise.resolve()
+
   constructor({ sandboxRoot, logger = null, memoryPipeline = null, env = process.env }) {
     this.sandbox = new PetSandbox(sandboxRoot)
     this.logger = logger
@@ -544,6 +550,9 @@ export class PetRuntime {
         image: effectiveVisionImage,
         visualContext,
         recentMessages: this.#shortTermContext(),
+        // The window the model is allowed to see, in turns. Passed explicitly so
+        // the prompt builder can never cap it at some other hard-coded number.
+        contextTurns: this.pipelineConfig.shortTermContextTurns,
       })
 
       if (!result?.ok) return result
@@ -561,6 +570,9 @@ export class PetRuntime {
       const explicit = ownerText.trim()
         ? this.explicitMemoryController.resolve(ownerText)
         : { decision: 'none', evidence: null, priority: null, source: null, phrase: null }
+      const hasExplicitMemoryControl = explicit.decision !== 'none'
+        || explicit.detection?.explicit === true
+        || explicit.detection?.optOut === true
       let explicitEntry = null
       if (explicit.decision !== 'none') {
         const queued = this.explicitMemoryQueue.enqueue({
@@ -586,7 +598,21 @@ export class PetRuntime {
       }
 
       const gate = effectiveVisionImage
-        ? { status: 'skipped', reason: 'vision-context' }
+        ? hasExplicitMemoryControl
+          ? this.memoryGate.consider(ownerText, null, {
+              messageId: ownerMessage?.id,
+              explicitFallback: explicit.decision === 'none'
+                ? null
+                : {
+                    level: explicit.level ?? 'fact',
+                    content: explicit.content ?? '',
+                    importance: 3,
+                    keywords: [],
+                    confidence: 1,
+                    evidence: explicit.evidence,
+                  },
+            })
+          : { status: 'skipped', reason: 'vision-context' }
         : ownerText.trim()
           ? this.memoryGate.consider(ownerText, result.rawMemoryCandidate ?? result.memoryCandidate, {
               messageId: ownerMessage?.id,
@@ -598,7 +624,7 @@ export class PetRuntime {
                     importance: 3,
                     keywords: [],
                     confidence: 1,
-                    evidence: explicit.accumulatedEvidence ?? explicit.evidence,
+                    evidence: explicit.evidence,
                   },
             })
           : { status: 'skipped', reason: 'empty-message' }
@@ -680,7 +706,75 @@ export class PetRuntime {
       // Incremental visual-experience sync after the turn's user message has
       // been appended to the archive; idempotent and checkpointed, no models.
       await this.syncVisualExperiences()
-      return result
+      if (!result?.ok) return result
+
+      // Vision is deliberately excluded from the model-candidate memory path:
+      // observations made by visualStep are not owner assertions. An explicit
+      // memory request is the one exception, and its fallback is derived only
+      // from the owner's persisted wording. The orchestrator owns the append,
+      // so recover that exact user row by turnId for provenance/evidence.
+      const ownerText = String(userText ?? '')
+      const explicit = ownerText.trim()
+        ? this.explicitMemoryController.resolve(ownerText)
+        : { decision: 'none', detection: null, evidence: null, accumulatedEvidence: null, priority: null, source: null, phrase: null }
+      const hasExplicitMemoryControl = explicit.decision !== 'none'
+        || explicit.detection?.explicit === true
+        || explicit.detection?.optOut === true
+      if (!hasExplicitMemoryControl) return result
+
+      const messages = await this.conversationStore.listForRecentVisualRecall()
+      const ownerMessage = [...messages].reverse().find((message) => message?.role === 'user' && message?.turnId === turnId)
+      let explicitEntry = null
+      if (explicit.decision !== 'none') {
+        const queued = this.explicitMemoryQueue.enqueue({
+          userText: ownerText,
+          messageId: ownerMessage?.id ?? null,
+          turnId,
+          candidate: null,
+          phrase: explicit.phrase,
+          reason: explicit.decision,
+        })
+        if (queued) {
+          queued.priority = explicit.priority ?? 'HIGH'
+          queued.source = explicit.source ?? 'USER_EXPLICIT'
+          queued.decision = explicit.decision
+          queued.content = explicit.content ?? null
+          queued.evidence = explicit.evidence ?? null
+          queued.enqueuedAt = queued.enqueuedAt ?? Date.now()
+          explicitEntry = queued
+          this.explicitMemoryEntries.set(queued.id, queued)
+        }
+      }
+
+      const gateOwnerText = ownerMessage?.text ?? ownerText
+      const gate = this.memoryGate.consider(gateOwnerText, null, {
+        messageId: ownerMessage?.id ?? null,
+        explicitFallback: explicit.decision === 'none'
+          ? null
+          : {
+              level: explicit.level ?? 'fact',
+              content: explicit.content ?? '',
+              importance: 3,
+              keywords: [],
+              confidence: 1,
+              evidence: explicit.evidence,
+            },
+      })
+
+      if (explicitEntry) {
+        if (gate.status === 'written' || gate.status === 'duplicate') {
+          this.explicitMemoryQueue.markWritten(explicitEntry.id, { memoryId: gate.id ?? null })
+        } else {
+          this.explicitMemoryQueue.markRejected(explicitEntry.id, gate.reason ?? gate.status)
+        }
+      }
+
+      return {
+        ...result,
+        memoryWrite: gate.status,
+        ...(gate.source ? { memoryPriority: gate.priority, memorySource: gate.source } : {}),
+        ...(gate.reason ? { memoryWriteReason: gate.reason } : {}),
+      }
     } finally { this.chatInFlight -= 1 }
   }
 
@@ -776,7 +870,10 @@ export class PetRuntime {
     if (!this.experienceBuffer || !this.experienceBufferReady) return 0
     if (result?.status !== 'completed' || result?.ok !== true) return 0
     try {
-      const pending = await this.experienceBuffer.pendingExperience({ limit: 200 })
+      // Only the rows the pass could actually have been shown are consumed;
+      // marking unseen rows processed would silently discard life.
+      const limit = Math.max(1, Number(this.pipelineConfig.dreamRecentExperienceLimit) || 1)
+      const pending = await this.experienceBuffer.pendingExperience({ limit })
       const ids = (pending ?? []).map((row) => row.id).filter((id) => Number.isInteger(id))
       if (ids.length === 0) return 0
       await this.experienceBuffer.markProcessed(ids)
@@ -881,8 +978,16 @@ export class PetRuntime {
   }
 
   /**
-   * Write one lived turn into the Experience Buffer. Deliberately synchronous
-   * and swallowed: the buffer is a memory aid, never a precondition for talking.
+   * Write one lived turn into the Experience Buffer.
+   *
+   * The store's `record()` is a synchronous SQLite insert, and it measured ~13ms
+   * per turn — on the same thread, inside the owner's request. That is real
+   * latency added to every reply for something the owner never asked to wait
+   * for. The write is therefore queued and flushed on the next tick, off the
+   * response path; the promise is kept so `close()` and tests can await it.
+   *
+   * Failures stay swallowed: the buffer is a memory aid, never a precondition
+   * for talking.
    */
   #recordExperience({
     turnId = null,
@@ -917,7 +1022,10 @@ export class PetRuntime {
         explicitMemoryRequest,
         sourceType: explicitMemoryRequest ? 'explicit_memory' : null,
       }
-      return this.experienceBuffer.record(payload)
+      this.#experienceWriteQueue = this.#experienceWriteQueue
+        .then(() => { this.experienceBuffer.record(payload) })
+        .catch(() => {})
+      return this.#experienceWriteQueue
     } catch (error) {
       this.logger?.warn?.(`vc-ai-pet: experience record failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
       return null
@@ -991,8 +1099,28 @@ export class PetRuntime {
     // Local Brain is now a shared external service. Pet owns no model process.
     this.conversation?.clear()
     this.conversationPersistenceReady = false
+    // Experience writes are queued off the chat path. `close()` is synchronous,
+    // so it cannot await them; it hands the store over to the queue's tail
+    // instead, so the buffer is closed only after the last write has landed.
+    // Awaiting `flushExperienceWrites()` first remains the deterministic path for
+    // callers that can wait.
+    try {
+      const store = this.experienceBuffer
+      void this.#experienceWriteQueue
+        .catch(() => {})
+        .then(() => { try { store?.close?.() } catch {} })
+      this.experienceBuffer = null
+    } catch {
+      try { this.experienceBuffer?.close?.() } catch {}
+      this.experienceBuffer = null
+    }
     this.conversationStore?.close()
     this.visualExperience?.close()
     this.memory?.close()
+  }
+
+  /** Test hook: resolve once every queued experience write has been applied. */
+  flushExperienceWrites() {
+    return this.#experienceWriteQueue.then(() => undefined, () => undefined)
   }
 }

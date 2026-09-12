@@ -1,7 +1,15 @@
 import { detectExplicitMemoryRequest } from '../brain/memory-candidate.js'
+import {
+  CONTEXT_BUDGET_CHARS_DEFAULT,
+  SHORT_TERM_CONTEXT_TURNS_DEFAULT,
+} from '../memory/memory-pipeline-config.js'
 
-export const SHORT_TERM_CONTEXT_TURNS = 48
-export const CONTEXT_BUDGET_DEFAULT_CHARS = 24000
+// Single source of truth: the pipeline config owns both numbers. Keeping a
+// second copy here meant the selector's fallback could silently disagree with
+// the budget the runtime actually passes — and it did (18,000 vs 24,000) after
+// the Local Brain calibration.
+export const SHORT_TERM_CONTEXT_TURNS = SHORT_TERM_CONTEXT_TURNS_DEFAULT
+export const CONTEXT_BUDGET_DEFAULT_CHARS = CONTEXT_BUDGET_CHARS_DEFAULT
 export const CONTEXT_PRIORITY = Object.freeze({ HIGH: 3, MEDIUM: 2, LOW: 1 })
 
 const INVALID_TURNS_REASON = 'invalid-turns-input'

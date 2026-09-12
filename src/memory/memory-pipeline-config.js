@@ -16,11 +16,17 @@
  * instead of preventing the pet from waking up.
  */
 
-export const SHORT_TERM_CONTEXT_TURNS_DEFAULT = 48
+export const SHORT_TERM_CONTEXT_TURNS_DEFAULT = 50
 export const SHORT_TERM_CONTEXT_TURNS_MIN = 1
 export const SHORT_TERM_CONTEXT_TURNS_MAX = 200
 
-export const CONTEXT_BUDGET_CHARS_DEFAULT = 24_000
+// Calibrated against the real Local Brain (n_ctx=16384) by tokenizing the actual
+// prompt: the system message alone costs ~11,975 content tokens, and a typical
+// 50-turn window adds ~11,753 more, which would overflow 16k. 18,000 characters
+// keeps a typical 50 turns fully intact while leaving room for the system
+// message, message wrapping and a 768-token completion. Raised only if the Local
+// Brain is moved to a larger context (60,000 suits 65,536).
+export const CONTEXT_BUDGET_CHARS_DEFAULT = 18_000
 export const CONTEXT_BUDGET_CHARS_MIN = 2_000
 export const CONTEXT_BUDGET_CHARS_MAX = 400_000
 
@@ -31,8 +37,17 @@ export const EXPERIENCE_BUFFER_RETENTION_DAYS_MAX = 60
 export const REFLECTION_NEW_EXPERIENCE_TRIGGER_DEFAULT = 10
 export const REFLECTION_TRIGGER_MIN = 1
 
-export const DREAM_RECENT_EXPERIENCE_LIMIT_DEFAULT = 12
-export const DREAM_RECENT_EXPERIENCE_LIMIT_MAX = 50
+// How much recent lived experience Dream and Reflection are allowed to see.
+//
+// The owner's complaint was that the pet forgets things it was told and that its
+// reflection/dream life is too sparse. The cause was not a conservative schedule:
+// Reflection and Dream only ever read PetMemory rows, so every turn the model
+// judged "not worth remembering" was, for thinking purposes, a turn that never
+// happened. Experience rows (including low-importance ones) are now part of their
+// input, so the window has to be big enough to represent recent life rather than
+// just a summary of it. 12 was too small once the working window became 50 turns.
+export const DREAM_RECENT_EXPERIENCE_LIMIT_DEFAULT = 80
+export const DREAM_RECENT_EXPERIENCE_LIMIT_MAX = 500
 
 function readNumber(value) {
   if (value === null || value === undefined || value === '') return null

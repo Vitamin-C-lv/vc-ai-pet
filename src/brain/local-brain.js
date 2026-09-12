@@ -173,7 +173,7 @@ export class LocalBrain {
     }
   }
 
-  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], now = Date.now() }) {
+  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], contextTurns = undefined, now = Date.now() }) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
     const reasoningEffort = visionImage
@@ -223,6 +223,7 @@ export class LocalBrain {
       memories: historicalIntent.deep ? [] : relevant.slice(0, 8),
       historicalRecallContext,
       recentMessages,
+      contextTurns,
       userText: promptText,
       image: visionImage,
       visualContext,

@@ -237,8 +237,10 @@ export const RECENT_VISUAL_RECALL_INSTRUCTION = `RECENT_VISUAL_RECALL:
 它不是主人本轮重新上传的新图片。
 只根据实际图像回答，不要编造图片之外的事实。`
 
-export function formatConversationEvidenceBoundary(messages = []) {
-  const recent = recentConversationMessages(messages)
+export function formatConversationEvidenceBoundary(messages = [], { maxTurns = PROMPT_DEFAULT_CONTEXT_TURNS } = {}) {
+  // The source map must describe exactly the messages the model can see; a
+  // narrower map than the transcript would mislabel the oldest visible turn.
+  const recent = recentConversationMessages(messages, { maxTurns })
   const sourceMap = recent.length > 0
     ? recent.map((message, index) => (
       `- RECENT_MESSAGE_${index + 1} [SOURCE=${conversationEvidenceSource(message)}] [evidence=${classifyConversationEvidence(message)}] [ROLE=${message.role}]`
@@ -252,7 +254,30 @@ SOURCE_MAP_ORDER=与下面短期对话消息的顺序一致
 CURRENT_USER_QUESTION_IS_NOT_PAST_EVENT_PROOF=YES`
 }
 
-function recentConversationMessages(messages = []) {
+/**
+ * Project the recent conversation for the model.
+ *
+ * `maxTurns` is the working-memory window in turns, owned by
+ * `resolveMemoryPipelineConfig().shortTermContextTurns`. One turn is two
+ * messages (owner + pet), so the message cap is `maxTurns * 2`.
+ *
+ * This used to be a hard-coded `.slice(-24)` — twelve turns. That one number
+ * silently capped the working window no matter what the memory pipeline
+ * configured: raising `SHORT_TERM_CONTEXT_TURNS` changed nothing the model could
+ * see, because everything past the last 24 messages was dropped right here. The
+ * window is now a parameter, so the advertised window is the delivered window.
+ */
+export const PROMPT_DEFAULT_CONTEXT_TURNS = 50
+export const PROMPT_MAX_CONTEXT_TURNS = 200
+
+function normalizeContextTurns(value, fallback = PROMPT_DEFAULT_CONTEXT_TURNS) {
+  const turns = Number(value)
+  if (!Number.isFinite(turns)) return fallback
+  return Math.min(PROMPT_MAX_CONTEXT_TURNS, Math.max(1, Math.floor(turns)))
+}
+
+function recentConversationMessages(messages = [], { maxTurns = PROMPT_DEFAULT_CONTEXT_TURNS } = {}) {
+  const maxMessages = normalizeContextTurns(maxTurns) * 2
   return messages
     .filter((message) =>
       message &&
@@ -260,7 +285,7 @@ function recentConversationMessages(messages = []) {
       typeof message.content === 'string' &&
       message.content.trim()
     )
-    .slice(-24)
+    .slice(-maxMessages)
     .map((message) => ({
       role: message.role,
       content: message.content.trim().slice(0, 1200),
@@ -394,7 +419,7 @@ dayPeriod: ${timeContext.dayPeriod}
 season: ${timeContext.season}`
 }
 
-export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, visualContext = null, now, timeContext = null }) {
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, visualContext = null, now, timeContext = null, contextTurns = PROMPT_DEFAULT_CONTEXT_TURNS }) {
   const visionImage = normalizeVisionImage(image)
   const birthday = identity?.birthday ?? '2026-08-31'
   const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
@@ -440,7 +465,7 @@ ${historicalRecallContext ? `\n\n${formatHistoricalRecallContext(historicalRecal
 
 ${formatMemoryTruthInstruction(userText)}
 
-${formatConversationEvidenceBoundary(recentMessages)}
+${formatConversationEvidenceBoundary(recentMessages, { maxTurns: contextTurns })}
 
 ${visualContext?.source === 'recent-visual-recall' ? RECENT_VISUAL_RECALL_INSTRUCTION : ''}
 
@@ -462,7 +487,7 @@ ${visualContext?.source === 'recent-visual-recall' ? RECENT_VISUAL_RECALL_INSTRU
 
   return [
     { role: 'system', content: system },
-    ...recentConversationMessages(recentMessages),
+    ...recentConversationMessages(recentMessages, { maxTurns: contextTurns }),
     {
       role: 'user',
       content: userContent,

@@ -11,8 +11,8 @@ import {
 } from '../src/conversation/recent-conversation.js'
 import { ConversationStore } from '../src/conversation/conversation-store.js'
 
-assert.equal(RECENT_CONVERSATION_DEFAULT_MAX_TURNS, 48)
-assert.equal(RECENT_CONVERSATION_MAX_TURNS_LIMIT, 48)
+assert.equal(RECENT_CONVERSATION_DEFAULT_MAX_TURNS, 50)
+assert.equal(RECENT_CONVERSATION_MAX_TURNS_LIMIT, 50)
 assert.equal(RECENT_CONVERSATION_MAX_CHARS_PER_TURN, 1200)
 
 const recent = new RecentConversation()
@@ -25,9 +25,9 @@ assert.equal(recent.snapshot()[0].user, '用户第1句')
 recent.append(`用户第${RECENT_CONVERSATION_DEFAULT_MAX_TURNS + 1}句`, `花花第${RECENT_CONVERSATION_DEFAULT_MAX_TURNS + 1}答`)
 assert.equal(recent.size, RECENT_CONVERSATION_DEFAULT_MAX_TURNS)
 assert.equal(recent.snapshot()[0].user, '用户第2句')
-assert.equal(recent.snapshot({ limit: 2 })[0].user, '用户第48句')
+assert.equal(recent.snapshot({ limit: 2 })[0].user, `用户第${RECENT_CONVERSATION_DEFAULT_MAX_TURNS}句`)
 
-for (const value of [51, 0, 1.5, '12']) {
+for (const value of [RECENT_CONVERSATION_MAX_TURNS_LIMIT + 1, 0, 1.5, '12']) {
   assert.throws(
     () => new RecentConversation({ maxTurns: value }),
     /PET_RECENT_CONVERSATION_MAX_TURNS_INVALID/u,

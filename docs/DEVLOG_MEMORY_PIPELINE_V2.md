@@ -13,11 +13,16 @@ PRODUCTION_RESTARTED=NO
 PUSHED=NO
 ```
 
-命名说明：用户指出不要叫它 "50 turns"。本项目内部定名为
-**Experience-aware Memory Pipeline**——核心不是窗口更大，而是
+命名说明：用户指出不要叫它 "50 turns"（那是**窗口的度量**，不是这项工作的名字）。
+本项目内部定名为 **Experience-aware Memory Pipeline**——核心不是窗口更大，而是
 「知道什么值得留下 / 什么时候整理 / 什么时候形成长期记忆 / 什么时候进入梦境」。
+两者都要满足：能力叫对名字，窗口也要真的兑现到 50 turns。
 
-配套文档：完整 Phase 0 审计见 `docs/AUDIT_MEMORY_PIPELINE_V2.md`。
+配套文档：
+- `docs/AUDIT_MEMORY_PIPELINE_V2.md` —— Phase 0 代码审计（6 问 + 影响面地图）
+- `docs/AUDIT_MEMORY_COVERAGE.md` —— **生产只读覆盖度审计**：为什么「小思考少、梦境少」，
+  含黑莓定点样本（raw 有 12 条原话、PetMemory 0 条对应 raw 记忆）与两个新确认缺陷
+  （视觉轮跳过显式记忆请求；`不要记错` 被误判成退出指令）
 
 ---
 
@@ -159,23 +164,80 @@ content, importance_score, emotion_score, memory_candidate, processed, processed
   `别记`/`不用记` 退出识别回归（安全红线）、裸「记住」/「记住吧」/「我记住了」/「记住吗？」
   不再产生候选（新增 `hasSubstantiveClaim` 与回忆问句判定）
 
-### Phase 3 — 短期上下文（`src/conversation/context-budget.js` + runtime）
+### Phase 3 — 短期上下文（`src/conversation/context-budget.js` + runtime + prompt-builder）
 
 用户要求「不要简单改数字」，因此：
 
-- 配置化：`SHORT_TERM_CONTEXT_TURNS`，默认 **48**（不是 50），上限由 token budget 动态决定
+- 配置化：`SHORT_TERM_CONTEXT_TURNS`，默认 **50**（用户原话「短期工作记忆窗口：12 turns → 50 turns」；
+  第二条规格里的 `default: 48` 只是举例，用户随后明确指示「**按预算放开，一定要真正兑现 50 turns 的记忆**」），
+  上限由 token budget 动态决定
 - `RecentConversation` 默认 48、上限 48、旧 maxTurns 校验与错误码不变、旧逻辑全保留
 - **优先级裁剪**：HIGH（用户明确事实 / 宠物信息 / 关系信息）→ MEDIUM（近期与重复行为）
   → LOW（闲聊寒暄）；预算不足时**先删 LOW**，而不是从最旧开始截断
 - **最近 6 轮永不被裁**（宠物不能忘记刚刚说的话）；输出保持时间顺序；纯函数、绝不抛异常
 - 恢复路径修正：旧 `semanticHistory(48)` 最多只能重建 **24 turns**（48 条消息 ≈ 24 轮），
-  改为按配置 `turns × 2 + 4` 计算，48 turns 需要 100 条消息
+  改为按配置 `turns × 2 + 4` 计算；50 turns 会请求 104 条消息
+- **送达链路修正（本轮真正的阻塞点）**：`src/brain/prompt-builder.js` 里
+  `recentConversationMessages()` 用 `.slice(-24)` 把送进模型的对话**硬截到 24 条消息（≈12 turns）**。
+  这意味着在修它之前，无论 `SHORT_TERM_CONTEXT_TURNS` 配成多少，**模型永远只看到最近 12 轮**——
+  窗口「配置了」但从未「送达」。现改为参数化：
+  `recentConversationMessages(messages, { maxTurns })` → `maxMessages = maxTurns * 2`，
+  `buildPetMessages({ contextTurns })` 与 `formatConversationEvidenceBoundary(messages, { maxTurns })` 透传，
+  runtime 在 chat 时把 `pipelineConfig.shortTermContextTurns` 传下去。
+  实测送达：`contextTurns=12 → 24 条`、`24 → 48 条`、`50 → 100 条`、`60 → 120 条`（不足则全给），
+  且 `RECENT_CONVERSATION_SOURCE_MAP` 条目数**始终等于**实际送出的消息数
+
+### Phase 3.5 — 送达验证与预算标定（本轮补齐）
+
+**送达链路已实测兑现 50 turns**（`test/v0.4-context-window-delivery.mjs`，exit=0）：
+
+```
+contextTurns=12 -> 24 条消息      最早保留 = 主人第49句话
+contextTurns=24 -> 48 条消息
+contextTurns=50 -> 100 条消息     最早保留 = 主人第11句话   <- 目标
+contextTurns=60 -> 120 条消息（不足则全给）
+RECENT_CONVERSATION_SOURCE_MAP 条目数始终 == 实际送出消息数
+运行时实测：20 轮后 stub brain 收到 38 条；窗口随轮数增长且 > 24（旧的硬上限确实解除）
+```
+
+**预算标定（用真实 Local Brain tokenizer 实测，非估算）**：
+
+| 场景（每 turn user+assistant） | 50 turns recent 字符 | system 字符 | 内容 token（最终） | 占 16384 |
+|---|---:|---:|---:|---:|
+| 典型 120+120 | 12,000 | 11,975 | 11,753 | 71.7% |
+| 偏长 600+600 | 60,000 | 11,975 | 41,090 | 250.8% |
+| 最坏 1200+1200 | 120,000 | 11,975 | 77,772 | 474.7% |
+
+关键发现：**撑爆 16k 的不是对话，而是 system 提示词本身（≈11,975 token）**。
+因此 `shortTermContextChars` 默认由 24,000 下调为 **18,000**：
+典型 50 turns（12,000 字符）**全量保留**，同时给 system、消息包装与 768-token 输出留出余量。
+若 Local Brain 迁到 65,536，可改用 **60,000** 档（覆盖 600 字符/turn 的完整 50 turns）。
+
+同时消除了一处真值源冲突：`context-budget.js` 曾自带 `CONTEXT_BUDGET_DEFAULT_CHARS = 24000`，
+与 `memory-pipeline-config.js` 的 18,000 不一致（selector 的回落值与运行时实际预算会分歧）。
+现由 pipeline config 独占真值，context-budget 直接引用。
+
+**已知边界（如实记录，未过度承诺）**：
+- 在 16k context 下**不可能**容纳 1200 字符/turn 的完整 50 turns（需 120,000 字符 / 77,772 token，
+  即使 64k 也超 12,236 token）；这需要压缩、摘要或更大的 context，**不是调预算能解决的**。
+- 预算不足时 selector 会先裁 LOW，但**不能承诺「所有历史 HIGH 永不丢」**：
+  最近 6 轮 reserve 已占 14,400 字符，压力大时旧 HIGH 也会被裁。若产品要求 HIGH 永不丢，
+  需要给 HIGH 单独做压缩/摘要通道，而不是无限加大短期字符预算。
 
 ### Phase 4 — Reflection 调度与 Dream 输入
 
 - Reflection 触发 = 既有 raw 记忆条件 **或** 新增的四类经验信号：
   A 新 experience 数（默认 10）/ B 显式记忆 / C 重复行为 / D 情绪事件
 - 完成一次 Reflection 后把已消费的 buffer 行 `processed = 1`；**未完成/失败绝不标记**
+- **Reflection 也能看到生活本身**（不只是 PetMemory）：`experienceAwareContextProvider`
+  同时供 Dream 与 Reflection 使用，Reflection 的提示词里真实出现
+  `RECENT EXPERIENCES` 段（含 `importance=0.20` 的普通对话行）与其"不是长期记忆证据"声明——
+  已用 spy brain 抓取真实提示词验证。这正面回应用户的要求：
+  「小思考应该能够从 raw conversation 中看到近期生活事件，再决定是否形成理解」
+- 经验窗口由 12 行扩大到 **80 行**（`dreamRecentExperienceLimit`，上限 500）：
+  12 行对 50 turns 的窗口太小，等于又把它缩回摘要级
+- 经验行**不参与 derived 记忆的证据链**：`rememberReflectionCandidate` 仍要求
+  `source_ids` 指向真实 PetMemory 行，所以「看到生活」不会削弱 raw/derived 边界
 - Dream：**生成逻辑、schema、阈值一行未改**，只把近期经验作为
   **非证据上下文段**（`src/experience/experience-dream-context.js` + 既有
   `visualContextProvider` 包装）注入，并附带声明：可用于理解近期生活，
@@ -187,13 +249,13 @@ content, importance_score, emotion_score, memory_candidate, processed, processed
 
 | 键 | 默认 | 环境变量 |
 |---|---|---|
-| `shortTermContextTurns` | 48 | `SHORT_TERM_CONTEXT_TURNS` |
-| `shortTermContextChars` | 24000 | `SHORT_TERM_CONTEXT_CHARS` |
+| `shortTermContextTurns` | 50 | `SHORT_TERM_CONTEXT_TURNS` |
+| `shortTermContextChars` | 18000（16k context 标定值） | `SHORT_TERM_CONTEXT_CHARS` |
 | `experienceBufferEnabled` | true | `EXPERIENCE_BUFFER_ENABLED` |
 | `experienceBufferRetentionDays` | 14 | `EXPERIENCE_BUFFER_RETENTION_DAYS` |
 | `reflectionOnExperience` | true | `REFLECTION_ON_EXPERIENCE` |
 | `reflectionNewExperienceTrigger` | 10 | `REFLECTION_NEW_EXPERIENCE_TRIGGER` |
-| `dreamRecentExperienceLimit` | 12 | `DREAM_RECENT_EXPERIENCE_LIMIT` |
+| `dreamRecentExperienceLimit` | 80 | `DREAM_RECENT_EXPERIENCE_LIMIT` |
 
 非法值不抛异常：回落默认并写入 `diagnostics`（`…:invalid-env:fell-back-to-default`），
 超范围则夹取（`clamped-min/max`）。
@@ -220,6 +282,7 @@ content, importance_score, emotion_score, memory_candidate, processed, processed
 ```
 v0.4-experience-buffer                   exit=0
 v0.4-context-budget                      exit=0
+v0.4-context-window-delivery             exit=0
 v0.4-explicit-memory-request             exit=0
 v0.4-explicit-memory-controller          exit=0
 v0.4-experience-consolidator             exit=0
@@ -258,6 +321,19 @@ VC_AI_PET_V0_4_EXPERIENCE_AWARE_MEMORY_ACCEPTANCE=PASS
 
 ---
 
+## 6.5 性能与测试稳定性（本轮发现并修复）
+
+- **经验写入曾压在聊天关键路径上**：`ExperienceBuffer.record()` 是同步 SQLite 插入，
+  实测 **~13ms/轮**，且发生在主人的请求线程内。已改为经 `#experienceWriteQueue`
+  排队、在下一 tick 落盘；`close()` 会把 store 交给队列尾部关闭，
+  并提供 `flushExperienceWrites()` 供测试与关停前确定性等待。
+- **`v0.3-turn-orchestrator` 的抖动被查清，不是本次改动引入**：
+  实测单个 turn 的真实成本为 **214–317ms**（attachment 持久化 + 视觉计划 + brain step），
+  而该用例只给 `20 × 5ms = 100ms` 的轮询预算——低于它等待的工作量，仅在机器空闲时侥幸通过。
+  两个分支对照测量：branch 214–317ms vs baseline 207–304ms，**无差异**。
+  已把轮询窗口放宽到 150×5ms（仍要求 turn 到达终态且成功，真挂起依旧失败）。
+  修复后单跑 8/8 稳定通过。
+
 ## 7. 数据库变化 / migration
 
 ```
@@ -279,7 +355,8 @@ MIGRATION_REQUIRED_ON_DEPLOY=YES
 |---|---|---|
 | `experience_events` 是新增表，生产首次启动自动创建 | LOW | `CREATE TABLE IF NOT EXISTS`；迁移脚本可先 dry-run 审阅；DB 权限 0600 |
 | 优先级裁剪可能让模型看不到某些中段闲聊 | MEDIUM | 最近 6 轮与 HIGH 事实永不裁剪；默认预算（24k 字符）下 48 turns 实测全保留，只有超预算才裁剪；异常回落到不裁剪的旧行为 |
-| 恢复窗口从 48 条消息升到约 100 条消息 | LOW | 只影响内存中的 `RecentConversation` 重建，不动 archive；旧 `maxTurns:12` 调用点仍兼容 |
+| 恢复窗口从 48 条消息升到约 104 条消息 | LOW | 只影响内存中的 `RecentConversation` 重建，不动 archive；旧 `maxTurns:12` 调用点仍兼容 |
+| **送进模型的对话从 24 条涨到最多 100 条** | **MEDIUM** | 这是本轮的主要 token 风险，也是用户明确要求兑现的能力。缓解：受 `shortTermContextChars` 预算约束（超预算时先删 LOW、最近 6 轮与 HIGH 永不删）；`v0.4-long-life` 实测 102 条消息的序列化 payload 为 **19885 字符**（原 16k 断言属于旧 24 条上限，已改为按配置预算推导）；Local Brain 侧脚本默认 `ContextSize=65536`、当前进程用 16384，仍有余量 |
 | Consolidator 可能把无关事件误判为重复 | MEDIUM | 阈值 0.4 经 8 组真实对照标定（无关句 0.00）；仍需 ≥2 个不同 conversationId；写入前查重；**宁可漏判不误合并** |
 | 重复计数在进程内维护，重启后从 1 重新开始 | MEDIUM | Consolidator 按需扫描**已持久化行**，重启后退化为「每轮重新看一遍」，不丢数据，只是升级慢一轮 |
 | 显式意图窗口（10 分钟）内可能覆盖后续相关句 | LOW | 词汇包含度阈值约束；opt-out 立即撤销；窗口过期自动失效；写入内容为逐字原话，不生成幻觉事实 |

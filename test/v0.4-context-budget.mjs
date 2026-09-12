@@ -10,12 +10,16 @@ import {
   selectContextTurns,
 } from '../src/conversation/context-budget.js'
 
-assert.equal(SHORT_TERM_CONTEXT_TURNS, 48)
-assert.equal(CONTEXT_BUDGET_DEFAULT_CHARS, 24000)
+// The working window is 50 turns: the owner's stated target is
+// "12 turns -> 50 turns", and 48 was only ever an example default.
+assert.equal(SHORT_TERM_CONTEXT_TURNS, 50)
+// The selector must agree with the runtime's configured budget; these were once
+// two independent numbers that silently disagreed after token calibration.
+assert.equal(CONTEXT_BUDGET_DEFAULT_CHARS, 18000)
 assert.deepEqual(CONTEXT_PRIORITY, { HIGH: 3, MEDIUM: 2, LOW: 1 })
 
 assert.deepEqual(resolveShortTermContextTurns({}), {
-  turns: 48,
+  turns: SHORT_TERM_CONTEXT_TURNS,
   source: 'default',
   reason: 'env-not-set',
 })
@@ -26,7 +30,7 @@ assert.deepEqual(resolveShortTermContextTurns({ SHORT_TERM_CONTEXT_TURNS: '24' }
 })
 for (const value of ['abc', '0', '-5']) {
   const resolved = resolveShortTermContextTurns({ SHORT_TERM_CONTEXT_TURNS: value })
-  assert.equal(resolved.turns, 48)
+  assert.equal(resolved.turns, SHORT_TERM_CONTEXT_TURNS)
   assert.equal(resolved.source, 'default')
   assert.ok(resolved.reason)
 }

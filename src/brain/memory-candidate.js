@@ -84,7 +84,7 @@ export const EXPLICIT_MEMORY_PHRASES = Object.freeze([
 // "别记" / "不用记" are the short forms of "别记住" / "不用记住" and were
 // already covered by the previous opt-out rule; keeping them matters because an
 // opt-out that stops matching silently turns "forget this" into "store this".
-const EXPLICIT_MEMORY_OPT_OUT = /(?:不要|别|不用|不必|不需要|不许)[^忘]{0,8}(?:记住|记下来|记一下|记着|记好|记(?!者)|保存|存下来|存储|存)/iu
+const EXPLICIT_MEMORY_OPT_OUT = /(?:不要|别|不用|不必|不需要|不许)[^忘]{0,8}(?:记住|记下来|记一下|记着|记好|记(?!者|错|混|反|岔)|保存|存下来|存储|存)/iu
 const EXPLICIT_MEMORY_QUESTION = /[?？]/u
 const EXPLICIT_MEMORY_COMPLETION = /^(?:了|啦|喽|过|吗|么|呢|没有|了吗)/u
 const LEADING_MEMORY_DIRECTIVE = /^(?:(?:请|帮我)?(?:你)?(?:要|一定要|千万|务必)?(?:记住|记下来|记一下|记着|记好|不要忘|不要忘记|别忘了|别忘记)(?:一下|哦|吧|啊|呀)?)[，,、:：\s]*/u

@@ -2,6 +2,62 @@
 
 Status: FINAL_STATUS=READY_FOR_EXPERIENCE_AWARE_MEMORY_PIPELINE_REVIEW
 
+## 2026-09-13 — 生产只读覆盖度审计 + 视觉轮显式记忆修复
+
+用户提出：「说过的话有时候会忘，小思考是不是有问题？梦境频率好像还是很低，是不是有对话被漏掉了？」
+用户自己的定性（已由只读审计证实）：**「没有从 raw archive 丢掉，但大量对话在进入 PetMemory 之前
+被过滤掉了，因此对于小思考和梦境来说等价于"没经历过"。」**
+
+只读审计生产 sandbox 的关键数据（`docs/AUDIT_MEMORY_COVERAGE.md`）：
+
+```text
+USER_DIALOGUE_TURNS        全量 157 / 48h 14
+RAW_ARCHIVE_USER_TURNS     全量 157 / 48h 14        <- A 层没有丢
+PET_MEMORY_ACCEPTED_RAW    全量  12 / 48h  1
+MEMORY_ACCEPT_RATE         全量 7.6% / 48h 7.1%
+REFLECTION_ELIGIBLE_RAW    全量  17 / 48h  1
+REFLECTION_RUNS            全量  10 / 48h  1
+DREAM_RUNS                 全量   4 / 48h  0
+PET_MEMORY_RAW_IMPORTANCE_1 = 187 / 204             <- 进不了内生活的 source window
+黑莓定点样本：raw 用户原话 12 条，对应 raw PetMemory 0 条
+```
+
+结论：**主因是上游 MemoryGate/视觉分支筛选过多，不是调度阈值保守**；
+降低 Reflection/Dream 阈值只会更勤快地处理同一批被筛过的记忆。
+另有一个独立问题：审计时 Dream checkpoint 后已有 4 条 pending 且超过 72h 年龄门槛
+（eligibility=true），但 48h 内没有 Dream log —— 调度/状态侧需单独排查。
+
+本轮修复（用户点名的 bug + 审计新发现的两个缺陷）：
+
+```text
+FIX_1（7d1a265）MemoryGate 弃用「拒绝原因白名单」：
+  模型候选因 confidence-low / importance-low / level-denied 被拒时，显式请求一律走兜底。
+  实测：用户描述的 remember=true+confidence=0.65 → written（priority=HIGH / source=USER_EXPLICIT）
+FIX_2 视觉轮（vision-context）不再短路 gate：
+  带图的显式记忆请求现在会落库；模型候选在视觉轮仍然禁止使用（raw/inferred 边界不变）。
+  实测四组合：带图+显式→written；带图+无显式→skipped/vision-context；
+  视觉模型候选→not-written；带图+敏感→skipped/memory-sensitive-reject
+FIX_3 opt-out 正则不再把「不要记错/记混/记反」误判为退出指令（21 例矩阵 PASS）
+FIX_4 短期窗口真正送达：prompt-builder 的 24 条硬截断改为参数化，
+  contextTurns=50 → 实际送出 100 条消息，来源映射条目数同步
+FIX_5 预算按真实 tokenizer 标定：shortTermContextChars 24000 → 18000
+  （system 提示词本身 ≈11,975 token，典型 50 turns 11,753 token，24k 会溢出 16k context）
+FIX_6 经验窗口 12 → 80 行：Reflection/Dream 能看到近期生活（含低 importance 的普通对话），
+  但仍不可作为 source_ids
+FIX_7 真值源统一：context-budget 的预算常量改为引用 pipeline config（曾分歧 18000 vs 24000）
+
+NEW_TESTS=test/v0.4-context-window-delivery.mjs, test/v0.4-vision-explicit-memory.mjs
+TEST_RESULT=ALL_PASS（新增 11 个测试 + 既有回归全 exit 0；npm run smoke 见下）
+PRODUCTION_DB_MODIFIED=NO（审计全程 readOnly，无新文件、无 checkpoint）
+PRODUCTION_DEPLOYED=NO  PRODUCTION_RESTARTED=NO  PUSHED=NO
+```
+
+待跟进（未修，需用户决策）：
+1. Dream 调度/状态侧为何在有 eligible source 时 48h 未触发；
+2. 关键词与正文脱节（模型给「一定要记住哦」塞了「黑莓」关键词，导致 generic 句子在
+   `黑莓` 查询上排第一）——建议写入时校验 keywords 必须出现在正文/证据中；
+3. `recall('猫')` 单字无命中（meow-memory 分词行为，非缺陷）。
+
 ## 2026-09-12 — Experience-aware Memory Pipeline（Memory Pipeline v2）
 
 用户报告的故障：告诉花花「我们家的猫猫叫黑莓，你要记住」，之后花花「不知道猫叫什么」。

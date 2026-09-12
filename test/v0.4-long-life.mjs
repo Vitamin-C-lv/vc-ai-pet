@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
 import { DreamEngine } from '../src/dream/dream-engine.js'
 import { ReflectionEngine } from '../src/dream/reflection-engine.js'
+import { SHORT_TERM_CONTEXT_TURNS_DEFAULT, CONTEXT_BUDGET_CHARS_DEFAULT } from '../src/memory/memory-pipeline-config.js'
 
 const DAY = 86400000
 const START = Date.parse('2026-01-01T12:00:00+08:00')
@@ -133,8 +134,26 @@ try {
   assert.equal((await runtime.conversationStore.sourceMessage(raw.id)).text, raw.text)
   await say('花花你好。')
   assert.doesNotMatch(calls.at(-1).messages[0].content, /CURRENT_UNDERSTANDING/)
-  assert.ok(calls.at(-1).messages.length <= 26)
-  assert.ok(JSON.stringify(calls.at(-1)).length < 16000)
+  // The prompt is bounded by the *configured* working-memory window, not by the
+  // old hard-coded 24-message cap: one system message, up to `turns * 2` dialogue
+  // messages, plus the utterance being answered.
+  assert.ok(
+    calls.at(-1).messages.length <= 1 + SHORT_TERM_CONTEXT_TURNS_DEFAULT * 2 + 1,
+    `prompt must stay inside the configured window, got ${calls.at(-1).messages.length}`,
+  )
+  // The prompt must stay inside what the configured working window can cost.
+  // A fixed 16k figure belonged to the old hard-coded 24-message cap: the window
+  // is now the owner's 50 turns, so the budget is derived from the same
+  // configuration the runtime uses instead of being frozen at the old size.
+  {
+    const payload = JSON.stringify(calls.at(-1)).length
+    const messageOverhead = 96 * calls.at(-1).messages.length
+    const ceiling = CONTEXT_BUDGET_CHARS_DEFAULT + messageOverhead
+    assert.ok(
+      payload <= ceiling,
+      `prompt payload ${payload} must stay within the configured context budget (${ceiling})`,
+    )
+  }
   console.log('PASS long-life: days 1/7/30/100+, changes, correction, conflict, unknown, expiry, source identity, Dream/Reflection no-new-evidence, restart, bounded greeting')
 } finally {
   runtime.close()
