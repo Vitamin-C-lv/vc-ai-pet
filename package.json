@@ -39,7 +39,8 @@
     "verify:client": "npm run build && node --check lib/client.js && node scripts/verify-client-bundle.mjs",
     "dream:once": "node scripts/run-pet-dream.mjs",
     "validate:assets": "node scripts/validate-assets.mjs",
-    "build": "node scripts/build-client.mjs"
+    "build": "node scripts/build-client.mjs",
+    "test:reflection-scheduler": "node test/v0.4-reflection-scheduler-consumption.mjs"
   },
   "main": "src/dsh/host-plugin.js",
   "exports": {
