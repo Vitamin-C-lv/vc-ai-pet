@@ -576,3 +576,50 @@ npm 测试矩阵        11/11  NPM_EXIT=0
 - 发布安全：改动路径与生产 dirty 路径（22 项，全在 `android-companion/**`）**交集为空**；
   `android-companion/**` 完全未被触碰；`git merge-base --is-ancestor 4a3b8ef HEAD` = 0；
   diff 与新增测试文件中未发现密钥 / token / 真实密码 / 敏感文件名。
+
+### A.9 测量口径修正（上线后复核发现）
+
+上线后复核时发现两处**口径混淆**，已查明并更正。结论不变，数字必须分开陈述：
+
+**(1) 两个脚本测的不是同一个 prompt。**
+
+| 脚本 | 它测什么 | 50 turns 结果 |
+|---|---|---|
+| `test/measure-system-prompt-tokens.mjs` | 脚本内部构造的采样 prompt（约 102 条消息），对比「旧 boundary」与「新 boundary」两次构造 | `SYSTEM_TOKEN_ESTIMATE_BEFORE=4266` → `AFTER=1755`（−58.86%，真实分词器） |
+| `handoffs/measure-system-prompt.mjs` | 宠物**真实构建**的 system prompt | `systemChars=3581`、`SYSTEM_TOKENS_MEASURED=1436` |
+
+所以 `3581 / 1436` 与 `1755` 都正确，但不是同一个量。正文 §3 表格里的
+`systemChars=3581` 与 `SYSTEM_TOKENS_MEASURED=1436` 取自真实 prompt 测量；
+`1755` 是采样 prompt 的 token 估算。两者都出自同一个本地大脑分词器。
+
+**(2) 生产窗口大小记录有误。**
+
+```
+LOCAL_BRAIN_MODELS_N_CTX=32768
+LOCAL_BRAIN_PROPS_N_CTX=32768
+```
+
+本地大脑实际以 `-ContextSize 32768` 启动（此前记录为 16384）。guard 仍按保守的
+16384 规划，因此真实余量比正文 §3 估计的更大：最坏 50 turns 为 14231 tokens，
+相对 32768 还有 56.6% 余量，相对 16384 则刚好不溢出。
+
+**基线复核（同一脚本，pristine `db8e8e5` worktree）**：
+
+| turns | systemChars | SYSTEM_TOKENS_MEASURED | RECENT_MESSAGE_N_LINES | TOTAL_TOKENS_MEASURED |
+|---|---|---|---|---|
+| 12 | 5091 | 1970 | 24 | — |
+| 24 | 7023 | 2594 | 48 | — |
+| 50 典型 | 11210 | 3947 | 100 | 4742 |
+| 50 最坏 | 11210 | 3947 | 100 | **16742**（超 16384） |
+
+发布版同口径对照：12 / 24 / 50 turns 全部恒定 `systemChars=3581`、
+`SYSTEM_TOKENS_MEASURED=1436`、`RECENT_MESSAGE_N_LINES=0`；最坏 50 turns
+`TOTAL_TOKENS_MEASURED=14231`。
+
+**为什么这个修正重要**：`RECENT_MESSAGE_N_LINES` 从 24/48/100 变成恒 0，是
+`formatConversationEvidenceBoundary()` 不再逐条复制 source map 的直接证据；
+而 `systemChars` 从 5091/7023/11210 变成恒 3581，证明 system 规模与 turns 解耦。
+
+**(3) 另外查明**：`POST /tokenize` 的入参字段名是 `content`；传 `text` / `prompt` /
+`input` 都会返回 `{"tokens":[]}`。两个授权口径的测量脚本都用的是正确的 `content`
+（输出行 `TOKENIZER=LOCAL_BRAIN_QWEN_TOKENIZE` 即证明走了真实分词器而非长度估算回退）。

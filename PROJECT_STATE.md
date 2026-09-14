@@ -1477,7 +1477,14 @@ B1 Consolidation 只消费它真的做出判断的行（稳定候选组、或凭
    没有稳定模式的日常对话留在 buffer 给 Reflection（此前一个 tick 会吞掉整批）。
 C  Dream 与 Reflection 拆开可见性：Reflection 只看 pending，Dream 看近期生活含已整理。
 D  formatConversationEvidenceBoundary() 改为常量大小声明，system prompt 不再逐条复制
-   source map：典型 50 turns 11210→3581 字符、3947→1436 tokens（真实分词器实测）。
+   source map。真实分词器实测（宠物真实构建的 system prompt，同一脚本测基线与发布版）：
+     turns   systemChars        SYSTEM_TOKENS      RECENT_MESSAGE_N_LINES
+     12      5091  → 3581       1970  → 1436       24  → 0
+     24      7023  → 3581       2594  → 1436       48  → 0
+     50     11210  → 3581       3947  → 1436      100  → 0
+   最坏 50 turns 总 tokens 16742（超 16384）→ 14231。
+   另一口径：test/measure-system-prompt-tokens.mjs 对采样 prompt 测得
+   SYSTEM_TOKEN_ESTIMATE 4266 → 1755（−58.86%）；与上表不是同一个量，不要混用。
 D2 planFinalRequestBudget() 按 LOW→MEDIUM→HIGH 从最旧开始裁轮，保护最新 6 轮，
    宁可拒发也不溢出；实测估算对真实分词器有 1.2x–2.3x 余量。
 E  关键词必须接地：全部不接地的候选直接拒绝（keywords-ungrounded），交回 gate 的
@@ -1551,6 +1558,10 @@ npm 测试矩阵    11/11  NPM_EXIT=0 + 新增 test:reflection-scheduler
    根治需要 reranker 或给被污染行清关键词，属于下一轮。
 2. 回填写入的 3 条 fact 的 keywords 为空数组（highPriorityMemoryCandidate() 不产生
    关键词）。它们靠 BM25 正文匹配与 importance=3 被召回，不靠关键词索引。
-3. settings.yaml 声明 contextWindow=131072，而本地大脑实际以 -ContextSize 32768 启动；
-   final request guard 保守地退回 16384，宁可少发也不溢出。未修改模型启动参数。
+3. contextWindow 三处不一致：settings.yaml 声明 131072、本地大脑实际
+   `-ContextSize 32768`（LOCAL_BRAIN_MODELS_N_CTX=32768 实测）、guard 保守按 16384
+   规划。未修改模型启动参数（用户明令禁止）。因此真实余量比文档估计更大：最坏
+   50 turns 14231 tokens 相对 32768 仍有 56.6% 余量。
+4. 测量口径：`POST /tokenize` 入参字段名是 `content`，传 text/prompt/input 会返回空
+   tokens。本轮所有 token 数字都出自 content 字段（TOKENIZER=LOCAL_BRAIN_QWEN_TOKENIZE）。
 ```
