@@ -623,3 +623,53 @@ LOCAL_BRAIN_PROPS_N_CTX=32768
 **(3) 另外查明**：`POST /tokenize` 的入参字段名是 `content`；传 `text` / `prompt` /
 `input` 都会返回 `{"tokens":[]}`。两个授权口径的测量脚本都用的是正确的 `content`
 （输出行 `TOKENIZER=LOCAL_BRAIN_QWEN_TOKENIZE` 即证明走了真实分词器而非长度估算回退）。
+
+### A.10 上线后独立验收发现 system 规模被低估 —— 精确重测
+
+上线后的独立只读验收（Luna，报告见 `AUDIT-POST-DEPLOY-report.md`）对同一生产 HEAD
+测到 `systemChars=4092`、`SYSTEM_TOKENS_MEASURED=1755`，与本附录 §3 记录的
+`3581 / 1436` 不一致。追查结论：**3581 偏低**，因为它来自一个自造夹具
+（`handoffs/measure-system-prompt.mjs` 内部写死的 rules / memories 文本），
+而不是生产的真实内容。Luna 的数字更接近真实。
+
+用**生产真实内容**（`sandbox/memory/pet-memory.db` 的真实 `rules` 3 条 93 字、
+真实 `soul` 3 条 147 字、真实 `fact` 前 6 条）+ 真实 `buildPetMessages()` 重测：
+
+```
+turns=12  PRODUCTION_CONTENT_SYSTEM_CHARS=3915  TOKENS=1616  RECENT_MESSAGE_N_LINES=0
+turns=24  PRODUCTION_CONTENT_SYSTEM_CHARS=3915  TOKENS=1616  RECENT_MESSAGE_N_LINES=0
+turns=50  PRODUCTION_CONTENT_SYSTEM_CHARS=3915  TOKENS=1616  RECENT_MESSAGE_N_LINES=0
+```
+
+（该数字尚未包含 `local-brain.js` 在 `messages[0]` 后追加的 `MEMORY_OUTPUT_INSTRUCTION`
+与 `BELIEF_OUTPUT_INSTRUCTION`，所以它是真实发送内容的**下界**。）
+
+**参数敏感性实测**（同一 `buildPetMessages`，逐个改一个参数）：
+
+| 参数 | chars | tokens |
+|---|---|---|
+| `contextTurns` 12 / 24 / 50 | 3229 / 3229 / 3229 | 1255 / 1255 / 1255 |
+| `userText` 2 / 11 / 200 字 | 3229 / 3229 / 3229 | 1255 / 1255 / 1255 |
+| `memories` 0→1→4→6→8 | 3176→3226→3409→3531→3531 | 1236→1253→1325→1373→1373 |
+| `currentSelfContext` 0→1→4→8→12 | 3174→3222→3344→3344→3344 | 1237→1252→1298→1298→1298 |
+| `stableRules` 0→3→6→10 | 3053→3218→3392→3392 | 1196→1256→1322→1322 |
+
+因此**真实 system 规模的合理区间**，按当前生产内容计：
+
+```
+3915 字符 / 1616 tokens（下界，buildPetMessages 输出）
+4092 字符 / 1755 tokens（Luna 实测，含 brain 追加的指令块）
+```
+
+**结论不变，而且更强**：`contextTurns` 从 12 到 50 对 system 规模的影响**为 0**
+（3229/1255 三档完全相同），`userText` 长度对 system 规模的影响也**为 0**；
+system 只随 memories / currentSelfContext / stableRules 的**真实内容量**变化，
+不随对话轮数增长。`RECENT_MESSAGE_N_LINES` 恒为 0。
+
+对照基线（同一真实内容口径，`db8e8e5`）：50 turns `systemChars=11210`、
+`SYSTEM_TOKENS_MEASURED=3947`、`RECENT_MESSAGE_N_LINES=100`，
+`TOTAL_TOKENS_MEASURED` 典型 4742 / 最坏 16742。
+
+**教训**：报告 system 规模时不能只写一个由自造夹具得到的数字。夹具里的
+rules / memories 文本长度会直接搬运到结果里（本例差 334 字符 / 139 tokens），
+所以必须同时给出夹具内容来源与参数敏感性，否则数字看起来精确、实际上不可复现。

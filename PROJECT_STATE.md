@@ -1477,14 +1477,22 @@ B1 Consolidation 只消费它真的做出判断的行（稳定候选组、或凭
    没有稳定模式的日常对话留在 buffer 给 Reflection（此前一个 tick 会吞掉整批）。
 C  Dream 与 Reflection 拆开可见性：Reflection 只看 pending，Dream 看近期生活含已整理。
 D  formatConversationEvidenceBoundary() 改为常量大小声明，system prompt 不再逐条复制
-   source map。真实分词器实测（宠物真实构建的 system prompt，同一脚本测基线与发布版）：
-     turns   systemChars        SYSTEM_TOKENS      RECENT_MESSAGE_N_LINES
-     12      5091  → 3581       1970  → 1436       24  → 0
-     24      7023  → 3581       2594  → 1436       48  → 0
-     50     11210  → 3581       3947  → 1436      100  → 0
+   source map。三个口径必须分开讲（细节见 docs/DEVLOG_MEMORY_PIPELINE_V2.md 附录 A.9/A.10）：
+
+   (a) 自造夹具，基线 vs 发布版，同一脚本：
+         turns  systemChars      SYSTEM_TOKENS    RECENT_MESSAGE_N_LINES
+         12     5091 → 3581      1970 → 1436      24 → 0
+         24     7023 → 3581      2594 → 1436      48 → 0
+         50    11210 → 3581      3947 → 1436     100 → 0
+   (b) 生产真实内容（真实 rules/soul/fact + 真实 buildPetMessages）：
+         turns 12/24/50 全部 3915 字符 / 1616 tokens / RECENT_MESSAGE_N_LINES=0
+         —— 这是下界，未含 brain 追加的 MEMORY/BELIEF 指令块
+   (c) 独立验收实测含指令块：4092 字符 / 1755 tokens
    最坏 50 turns 总 tokens 16742（超 16384）→ 14231。
-   另一口径：test/measure-system-prompt-tokens.mjs 对采样 prompt 测得
-   SYSTEM_TOKEN_ESTIMATE 4266 → 1755（−58.86%）；与上表不是同一个量，不要混用。
+
+   决定性证据：contextTurns 12→50 对 system 规模影响为 0（3229/1255 三档全同），
+   userText 长度影响也为 0；system 只随 memories/currentSelf/stableRules 的真实内容量
+   变化（实测区间 3053–3531 字符），不随轮数增长。
 D2 planFinalRequestBudget() 按 LOW→MEDIUM→HIGH 从最旧开始裁轮，保护最新 6 轮，
    宁可拒发也不溢出；实测估算对真实分词器有 1.2x–2.3x 余量。
 E  关键词必须接地：全部不接地的候选直接拒绝（keywords-ungrounded），交回 gate 的
