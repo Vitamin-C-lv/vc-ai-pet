@@ -12,6 +12,15 @@ export function isRawEvidenceRow(row) {
     !['assistant', 'model'].includes(String(row.role ?? '').toLowerCase()))
 }
 
+// Visual observations are model-produced interpretations. They may support a
+// derived understanding, but their inferred provenance keeps them out of the
+// raw-fact channel even when the underlying row was written by an assistant.
+export function isObservationEvidenceRow(row) {
+  if (!row || row.id === null || row.id === undefined) return false
+  const provenance = resolveMemoryProvenance(row)
+  return provenance.source === 'VISUAL_OBSERVATION' && provenance.evidence === 'inferred'
+}
+
 export function rawEvidenceRoots(row, { sourceRows = [], findById } = {}, seen = new Set()) {
   if (!isRawEvidenceRow(row) || seen.has(String(row.id))) return []
   const nextSeen = new Set(seen).add(String(row.id))
@@ -36,16 +45,37 @@ export function confidenceForRoots(sourceRoots) {
 }
 
 export function evaluateDerivedEvidence(candidate, { sourceRows = [], newSourceIds = [], findById } = {}) {
+  if (!Array.isArray(sourceRows)) return null
   const sourceIds = ids(candidate?.sourceIds ?? candidate?.source_ids)
-  const newIds = new Set([...newSourceIds].map(String))
+  const newIds = new Set((Array.isArray(newSourceIds) || newSourceIds instanceof Set
+    ? [...newSourceIds]
+    : []).map(String))
   const citedRows = sourceIds.map((id) => sourceRows.find((row) => String(row.id) === id))
   if (!sourceIds.length || citedRows.some((row) => !row)) return null
   // Assistant output is not even a valid cited background source.
   if (citedRows.some((row) => resolveMemoryProvenance(row).source === 'ASSISTANT_RESPONSE')) return null
   const rawRows = citedRows.filter(isRawEvidenceRow)
-  const sourceRoots = ids(rawRows.flatMap((row) => rawEvidenceRoots(row, { sourceRows, findById })))
-  if (!sourceRoots.length || !rawRows.some((row) => newIds.has(String(row.id)) &&
-    rawEvidenceRoots(row, { sourceRows, findById }).length > 0)) return null
+  const rawRoots = ids(rawRows.flatMap((row) => rawEvidenceRoots(row, { sourceRows, findById })))
+  // A visual observation is background perception, never evidence of its own.
+  //
+  // The observation row is already `inferred`, so `rawEvidenceRoots()` refuses to
+  // treat it as a root — but that alone is not enough: if its id were appended to
+  // `sourceRoots`, then `confidenceForRoots()` and `evidenceCount` would both count
+  // it, and the pet's certainty about an image would rise simply because it looked
+  // at the picture twice. The declaration Dream and Reflection receive states the
+  // opposite ("不能作为 source_ids，不能增加 evidenceCount，不能提高 confidence"), so
+  // the budget is computed from raw roots only. What an observation *does* give the
+  // derivation is traceability: re-inspection rows cite their image anchor, and that
+  // anchor is a genuine confirmed root, so the derivation still traces back to "the
+  // owner really did show me this".
+  const sourceRoots = rawRoots
+  if (!rawRoots.length) return null
+  const newRawOrObservation = citedRows.some((row) => {
+    if (!newIds.has(String(row.id))) return false
+    if (isObservationEvidenceRow(row)) return true
+    return isRawEvidenceRow(row) && rawEvidenceRoots(row, { sourceRows, findById }).length > 0
+  })
+  if (!newRawOrObservation) return null
   const confidence = confidenceForRoots(sourceRoots)
   return {
     sourceRoots,

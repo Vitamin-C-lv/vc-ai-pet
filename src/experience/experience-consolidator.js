@@ -7,7 +7,10 @@ import {
 import { containsSensitiveMemoryText } from '../brain/memory-candidate.js'
 
 export const EXPERIENCE_CONSOLIDATION_MIN_OCCURRENCES = 2
-export const EXPERIENCE_CONSOLIDATION_MIN_DAY_SPAN_MS = 0
+// A durable life pattern should survive a day boundary. Requiring 24 hours
+// separates repeated wording in one sitting from behavior that recurs over
+// time, reducing accidental promotion of a single conversation into memory.
+export const EXPERIENCE_CONSOLIDATION_MIN_DAY_SPAN_MS = 24 * 60 * 60 * 1000
 export const EXPERIENCE_CONSOLIDATION_MAX_TERMS = 8
 
 // These are conversation boilerplate terms, not the visual-recall stop list.
@@ -30,7 +33,12 @@ const VISION_PREFIX = /^\s*\[主人发送了一张图片\]\s*/u
 const ASCII_TERM = /^[a-z0-9][a-z0-9_-]*$/iu
 
 function cleanOwnerText(value) {
-  return String(value ?? '').replace(VISION_PREFIX, '')
+  return String(value ?? '')
+    .replace(VISION_PREFIX, '')
+    // ExperienceBuffer stores the owner's text and the pet reply in one
+    // content field. Only the owner portion may become evidence; otherwise a
+    // harmless reply such as "收到" can be promoted as if the owner said it.
+    .split(/\n花花回复：/u, 1)[0]
 }
 
 function normalizedTerm(value) {
@@ -75,6 +83,9 @@ function createdTime(row, now) {
 }
 
 function conversationKey(row) {
+  if (row?.conversationKey !== null && row?.conversationKey !== undefined && String(row.conversationKey).trim()) {
+    return `conversation-key:${String(row.conversationKey)}`
+  }
   if (row?.conversationId !== null && row?.conversationId !== undefined && String(row.conversationId).trim()) {
     return `conversation:${String(row.conversationId)}`
   }
@@ -120,9 +131,11 @@ export class ExperienceConsolidator {
     memory,
     now = () => Date.now(),
     minOccurrences = EXPERIENCE_CONSOLIDATION_MIN_OCCURRENCES,
+    minDaySpanMs = EXPERIENCE_CONSOLIDATION_MIN_DAY_SPAN_MS,
     maxTerms = EXPERIENCE_CONSOLIDATION_MAX_TERMS,
     tokenize = null,
     logger = null,
+    memoryGate = null,
   }) {
     this.buffer = buffer
     this.memory = memory
@@ -130,11 +143,15 @@ export class ExperienceConsolidator {
     this.minOccurrences = Number.isInteger(minOccurrences) && minOccurrences > 0
       ? minOccurrences
       : EXPERIENCE_CONSOLIDATION_MIN_OCCURRENCES
+    this.minDaySpanMs = Number.isFinite(Number(minDaySpanMs)) && Number(minDaySpanMs) >= 0
+      ? Number(minDaySpanMs)
+      : EXPERIENCE_CONSOLIDATION_MIN_DAY_SPAN_MS
     this.maxTerms = Number.isInteger(maxTerms) && maxTerms >= 0
       ? maxTerms
       : EXPERIENCE_CONSOLIDATION_MAX_TERMS
     this.tokenize = typeof tokenize === 'function' ? tokenize : defaultTokenize
     this.logger = logger
+    this.memoryGate = memoryGate
   }
 
   async #scan({ limit = 50, before = null } = {}) {
@@ -149,6 +166,10 @@ export class ExperienceConsolidator {
     const groups = new Map()
     const skipped = emptySkipped()
     const scannedRows = []
+    // Owner rows that carried a credential. They never reach the gate, so they
+    // cannot appear in a candidate group; without this set they would stay pending
+    // forever and keep re-triggering Reflection on text that must never be kept.
+    const sensitiveIds = new Set()
     for (const row of rows) {
       const id = experienceId(row)
       scannedRows.push({ ...row, id })
@@ -158,7 +179,15 @@ export class ExperienceConsolidator {
       }
 
       const ownerText = cleanOwnerText(row?.content)
-      if (containsSensitiveMemoryText(ownerText)) skipped.sensitive += 1
+      if (containsSensitiveMemoryText(ownerText)) {
+        skipped.sensitive += 1
+        sensitiveIds.add(id)
+        // A credential-bearing owner turn must not be split into a harmless
+        // token candidate (for example the assistant's or an id-like term).
+        // It is consumed as rejected evidence below, never offered to the gate
+        // with a narrower userText.
+        continue
+      }
       const terms = new Set(this.tokenize(ownerText).map(normalizedTerm).filter(Boolean))
       for (const term of terms) {
         if (!ownerText.includes(term)) continue
@@ -174,6 +203,7 @@ export class ExperienceConsolidator {
             id,
             conversation: conversationKey(row),
             createdAt: createdTime(row, this.now),
+            messageId: row?.messageId ?? null,
             evidence,
           })
           group.turns.add(conversationKey(row))
@@ -190,7 +220,7 @@ export class ExperienceConsolidator {
       const lastOccurredAt = Math.max(...evidenceRows.map((row) => row.createdAt))
       const stable = occurrences >= this.minOccurrences &&
         group.turns.size >= 2 &&
-        lastOccurredAt - firstOccurredAt >= EXPERIENCE_CONSOLIDATION_MIN_DAY_SPAN_MS
+        lastOccurredAt - firstOccurredAt >= this.minDaySpanMs
       if (!stable) {
         skipped.notEnoughOccurrences += 1
         continue
@@ -214,6 +244,8 @@ export class ExperienceConsolidator {
         continue
       }
 
+      const earliestRow = [...evidenceRows]
+        .sort((left, right) => left.id - right.id)[0]
       candidates.push({
         term: group.term,
         occurrences,
@@ -222,6 +254,7 @@ export class ExperienceConsolidator {
         firstOccurredAt,
         lastOccurredAt,
         evidence,
+        messageId: earliestRow?.messageId ?? null,
         content: `主人说：${evidence}`,
         level: 'fact',
         importance: occurrences >= 3 ? 3 : 2,
@@ -242,6 +275,7 @@ export class ExperienceConsolidator {
         scanned: scannedRows.length,
         candidates,
         skipped,
+        sensitiveIds,
       },
     }
   }
@@ -262,6 +296,23 @@ export class ExperienceConsolidator {
           candidates: 0,
           written: 0,
           duplicates: 0,
+          rejected: {},
+          writtenIds: [],
+          processedIds: [],
+          checkpoint: null,
+        }
+      }
+
+      if (!this.memoryGate || typeof this.memoryGate.consider !== 'function') {
+        return {
+          status: 'failed',
+          ok: false,
+          reason: 'memory-gate-missing',
+          scanned: result.scanned,
+          candidates: result.candidates.length,
+          written: 0,
+          duplicates: 0,
+          rejected: {},
           writtenIds: [],
           processedIds: [],
           checkpoint: null,
@@ -272,36 +323,87 @@ export class ExperienceConsolidator {
       const deferredIds = new Set(result.candidates
         .slice(this.maxTerms)
         .flatMap((candidate) => candidate.experienceIds))
+      // Consolidation may only consume the rows it actually decided something
+      // about.
+      //
+      // The Experience Buffer exists so Reflection can look at recent life. If
+      // consolidation marked every row it merely *scanned*, a tick would swallow
+      // the whole pending set before Reflection ever ran — a day of ordinary
+      // conversation would be consumed by a pass that found no pattern in it, and
+      // Reflection would starve while the buffer looked empty. So a row is
+      // consumed only when it belongs to a group stable enough to reach the
+      // MemoryGate (written, duplicate or rejected), or when its text carried a
+      // credential and was deliberately purged. Rows that formed no stable group
+      // stay pending for Reflection to read.
+      const consumedIds = new Set()
+      for (const candidate of result.candidates) {
+        for (const id of candidate.experienceIds) consumedIds.add(id)
+      }
+      // A credential-bearing owner row is deliberately purged: it must never be
+      // kept, and leaving it pending would keep Reflection re-reading it.
+      const purgedIds = result.sensitiveIds ?? new Set()
       const processedIds = scannedRows
         .map((row) => row.id)
         .filter((id) => !deferredIds.has(id))
+        .filter((id) => consumedIds.has(id) || purgedIds.has(id))
 
       let written = 0
       let duplicates = 0
+      const rejected = result.skipped.sensitive > 0
+        ? { 'memory-sensitive-reject': result.skipped.sensitive }
+        : {}
       const writtenIds = []
-      for (const candidate of selected) {
-        const duplicate = this.memory.findEquivalentMemory(candidate.content)
-        if (duplicate) {
-          duplicates += 1
-          continue
-        }
-
-        const provenance = {
-          source: 'USER_STATEMENT',
-          evidence: 'confirmed',
-          evidenceQuote: candidate.evidence,
-        }
-        const row = typeof this.memory.remember === 'function'
-          ? this.memory.remember(candidate.level, candidate.content, candidate.importance, {
+      // Commit the candidates as one unit.
+      //
+      // A gate that throws on the second candidate must not leave the first
+      // candidate's row behind while the pass reports failure and keeps its
+      // experiences pending: the next pass would then find a row the failure
+      // report said was never created. `PetMemory.forget()` reverts the rows this
+      // pass wrote before the error is rethrown, so "this pass failed" and "this
+      // pass wrote nothing" always agree.
+      try {
+        for (const candidate of selected) {
+          const evidence = candidate.evidence
+          const rawCandidate = {
+            remember: true,
+            level: 'fact',
+            content: evidence,
+            importance: candidate.occurrences >= 3 ? 3 : 2,
             keywords: candidate.keywords,
-            provenance,
+            confidence: 1,
+            evidence,
+          }
+          const decision = this.memoryGate.consider(evidence, rawCandidate, {
+            messageId: candidate.messageId,
           })
-          : typeof this.memory.rememberCandidate === 'function'
-            ? this.memory.rememberCandidate({ ...candidate, provenance })
-            : (() => { throw new Error('PET_MEMORY_WRITE_METHOD_MISSING') })()
-        if (!row || row.id === null || row.id === undefined) throw new Error('PET_MEMORY_WRITE_RESULT_INVALID')
-        written += 1
-        writtenIds.push(String(row.id))
+          if (!decision || !['written', 'duplicate', 'skipped'].includes(decision.status)) {
+            throw new Error('MEMORY_GATE_DECISION_INVALID')
+          }
+          if (decision.status === 'duplicate') {
+            duplicates += 1
+            continue
+          }
+          if (decision.status === 'written') {
+            if (decision.id === null || decision.id === undefined) throw new Error('MEMORY_GATE_WRITE_RESULT_INVALID')
+            written += 1
+            writtenIds.push(String(decision.id))
+            continue
+          }
+          rejected[decision.reason ?? 'memory-candidate-rejected'] =
+            (rejected[decision.reason ?? 'memory-candidate-rejected'] ?? 0) + 1
+        }
+      } catch (error) {
+        const reverted = typeof this.memory.forget === 'function'
+          ? writtenIds.filter((id) => {
+              try { return this.memory.forget(id) === true } catch { return false }
+            })
+          : []
+        const rollbackUnavailable = writtenIds.length > 0 && reverted.length !== writtenIds.length
+        this.logger?.warn?.(
+          `vc-ai-pet: experience consolidation rolled back written=${reverted.length}/${writtenIds.length}`
+          + ` rollbackUnavailable=${rollbackUnavailable ? 'YES' : 'NO'}`,
+        )
+        throw error
       }
 
       if (processedIds.length > 0) {
@@ -314,6 +416,7 @@ export class ExperienceConsolidator {
         candidates: result.candidates.length,
         written,
         duplicates,
+        rejected,
         writtenIds,
         processedIds,
         checkpoint: processedIds.length ? Math.max(...processedIds) : null,

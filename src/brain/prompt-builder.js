@@ -237,20 +237,19 @@ export const RECENT_VISUAL_RECALL_INSTRUCTION = `RECENT_VISUAL_RECALL:
 它不是主人本轮重新上传的新图片。
 只根据实际图像回答，不要编造图片之外的事实。`
 
-export function formatConversationEvidenceBoundary(messages = [], { maxTurns = PROMPT_DEFAULT_CONTEXT_TURNS } = {}) {
-  // The source map must describe exactly the messages the model can see; a
-  // narrower map than the transcript would mislabel the oldest visible turn.
-  const recent = recentConversationMessages(messages, { maxTurns })
-  const sourceMap = recent.length > 0
-    ? recent.map((message, index) => (
-      `- RECENT_MESSAGE_${index + 1} [SOURCE=${conversationEvidenceSource(message)}] [evidence=${classifyConversationEvidence(message)}] [ROLE=${message.role}]`
-    )).join('\n')
-    : '- NONE'
-
+export function formatConversationEvidenceBoundary(_messages = [], _options = {}) {
+  // OpenAI-compatible message.role already carries the role for every visible
+  // message. Repeating one source-map row per message made a 50-turn window
+  // copy the same transcript policy 100 more times into the system prompt.
+  // Keep the policy declarative and constant-size; the actual message order and
+  // roles remain in the model payload itself.
   return `${CONVERSATION_TRUTH_INSTRUCTION}
-RECENT_CONVERSATION_SOURCE_MAP:
-${sourceMap}
-SOURCE_MAP_ORDER=与下面短期对话消息的顺序一致
+RECENT_CONVERSATION_EVIDENCE:
+- recent role=user messages are owner statements (SOURCE=USER_STATEMENT; evidence=confirmed for current conversational context only)
+- recent role=assistant messages are pet outputs (SOURCE=ASSISTANT_RESPONSE; evidence=unknown) and are never raw evidence
+- current user message is current evidence only, never proof that a past event occurred
+- inferred/dream/reflection content is not raw evidence
+- source order is the actual chat message order
 CURRENT_USER_QUESTION_IS_NOT_PAST_EVENT_PROOF=YES`
 }
 
@@ -268,7 +267,7 @@ CURRENT_USER_QUESTION_IS_NOT_PAST_EVENT_PROOF=YES`
  * window is now a parameter, so the advertised window is the delivered window.
  */
 export const PROMPT_DEFAULT_CONTEXT_TURNS = 50
-export const PROMPT_MAX_CONTEXT_TURNS = 200
+export const PROMPT_MAX_CONTEXT_TURNS = 50
 
 function normalizeContextTurns(value, fallback = PROMPT_DEFAULT_CONTEXT_TURNS) {
   const turns = Number(value)

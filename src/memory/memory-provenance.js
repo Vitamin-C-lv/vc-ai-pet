@@ -13,6 +13,7 @@ export const MEMORY_PROVENANCE_SOURCES = Object.freeze([
   'MEMORY_GATE_ACCEPTED',
   'DREAM_DERIVED',
   'REFLECTION_DERIVED',
+  'VISUAL_OBSERVATION',
   'ASSISTANT_RESPONSE',
 ])
 
@@ -25,7 +26,7 @@ const CONFIRMED_SOURCES = new Set([
   'SYSTEM_EVENT',
   'MEMORY_GATE_ACCEPTED',
 ])
-const INFERRED_SOURCES = new Set(['DREAM_DERIVED', 'REFLECTION_DERIVED'])
+export const INFERRED_SOURCES = new Set(['DREAM_DERIVED', 'REFLECTION_DERIVED', 'VISUAL_OBSERVATION'])
 
 const SOURCE_ALIASES = new Map([
   ['USER_STATEMENT', 'USER_STATEMENT'],
@@ -43,6 +44,10 @@ const SOURCE_ALIASES = new Map([
   ['DREAM', 'DREAM_DERIVED'],
   ['REFLECTION_DERIVED', 'REFLECTION_DERIVED'],
   ['REFLECTION', 'REFLECTION_DERIVED'],
+  ['VISUAL_OBSERVATION', 'VISUAL_OBSERVATION'],
+  ['VISUAL', 'VISUAL_OBSERVATION'],
+  ['VISION', 'VISUAL_OBSERVATION'],
+  ['OBSERVATION', 'VISUAL_OBSERVATION'],
   ['ASSISTANT_RESPONSE', 'ASSISTANT_RESPONSE'],
   ['ASSISTANT', 'ASSISTANT_RESPONSE'],
   ['ASSISTANT_MESSAGE', 'ASSISTANT_RESPONSE'],
@@ -103,6 +108,13 @@ export function normalizeProvenance(input = {}, { fallbackSource = UNKNOWN_PROVE
   if (['hypothesis', 'evolving'].includes(raw.selfStatus)) normalized.selfStatus = raw.selfStatus
   if (typeof raw.evidenceQuote === 'string') normalized.evidenceQuote = raw.evidenceQuote.slice(0, 200)
   if (typeof raw.messageId === 'string') normalized.messageId = raw.messageId.slice(0, 80)
+  // The picture a memory is about. Deliberately kept out of `sourceIds`: the
+  // evidence chain walks sourceIds as parent *memory* rows, and an attachment id
+  // is not a memory row — putting one there would break `rawEvidenceRoots()` and
+  // invalidate every derivation that cites this memory.
+  if (typeof raw.attachmentId === 'string' && raw.attachmentId.trim()) {
+    normalized.attachmentId = raw.attachmentId.trim().slice(0, 80)
+  }
   return normalized
 }
 
@@ -260,6 +272,23 @@ export class MemoryProvenanceStore {
       recordedAt,
     )
     return normalized
+  }
+
+  /**
+   * Drop the provenance record of a memory row that no longer exists.
+   *
+   * Paired with `PetMemory.forget()`: leaving an orphan provenance row behind
+   * would make the derived-evidence chain resolve a parent that is gone, which is
+   * worse than the missing row itself. A missing row simply stops being cited.
+   */
+  remove(memoryId) {
+    const id = String(memoryId ?? '').trim()
+    if (!id) return false
+    this.ensureTable()
+    const result = this.database
+      .prepare(`DELETE FROM ${MEMORY_PROVENANCE_TABLE} WHERE memory_id = ?`)
+      .run(id)
+    return Number(result?.changes ?? 0) > 0
   }
 
   resolve(row) {

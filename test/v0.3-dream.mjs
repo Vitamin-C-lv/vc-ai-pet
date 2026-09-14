@@ -36,7 +36,9 @@ import {
   ReflectionGate,
   validateReflectionCandidate,
 } from '../src/dream/reflection-engine.js'
-import {
+import {  DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS,
+  DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS,
+
   DREAM_MIN_NEW_MEMORIES,
   DREAM_OLDEST_SOURCE_AGE_MS,
   DEEP_DREAM_DAYTIME_SLEEP_MS,
@@ -769,7 +771,7 @@ await withMemory('engine-success', async ({ memory }) => {
 
   const logs = dreamLogs(memory)
   assert.equal(logs.length, 1)
-  assert.match(logs[0].summary, /engine batch 1 engine batch 2/)
+  assert.equal(logs[0].summary, '花花梦里把这些经历连在了一起：主人似乎持续喜欢群青色。')
   assert.equal(logs[0].note, 'vc-ai-pet v0.3-B deep-dream')
   const changes = JSON.parse(logs[0].changes)
   assert.equal(changes.kind, 'dream')
@@ -781,6 +783,7 @@ await withMemory('engine-success', async ({ memory }) => {
   assert.deepEqual(changes.derived[0].sourceIds, sourceIds.slice(0, 2))
   assert.equal(changes.duplicates.length, 0)
   assert.equal(changes.skipped, 0)
+  assert.equal(changes.modelSummary, 'engine batch 1 engine batch 2')
   assert.doesNotMatch(`${logs[0].summary}\n${logs[0].changes}\n${logs[0].note}`, new RegExp(CHAT_ONLY_SENTINEL))
 
   // I: the next run sees only genuinely new source history, never the derived
@@ -1343,7 +1346,9 @@ await withSchedulerFixture({ count: 8, ageMs: HOUR }, async (fixture) => {
 
   const idle = await scheduler.maybeRun({ state: { current: 'idle' }, now: fixture.now })
   assert.equal(idle.status, 'skipped')
-  assert.equal(idle.reason, 'not-sleep')
+  // Idle is an *awake* state: since the sleep-continuity fix, any awake state
+  // ends the episode (previously only the literal `sleep` state counted).
+  assert.equal(idle.reason, 'not-asleep')
   assert.equal(runCalls.length, 1)
 })
 
@@ -1469,14 +1474,19 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   const fixture = microSchedulerFixture({
     kind: 'deep',
     initialNow: DAY_NOW,
-    state: { sleepSince: DAY_NOW - 20 * 60 * 1000 },
+    state: { sleepSince: DAY_NOW - 10 * 60 * 1000 },
   })
   const result = await fixture.scheduler.maybeRunDeepDream({
-    state: { current: 'sleep', sleepSince: DAY_NOW - 20 * 60 * 1000 },
+    state: { current: 'sleep', sleepSince: DAY_NOW - 10 * 60 * 1000 },
     now: fixture.now,
   })
   assert.equal(result.status, 'skipped')
-  assert.equal(result.reason, 'daytime-sleep-duration-not-met')
+  assert.equal(result.reason, 'daytime-sleep-continuity-not-met')
+  assert.equal(result.requiredMs, DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS)
+  assert.ok(
+    10 * 60 * 1000 < DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS,
+    'the fixture must sit below the daytime continuity threshold',
+  )
   assert.equal(fixture.deepEligibilityCalls, 1)
   assert.equal(fixture.runCalls.length, 0)
 }
@@ -1493,7 +1503,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   })
 
   const first = await tick(0)
-  assert.equal(first.reason, 'sleep-duration-not-met')
+  assert.equal(first.reason, 'sleep-continuity-not-met')
 
   await tick(10 * 1000)
   await tick(20 * 1000)
@@ -1502,7 +1512,7 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
   assert.equal(started.schedulerStatus, 'started')
   assert.equal(fixture.runCalls.length, 1)
 
-  console.log('DAYTIME_NAP_TRIGGER=SLEEP_DURATION_45M')
+  console.log(`DAYTIME_NAP_TRIGGER=SLEEP_CONTINUITY_${DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS / 60000}M`)
 }
 
 {
@@ -1516,7 +1526,8 @@ await withSchedulerFixture({ count: 1, ageMs: HOUR }, async (fixture) => {
     now: fixture.now,
   })
   assert.equal(result.status, 'skipped')
-  assert.equal(result.reason, 'sleep-duration-not-met')
+  assert.equal(result.reason, 'sleep-continuity-not-met')
+  assert.equal(result.requiredMs, DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS)
   assert.equal(fixture.runCalls.length, 0)
 }
 
@@ -1685,7 +1696,12 @@ assert.equal(DREAM_RELATED_LIMIT, 24)
 assert.equal(DEEP_DREAM_RELATED_MAX, 24)
 assert.equal(DREAM_MIN_NEW_MEMORIES, 8)
 assert.equal(DREAM_OLDEST_SOURCE_AGE_MS, 72 * HOUR)
-assert.equal(DEEP_DREAM_DAYTIME_SLEEP_MS, 45 * 60 * 1000)
+// The sleep thresholds now measure "time since the pet was last awake" and were
+// lowered when the continuity fix landed, so the guard pins the new pair.
+assert.equal(DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS, 8 * 60 * 1000)
+assert.equal(DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS, 20 * 60 * 1000)
+assert.equal(DEEP_DREAM_MIN_SLEEP_MS, DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS)
+assert.equal(DEEP_DREAM_DAYTIME_SLEEP_MS, DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS)
 assert.equal(validateLocalBrainConfig().requestTimeoutMs, 180_000)
 console.log('DEFAULT_REQUEST_TIMEOUT_MS=180000')
 assert.equal(REFLECTION_BATCH_SIZE, 4)

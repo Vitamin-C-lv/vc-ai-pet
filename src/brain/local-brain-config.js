@@ -15,6 +15,9 @@ export const PET_REASONING_PROFILE = Object.freeze({
 
 export const DEFAULT_LOCAL_BRAIN_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:17862',
+  // Read-only probe of the shared service reports n_ctx=16384. This is a Pet
+  // delivery budget only; it never changes Local Brain/model startup options.
+  contextWindowTokens: 16_384,
   // Legacy config compatibility. LocalBrain selects the per-feature profile
   // below at each request; this field is not an override/router.
   reasoningEffort: PET_REASONING_PROFILE.chat,
@@ -52,6 +55,10 @@ export function validateLocalBrainConfig(raw = {}) {
     if (!Number.isFinite(config[key]) || config[key] <= 0) {
       throw new Error(`PET_LOCAL_BRAIN_TIMEOUT_INVALID:${key}`)
     }
+  }
+
+  if (!Number.isInteger(config.contextWindowTokens) || config.contextWindowTokens < 1) {
+    throw new Error('PET_LOCAL_BRAIN_CONTEXT_WINDOW_INVALID')
   }
 
   return config

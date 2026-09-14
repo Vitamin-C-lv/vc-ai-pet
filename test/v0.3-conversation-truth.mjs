@@ -33,7 +33,7 @@ function response(reply) {
 }
 
 function sourceMapFromPrompt(prompt) {
-  const start = prompt.indexOf('RECENT_CONVERSATION_SOURCE_MAP:')
+  const start = prompt.indexOf('RECENT_CONVERSATION_EVIDENCE:')
   const end = prompt.indexOf('\n\n最近对话说明：', start)
   assert.ok(start >= 0, 'conversation evidence source map must be present')
   assert.ok(end > start, 'conversation evidence source map must be bounded')
@@ -49,7 +49,8 @@ function conversationTruthClient() {
       const systemPrompt = request.messages.find((message) => message.role === 'system')?.content ?? ''
       const query = request.messages.at(-1)?.content ?? ''
       const sourceMap = sourceMapFromPrompt(systemPrompt)
-      const hasUserStatement = sourceMap.includes('[SOURCE=USER_STATEMENT]')
+      const visibleRecent = request.messages.slice(1, -1)
+      const hasUserStatement = visibleRecent.some((message) => message.role === 'user')
 
       let reply = '花花不确定，主人可以提醒花花。'
       if (query.includes('散步') && hasUserStatement) {
@@ -135,8 +136,8 @@ const assistantWalk = await runCase(
   [{ role: 'assistant', content: '昨天主人带我散步啦！' }],
   '昨天我们去散步了吗？',
 )
-assert.match(assistantWalk.sourceMap, /\[SOURCE=ASSISTANT_RESPONSE\] \[evidence=unknown\]/u)
-assert.doesNotMatch(assistantWalk.sourceMap, /\[SOURCE=USER_STATEMENT\]/u)
+assert.match(assistantWalk.sourceMap, /role=assistant messages are pet outputs \(SOURCE=ASSISTANT_RESPONSE; evidence=unknown\)/u)
+assert.doesNotMatch(assistantWalk.sourceMap, /RECENT_MESSAGE_\d+/u)
 assert.match(assistantWalk.prompt, /花花曾经说过的话，不能证明事情真的发生过/u)
 assert.match(assistantWalk.result.text, /之前好像提到过|没有确认的记忆/u)
 assert.doesNotMatch(assistantWalk.result.text, /昨天主人.*散步了|昨天确实/u)
@@ -147,8 +148,8 @@ const userWalk = await runCase(
   [{ role: 'user', content: '昨天我带花花散步了。' }],
   '昨天我们去散步了吗？',
 )
-assert.match(userWalk.sourceMap, /\[SOURCE=USER_STATEMENT\] \[evidence=confirmed\]/u)
-assert.doesNotMatch(userWalk.sourceMap, /\[SOURCE=ASSISTANT_RESPONSE\]/u)
+assert.match(userWalk.sourceMap, /role=user messages are owner statements \(SOURCE=USER_STATEMENT; evidence=confirmed/u)
+assert.doesNotMatch(userWalk.sourceMap, /RECENT_MESSAGE_\d+/u)
 assert.match(userWalk.result.text, /是的|散步了/u)
 
 // CASE 3: an assistant inference about a preference is still not a fact.
@@ -157,7 +158,7 @@ const assistantPreference = await runCase(
   [{ role: 'assistant', content: '我觉得主人喜欢红色。' }],
   '主人喜欢红色吗？',
 )
-assert.match(assistantPreference.sourceMap, /\[SOURCE=ASSISTANT_RESPONSE\] \[evidence=unknown\]/u)
+assert.match(assistantPreference.sourceMap, /ASSISTANT_RESPONSE; evidence=unknown/u)
 assert.match(assistantPreference.result.text, /不确定/u)
 assert.doesNotMatch(assistantPreference.result.text, /主人喜欢红色/u)
 

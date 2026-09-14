@@ -82,23 +82,22 @@ assert.equal(PROMPT_DEFAULT_CONTEXT_TURNS, 50, 'the prompt builder must default 
 
   // More turns than the transcript: keep everything, invent nothing.
   const sixty = deliveredWindow(60).window
-  assert.equal(sixty.length, 120)
-  assert.equal(sixty[0].content, '主人第1句话')
+  assert.equal(sixty.length, 100, 'the prompt history hard cap is 100 messages')
+  assert.equal(sixty[0].content, '主人第11句话')
 }
 
-// --- the source map must describe exactly what was sent ----------------------
+// --- the evidence declaration is constant-size; roles stay in messages ------
 
 {
   const messages = messagesFor(OWNER_TURNS)
+  const boundarySizes = []
   for (const turns of [12, 24, 50]) {
     const boundary = formatConversationEvidenceBoundary(messages, { maxTurns: turns })
-    const entries = (boundary.match(/- RECENT_MESSAGE_\d+/gu) ?? []).length
-    assert.equal(
-      entries,
-      turns * 2,
-      `source map must match the delivered window for ${turns} turns, got ${entries}`,
-    )
+    boundarySizes.push(boundary.length)
+    assert.match(boundary, /RECENT_CONVERSATION_EVIDENCE:/u)
+    assert.doesNotMatch(boundary, /RECENT_MESSAGE_\d+/u)
   }
+  assert.equal(new Set(boundarySizes).size, 1, 'evidence declaration must be O(1) across 12/24/50 turns')
 
   // A narrower map than the transcript would mislabel the oldest visible turn.
   const built = buildPetMessages({
@@ -108,9 +107,17 @@ assert.equal(PROMPT_DEFAULT_CONTEXT_TURNS, 50, 'the prompt builder must default 
     recentMessages: messages,
     contextTurns: 50,
   })
-  const mapEntries = (built[0].content.match(/- RECENT_MESSAGE_\d+/gu) ?? []).length
   const delivered = built.filter((message) => message.role === 'user' || message.role === 'assistant').length - 1
-  assert.equal(mapEntries, delivered, 'the source map and the transcript must agree')
+  assert.equal(delivered, 100, 'the actual model transcript remains 100 messages for 50 turns')
+  assert.equal((built[0].content.match(/RECENT_MESSAGE_\d+/gu) ?? []).length, 0)
+}
+
+// The model payload, rather than the system declaration, is the source of
+// truth for visible message count at every supported window size.
+for (const turns of [12, 24, 50]) {
+  const { dialogue } = deliveredWindow(turns)
+  assert.equal(dialogue.length - 1, Math.min(turns * 2, OWNER_TURNS * 2))
+  assert.ok(dialogue.length - 1 <= 100)
 }
 
 // --- invalid windows degrade instead of throwing -----------------------------
@@ -123,7 +130,7 @@ assert.equal(PROMPT_DEFAULT_CONTEXT_TURNS, 50, 'the prompt builder must default 
     assert.ok(window.length <= PROMPT_MAX_TURNS_SANITY, `contextTurns=${String(bad)} must stay bounded`)
   }
   const huge = deliveredWindow(1e9).window
-  assert.equal(huge.length, OWNER_TURNS * 2, 'an absurd window is clamped to the available transcript')
+  assert.equal(huge.length, 100, 'an absurd window is clamped to the 100-message prompt history cap')
 }
 
 // --- end to end: the runtime really hands a growing window to the brain ------
@@ -201,7 +208,7 @@ async function endToEnd() {
   // Order is preserved: trimming removes entries, it does not reorder them.
   const order = result.turns.map((turn) => long.indexOf(turn))
   assert.deepEqual(order, [...order].sort((left, right) => left - right), 'kept turns must stay in time order')
-  console.log('CONTEXT_BUDGET_TRIM_KEPT=' + result.turns.length + '/50 RESERVE_KEPT=YES DROPPED=' + result.dropped.length)
+  console.log('CONTEXT_BUDGET_TRIM_KEPT=' + result.turns.length + '/50 RESERVE_KEPT=YES DROPPED=' + result.dropped)
 }
 
 // --- RecentConversation restores the whole window ----------------------------

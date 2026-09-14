@@ -281,13 +281,35 @@ export function validateMemoryCandidate(raw, userText) {
     return { accepted: false, reason: 'evidence-invalid', candidate: null }
   }
 
-  const keywords = Array.isArray(raw.keywords)
-    ? [...new Set(raw.keywords
-        .filter((item) => typeof item === 'string')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 6))]
+  const normalizeGroundingText = (value) => String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\p{P}\s]+/gu, '')
+  const normalizedEvidence = normalizeGroundingText(evidence)
+  const proposedKeywords = Array.isArray(raw.keywords)
+    ? raw.keywords.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
     : []
+  const keywords = [...new Set(proposedKeywords
+    .filter((item) => {
+      const normalizedKeyword = normalizeGroundingText(item)
+      return Boolean(normalizedKeyword && normalizedEvidence.includes(normalizedKeyword))
+    })
+    .slice(0, 6))]
+
+  // A keyword is a retrieval handle, so a keyword that is not in the evidence was
+  // invented. Accepting the candidate while silently dropping its handles would
+  // store a row that can never be found again — and, worse, would treat a model
+  // that hallucinated its citation as trustworthy. Refusing the whole candidate
+  // instead hands the decision to `MemoryGate`, whose explicit-owner fallback
+  // rebuilds the candidate from the owner's own words with no keywords at all.
+  //
+  // Measured consequence of the alternative (keep the candidate, drop the
+  // keywords): a candidate whose evidence is the instruction "一定要记住哦" was
+  // written to PetMemory as `主人说：一定要记住哦`, because that fallback only runs
+  // when validation *fails*.
+  if (proposedKeywords.length > 0 && keywords.length === 0) {
+    return { accepted: false, reason: 'keywords-ungrounded', candidate: null }
+  }
 
   return {
     accepted: true,

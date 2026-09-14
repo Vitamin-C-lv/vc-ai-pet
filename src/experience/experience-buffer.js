@@ -1,11 +1,33 @@
 import { DatabaseSync } from 'node:sqlite'
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { detectExplicitMemoryRequest } from '../brain/memory-candidate.js'
 import { cjkTerms, GENERIC_RECALL_TERMS } from '../vision/visual-keywords.js'
+import {
+  EXPERIENCE_BUFFER_DB_FILENAME,
+  EXPERIENCE_BUFFER_SCHEMA_VERSION,
+  EXPERIENCE_BUFFER_SCHEMA_VERSION_KEY,
+  EXPERIENCE_BUFFER_TABLE,
+  EXPERIENCE_BUFFER_META_TABLE,
+  EXPERIENCE_EVENT_COLUMNS,
+  experienceBufferSchemaDdl,
+} from './experience-buffer-schema.js'
 
-export const EXPERIENCE_BUFFER_DB_FILENAME = 'experience-buffer.sqlite'
+export {
+  EXPERIENCE_BUFFER_DB_FILENAME,
+  EXPERIENCE_BUFFER_SCHEMA_VERSION,
+  EXPERIENCE_BUFFER_SCHEMA_VERSION_KEY,
+  EXPERIENCE_BUFFER_TABLE,
+  EXPERIENCE_BUFFER_META_TABLE,
+  EXPERIENCE_EVENT_COLUMNS,
+  experienceBufferSchemaDdl,
+}
 export const EXPERIENCE_BUFFER_RETENTION_MS = 14 * 24 * 60 * 60 * 1000
+// A turn id identifies one request, not the chat around it. Keep nearby turns
+// together so a runtime that only supplies per-turn ids still has a session;
+// after this idle period a later turn starts a new session.
+export const EXPERIENCE_BUFFER_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 
 export const EXPERIENCE_BUFFER_ROOT_REQUIRED = 'PET_EXPERIENCE_BUFFER_ROOT_REQUIRED'
 export const EXPERIENCE_BUFFER_CLOCK_INVALID = 'PET_EXPERIENCE_BUFFER_CLOCK_INVALID'
@@ -14,6 +36,10 @@ export const EXPERIENCE_BUFFER_NOT_INITIALIZED = 'PET_EXPERIENCE_BUFFER_NOT_INIT
 export const EXPERIENCE_BUFFER_RECORD_FAILED = 'PET_EXPERIENCE_BUFFER_RECORD_FAILED'
 
 const TEXT_MAX_LENGTH = 1200
+const VISUAL_OBSERVATION_MAX_LENGTH = 180
+const VISUAL_FOCUS_MAX_LENGTH = 120
+const VISUAL_ID_MAX_LENGTH = 80
+const VISUAL_OBSERVATION_MAX_COUNT = 12
 const ACTOR_IDS = new Set(['owner', 'pet', 'system'])
 const IDENTITY_PATTERN = /名字|姓名|叫(?:作)?|生日|出生|性别|公狗|母狗|公猫|母猫|品种|习惯|喜欢|爱吃|总是|每天|经常/u
 const EMOTION_PATTERN = /开心|高兴|快乐|难过|伤心|担心|焦虑|害怕|生病|病了|变化|改变|去世|离开|失去|住院|手术/u
@@ -40,7 +66,13 @@ function safeText(value, { allowNull = true } = {}) {
     throw new TypeError('EXPERIENCE_TEXT_REQUIRED')
   }
   return String(value)
-    .replace(/data:[^\s,;]+;base64,[A-Za-z0-9+/=]+/gu, '[图片]')
+    // A buffer row is text-only. Keep a visible placeholder for a pasted image,
+    // but never retain the data URL or its encoded bytes.
+    .replace(/data:[^\s,;]+;base64,[A-Za-z0-9+/=]+/giu, '[图片]')
+    .replace(/base64,[A-Za-z0-9+/=]+/giu, '[图片]')
+    // Also catch a bare, long base64 token when a caller omitted the data URL
+    // prefix. The boundary avoids rewriting ordinary short words and IDs.
+    .replace(/(^|[\s"'([{])([A-Za-z0-9+/]{40,}={0,2})(?=$|[\s"')\]},.;])/gu, '$1[图片]')
     .trim()
     .slice(0, TEXT_MAX_LENGTH)
 }
@@ -71,10 +103,50 @@ function cloneJsonObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   try {
     const clone = JSON.parse(JSON.stringify(value))
-    return clone && typeof clone === 'object' && !Array.isArray(clone) ? clone : null
+    if (!clone || typeof clone !== 'object' || Array.isArray(clone)) return null
+    const sanitize = (item) => {
+      if (typeof item === 'string') return safeText(item, { allowNull: false })
+      if (Array.isArray(item)) return item.map(sanitize)
+      if (item && typeof item === 'object') {
+        return Object.fromEntries(Object.entries(item).map(([key, nested]) => [key, sanitize(nested)]))
+      }
+      return item
+    }
+    return sanitize(clone)
   } catch {
     return null
   }
+}
+
+function safeVisualId(value) {
+  const text = safeText(value)
+  return text ? text.slice(0, VISUAL_ID_MAX_LENGTH) : null
+}
+
+function visualObservationValue(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+  return item.summary ?? item.observation ?? item.text ?? null
+}
+
+function visualObservationProperty(value, property) {
+  const values = Array.isArray(value) ? value : []
+  const first = values.find((item) => item && typeof item === 'object' && !Array.isArray(item) && item[property])
+  return first?.[property] ?? null
+}
+
+function safeVisualObservations(value) {
+  const values = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value]
+  return values
+    .map(visualObservationValue)
+    .map((item) => safeText(item))
+    .map((item) => item ? item.slice(0, VISUAL_OBSERVATION_MAX_LENGTH) : null)
+    .filter(Boolean)
+    .slice(0, VISUAL_OBSERVATION_MAX_COUNT)
+}
+
+function safeVisualFocus(value) {
+  const text = safeText(value)
+  return text ? text.slice(0, VISUAL_FOCUS_MAX_LENGTH) : null
 }
 
 function candidateScore(candidate) {
@@ -191,6 +263,10 @@ export function classifyExperience(input = null) {
       assistantText = '',
       hadVision = false,
       visionSummary = null,
+      visionId = null,
+      attachmentId = null,
+      visualObservation = [],
+      visualFocus = null,
       emotion = null,
       modelCandidate = null,
       explicitMemoryRequest = false,
@@ -202,6 +278,14 @@ export function classifyExperience(input = null) {
     const owner = safeText(ownerText, { allowNull: false })
     const assistant = safeText(assistantText, { allowNull: false })
     const vision = safeText(visionSummary)
+    const visual = {
+      visionSummary: vision,
+      visionId: safeVisualId(visionId ?? visualObservationProperty(visualObservation, 'visualId')),
+      attachmentId: safeVisualId(attachmentId ?? visualObservationProperty(visualObservation, 'attachmentId')),
+      visualObservation: safeVisualObservations(visualObservation),
+      visualFocus: safeVisualFocus(visualFocus ?? visualObservationProperty(visualObservation, 'focus')),
+    }
+    const withVisualFields = (result) => ({ ...result, ...visual })
     const detection = detectExplicitMemoryRequest(owner)
     const explicit = !detection.optOut && (explicitMemoryRequest === true || detection.explicit)
     const candidate = cloneJsonObject(modelCandidate)
@@ -217,48 +301,50 @@ export function classifyExperience(input = null) {
     if (inputMissing) return conservativeClassification()
 
     if (explicit) {
-      return {
+      return withVisualFields({
         sourceType: 'explicit_memory',
         importanceScore: Math.max(0.9, candidateImportance),
         emotionScore: intensity,
         memoryCandidate: candidate ?? { type: 'explicit_memory', content: owner },
         admitted: true,
         reason: 'explicit-memory-request',
-      }
+      })
     }
     if (identitySignal) {
-      return {
+      return withVisualFields({
         sourceType: 'owner_chat',
         importanceScore: Math.max(0.8, candidateImportance),
         emotionScore: intensity,
         memoryCandidate: candidate,
         admitted: true,
         reason: 'pet-identity-information',
-      }
+      })
     }
     if (repeated) {
-      return {
+      return withVisualFields({
         sourceType: 'repeated_behavior',
         importanceScore: Math.max(0.8, candidateImportance),
         emotionScore: intensity,
         memoryCandidate: candidate,
         admitted: true,
         reason: 'repeated-fact',
-      }
+      })
     }
     if (emotionSignal) {
-      return {
+      return withVisualFields({
         sourceType: 'emotion_event',
         importanceScore: Math.max(0.8, candidateImportance),
         emotionScore: intensity ?? 0.8,
         memoryCandidate: candidate,
         admitted: true,
         reason: '明显情绪事件',
-      }
+      })
     }
 
     if (inputMissing) return conservativeClassification()
-    const sourceType = hadVision || vision ? 'pet_vision' : 'owner_chat'
+    const sourceType = hadVision || vision || visual.visionId || visual.attachmentId || visual.visualObservation.length || visual.visualFocus
+      ? 'pet_vision'
+      : 'owner_chat'
     // The importance score stays low, but the row is admitted.
     //
     // Rejecting it here makes `repeated_behavior` unreachable: the first
@@ -268,14 +354,14 @@ export function classifyExperience(input = null) {
     // "throw the evidence away" — the consolidator's importance gate is what keeps
     // one-off events out of PetMemory.
     const importanceScore = Math.max(candidateImportance, sourceType === 'pet_vision' ? 0.6 : 0.2)
-    return {
+    return withVisualFields({
       sourceType,
       importanceScore,
       emotionScore: intensity,
       memoryCandidate: candidate,
       admitted: true,
       reason: sourceType === 'pet_vision' ? 'visual-experience' : 'low-importance-experience',
-    }
+    })
   } catch {
     return conservativeClassification()
   }
@@ -290,19 +376,32 @@ function parseMemoryCandidate(value) {
   }
 }
 
+function normalizeConversationKey(value) {
+  if (typeof value !== 'string') return null
+  const key = value.trim()
+  return key ? key.slice(0, 120) : null
+}
+
 function rowToExperience(row) {
   if (!row) return null
+  const visualObservation = safeVisualObservations(parseMemoryCandidate(row.visual_observation))
   return {
     id: Number(row.id),
     createdAt: Number(row.created_at),
     sourceType: row.source_type,
     conversationId: row.conversation_id ?? null,
+    conversationKey: row.conversation_key ?? null,
     messageId: row.message_id ?? null,
     actorId: row.actor_id ?? null,
     content: row.content,
     importanceScore: Number(row.importance_score),
     emotionScore: row.emotion_score === null || row.emotion_score === undefined ? null : Number(row.emotion_score),
     memoryCandidate: parseMemoryCandidate(row.memory_candidate),
+    visionSummary: row.vision_summary ?? null,
+    visionId: row.vision_id ?? null,
+    attachmentId: row.attachment_id ?? null,
+    visualObservation,
+    visualFocus: row.visual_focus ?? null,
     processed: Number(row.processed) === 1,
     processedAt: row.processed_at === null || row.processed_at === undefined ? null : Number(row.processed_at),
   }
@@ -329,6 +428,13 @@ export class ExperienceBuffer {
     // Seed the occurrence counter from rows already on disk so a restart does
     // not reset "how many times has this happened" back to one.
     this.occurrenceSignatures = new Map()
+    // A new buffer instance is a safe process-session boundary: an automatic
+    // key must never accidentally join rows written by an old process.
+    // Explicit conversationKey values remain stable across restarts.
+    this.autoSessionNamespace = randomUUID()
+    this.autoSessionNumber = 0
+    this.autoSessionLastAt = null
+    this.autoSessionKey = null
   }
 
   /**
@@ -368,31 +474,25 @@ export class ExperienceBuffer {
       await mkdir(this.root, { recursive: true })
       const db = new DatabaseSync(this.dbPath)
       try {
+        const ddl = experienceBufferSchemaDdl()
+        db.exec(`PRAGMA busy_timeout = 1000;\n${ddl.table}`)
+        const columns = new Set(db.prepare(`PRAGMA table_info(${EXPERIENCE_BUFFER_TABLE})`).all().map((row) => row.name))
+        // SQLite lacks portable ADD COLUMN IF NOT EXISTS. Inspecting first
+        // keeps this additive upgrade safe on old databases and repeated starts.
+        for (const { name, definition } of ddl.addableColumns) {
+          if (columns.has(name)) continue
+          db.exec(`ALTER TABLE ${EXPERIENCE_BUFFER_TABLE} ADD COLUMN ${name} ${definition}`)
+          columns.add(name)
+        }
         db.exec(`
-          PRAGMA busy_timeout = 1000;
-          CREATE TABLE IF NOT EXISTS experience_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at INTEGER NOT NULL,
-            source_type TEXT NOT NULL,
-            conversation_id TEXT,
-            message_id TEXT,
-            actor_id TEXT,
-            content TEXT NOT NULL,
-            importance_score REAL NOT NULL DEFAULT 0,
-            emotion_score REAL,
-            memory_candidate TEXT,
-            processed INTEGER NOT NULL DEFAULT 0,
-            processed_at INTEGER
-          );
-          CREATE INDEX IF NOT EXISTS experience_events_created_at_idx
-            ON experience_events(created_at);
-          CREATE INDEX IF NOT EXISTS experience_events_processed_id_idx
-            ON experience_events(processed, id);
-          CREATE INDEX IF NOT EXISTS experience_events_source_type_idx
-            ON experience_events(source_type);
-          CREATE INDEX IF NOT EXISTS experience_events_conversation_id_idx
-            ON experience_events(conversation_id);
+          ${ddl.indexes.join('\n')}
+          ${ddl.meta}
         `)
+        db.prepare(`
+          INSERT INTO ${EXPERIENCE_BUFFER_META_TABLE} (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+          WHERE ${EXPERIENCE_BUFFER_META_TABLE}.value IS NOT excluded.value
+        `).run(EXPERIENCE_BUFFER_SCHEMA_VERSION_KEY, String(EXPERIENCE_BUFFER_SCHEMA_VERSION))
         await chmod(this.dbPath, 0o600)
         this.db = db
         this.initialized = true
@@ -423,6 +523,18 @@ export class ExperienceBuffer {
     return id
   }
 
+  #automaticConversationKey(createdAt) {
+    const canContinue = this.autoSessionLastAt !== null &&
+      createdAt >= this.autoSessionLastAt &&
+      createdAt - this.autoSessionLastAt <= EXPERIENCE_BUFFER_SESSION_IDLE_TIMEOUT_MS
+    if (!canContinue || !this.autoSessionKey) {
+      this.autoSessionNumber += 1
+      this.autoSessionKey = `auto:${this.autoSessionNamespace}:${this.autoSessionNumber}`
+    }
+    this.autoSessionLastAt = createdAt
+    return this.autoSessionKey
+  }
+
   record(input = {}) {
     try {
       if (!this.initialized || !this.db) {
@@ -431,6 +543,8 @@ export class ExperienceBuffer {
       const {
         turnId = null,
         conversationId = turnId,
+        conversationKey: requestedConversationKey = null,
+        sessionKey: requestedSessionKey = null,
         messageId = null,
         actor = 'owner',
         actorId = actor,
@@ -438,6 +552,10 @@ export class ExperienceBuffer {
         assistantText = '',
         hadVision = false,
         visionSummary = null,
+        visionId = null,
+        attachmentId = null,
+        visualObservation = [],
+        visualFocus = null,
         emotion = null,
         modelCandidate = null,
         explicitMemoryRequest = false,
@@ -446,6 +564,8 @@ export class ExperienceBuffer {
       const owner = safeText(ownerText, { allowNull: false })
       const assistant = safeText(assistantText, { allowNull: false })
       const conversationKey = conversationId === null || conversationId === undefined ? null : String(conversationId)
+      const explicitConversationKey = normalizeConversationKey(requestedConversationKey) ??
+        normalizeConversationKey(requestedSessionKey)
       const messageKey = messageId === null || messageId === undefined ? null : String(messageId)
       const actorKey = actorId === null || actorId === undefined
         ? null
@@ -459,6 +579,10 @@ export class ExperienceBuffer {
         assistantText: assistant,
         hadVision,
         visionSummary,
+        visionId,
+        attachmentId,
+        visualObservation,
+        visualFocus,
         emotion,
         modelCandidate,
         explicitMemoryRequest,
@@ -475,50 +599,68 @@ export class ExperienceBuffer {
       const content = contentParts.join('\n').slice(0, TEXT_MAX_LENGTH)
       if (!content) return { ok: true, id: null, ...conservativeClassification('empty-content') }
       const createdAt = this.#now()
+      const stableConversationKey = explicitConversationKey ?? this.#automaticConversationKey(createdAt)
       const memoryCandidate = classification.memoryCandidate === null
         ? null
         : JSON.stringify(classification.memoryCandidate)
+      const storedVisualObservation = classification.visualObservation.length > 0
+        ? JSON.stringify(classification.visualObservation)
+        : null
       const id = this.#recordId()
       let result
       if (id === null) {
         result = this.db.prepare(`
           INSERT INTO experience_events(
-            created_at, source_type, conversation_id, message_id, actor_id, content,
-            importance_score, emotion_score, memory_candidate, processed, processed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+            created_at, source_type, conversation_id, conversation_key, message_id, actor_id, content,
+            importance_score, emotion_score, memory_candidate, vision_summary, vision_id,
+            attachment_id, visual_observation, visual_focus, processed, processed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
         `).run(
           createdAt,
           classification.sourceType,
           conversationKey,
+          stableConversationKey,
           messageKey,
           actorKey,
           content,
           classification.importanceScore,
           classification.emotionScore,
           memoryCandidate,
+          classification.visionSummary,
+          classification.visionId,
+          classification.attachmentId,
+          storedVisualObservation,
+          classification.visualFocus,
         )
       } else {
         result = this.db.prepare(`
           INSERT INTO experience_events(
-            id, created_at, source_type, conversation_id, message_id, actor_id, content,
-            importance_score, emotion_score, memory_candidate, processed, processed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+            id, created_at, source_type, conversation_id, conversation_key, message_id, actor_id, content,
+            importance_score, emotion_score, memory_candidate, vision_summary, vision_id,
+            attachment_id, visual_observation, visual_focus, processed, processed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
         `).run(
           id,
           createdAt,
           classification.sourceType,
           conversationKey,
+          stableConversationKey,
           messageKey,
           actorKey,
           content,
           classification.importanceScore,
           classification.emotionScore,
           memoryCandidate,
+          classification.visionSummary,
+          classification.visionId,
+          classification.attachmentId,
+          storedVisualObservation,
+          classification.visualFocus,
         )
       }
       const insertedId = id ?? Number(result.lastInsertRowid)
       if (!positiveInteger(insertedId)) throw new TypeError('PET_EXPERIENCE_BUFFER_ID_INVALID')
-      return { ok: true, id: insertedId, ...classification }
+      return { ok: true, id: insertedId, conversationKey: stableConversationKey, ...classification }
     } catch {
       return { ok: false, id: null, sourceType: 'owner_chat', importanceScore: 0, admitted: false, reason: EXPERIENCE_BUFFER_RECORD_FAILED }
     }

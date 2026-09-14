@@ -19,11 +19,40 @@ export const REFLECTION_MIN_NEW_RAW_MEMORIES = 2
 export const REFLECTION_MIN_NEW_MEMORIES = REFLECTION_MIN_NEW_RAW_MEMORIES
 export const REFLECTION_OLDEST_UNREFLECTED_AGE_MS = 60 * 60 * 1000
 
-export const DEEP_DREAM_MIN_SLEEP_MS = 15 * 60 * 1000
-export const DEEP_DREAM_SLEEP_MIN_MS = DEEP_DREAM_MIN_SLEEP_MS
+/**
+ * Async states. The pet counts as asleep while it is sleeping, dozing off or
+ * resting; only the genuinely awake states (idle / walk / curious / happy) end a
+ * sleep episode.
+ */
+export const DEEP_DREAM_ASLEEP_STATES = Object.freeze(['sleep', 'sleepy', 'rest'])
+
+/**
+ * Sleep thresholds are measured as *time since the pet was last awake*, not as
+ * time spent in the literal `sleep` state.
+ *
+ * Why (measured on the real state engine, 2026-09-13): `sleep` begins above
+ * sleepiness 0.86, and the sleep branch drains sleepiness 4.2x faster than idling
+ * adds it, so the pet oscillates `sleepy -> sleep -> sleepy` at roughly 3.4 ticks
+ * to 1. Fragmented runs of a few ticks can never reach any continuity threshold,
+ * which starved Deep Dream for six days while Reflection - which has no sleep
+ * gate - kept running normally. Counting from last-wake treats one dozy stretch
+ * as one sleep episode, the way a sleeping animal actually behaves.
+ *
+ * The lowered values keep a normal night comfortable instead of marginal while
+ * the 30-minute success cooldown still bounds how often Dream can run.
+ */
+export const DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS = 8 * 60 * 1000
+export const DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS = 20 * 60 * 1000
+
+// Kept for callers that imported the old names. The semantics changed from
+// "continuous `sleep` state" to "continuous time asleep"; the values follow the
+// new (lower) thresholds so the two sets can never disagree.
+export const DEEP_DREAM_MIN_SLEEP_MS = DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS
+export const DEEP_DREAM_SLEEP_MIN_MS = DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS
+export const DEEP_DREAM_DAYTIME_SLEEP_MS = DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS
+
 export const DEEP_DREAM_NIGHT_START_MINUTES = 22 * 60 + 30
 export const DEEP_DREAM_NIGHT_END_MINUTES = 8 * 60
-export const DEEP_DREAM_DAYTIME_SLEEP_MS = 45 * 60 * 1000
 export const DEEP_DREAM_SUCCESS_COOLDOWN_MS = 30 * 60 * 1000
 
 export const MICRO_REFLECTION_MIN_INTERVAL_MS = REFLECTION_MIN_INTERVAL_MS
@@ -345,6 +374,8 @@ export class DreamScheduler {
     reflectionMinIntervalMs = null,
     reflectionIntervalMs = null,
     deepDreamSuccessCooldownMs = null,
+    minSleepContinuityMs = null,
+    daytimeMinSleepContinuityMs = null,
     deepDreamCooldownMs = null,
     sleepSince = null,
     lastReflectionAt = null,
@@ -375,12 +406,22 @@ export class DreamScheduler {
       ? Math.max(DEEP_DREAM_SUCCESS_COOLDOWN_MS, Number(requestedDeepCooldown))
       : DEEP_DREAM_SUCCESS_COOLDOWN_MS
 
+    // Injectable so the boundary can be tested without waiting on wall-clock
+    // sleep; production always uses the exported defaults.
+    this.minSleepContinuityMs = Number.isFinite(Number(minSleepContinuityMs)) && Number(minSleepContinuityMs) > 0
+      ? Number(minSleepContinuityMs)
+      : DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS
+    this.daytimeMinSleepContinuityMs = Number.isFinite(Number(daytimeMinSleepContinuityMs)) && Number(daytimeMinSleepContinuityMs) > 0
+      ? Number(daytimeMinSleepContinuityMs)
+      : DEEP_DREAM_DAYTIME_SLEEP_CONTINUITY_MS
+
     // These fields are intentionally not persisted. PetRuntime owns durable
     // state; the remaining scheduler state is only local business idempotency.
     this.inFlight = false
     this.reflectionInFlight = false
     this.deepDreamNextAttemptAt = null
     this.lastReflectionAt = parseTimestamp(lastReflectionAt)
+    // Start of the current sleep episode, in the "time since last awake" sense.
     this.sleepSince = parseTimestamp(sleepSince)
     this.lastObservedState = null
   }
@@ -408,11 +449,13 @@ export class DreamScheduler {
   observeState({ state = null, now = undefined } = {}) {
     const timestamp = normalizeTime(now, this.clock)
     const current = typeof state === 'string' ? state : state?.current
-    const observedSleepSince = this.#observeSleep(state, current, timestamp)
+    const observedSleepSince = this.#observeSleepContinuity(state, current, timestamp)
 
     return {
       current,
+      asleep: DEEP_DREAM_ASLEEP_STATES.includes(current),
       sleepSince: observedSleepSince,
+      sleepContinuitySince: observedSleepSince,
     }
   }
 
@@ -439,8 +482,8 @@ export class DreamScheduler {
     }
 
     const current = typeof state === 'string' ? state : state?.current
-    if (!forced && current !== 'sleep') {
-      return skipped('not-sleep')
+    if (!forced && !DEEP_DREAM_ASLEEP_STATES.includes(current)) {
+      return skipped('not-asleep')
     }
 
     const timestamp = normalizeTime(now, this.clock)
@@ -561,18 +604,23 @@ export class DreamScheduler {
       if (sleepSince !== undefined) this.sleepSince = parseTimestamp(sleepSince)
 
       const current = typeof state === 'string' ? state : state?.current
-      const observedSleepSince = this.#observeSleep(state, current, timestamp)
+      const observedSleepSince = this.#observeSleepContinuity(state, current, timestamp)
 
-      if (!forced && current !== 'sleep') {
-        return gateSkipped('deep-dream', 'not-sleep')
+      // Asleep means sleep | sleepy | rest: the pet does not have to be in the
+      // literal `sleep` state, it must simply not have woken up.
+      if (!forced && !DEEP_DREAM_ASLEEP_STATES.includes(current)) {
+        return gateSkipped('deep-dream', 'not-asleep', {
+          state: current,
+        })
       }
 
       if (
         !forced &&
-        (observedSleepSince === null || timestamp - observedSleepSince < DEEP_DREAM_MIN_SLEEP_MS)
+        (observedSleepSince === null || timestamp - observedSleepSince < this.minSleepContinuityMs)
       ) {
-        return gateSkipped('deep-dream', 'sleep-duration-not-met', {
-          sleepSince: observedSleepSince,
+        return gateSkipped('deep-dream', 'sleep-continuity-not-met', {
+          sleepContinuitySince: observedSleepSince,
+          requiredMs: this.minSleepContinuityMs,
         })
       }
 
@@ -600,16 +648,17 @@ export class DreamScheduler {
         }
       }
 
-      // A daytime nap is allowed only after 45 minutes of continuous sleep.
-      // Night runs need only the 15-minute sleep threshold above.
+      // A daytime nap needs a longer dozy stretch than a night run. Both are
+      // measured since the pet was last awake.
       if (!forced && !isNight(timestamp, this.timeZone)) {
         const sleepFor = observedSleepSince === null
           ? 0
           : Math.max(0, timestamp - observedSleepSince)
 
-        if (sleepFor < DEEP_DREAM_DAYTIME_SLEEP_MS) {
-          return gateSkipped('deep-dream', 'daytime-sleep-duration-not-met', {
-            sleepSince: observedSleepSince,
+        if (sleepFor < this.daytimeMinSleepContinuityMs) {
+          return gateSkipped('deep-dream', 'daytime-sleep-continuity-not-met', {
+            sleepContinuitySince: observedSleepSince,
+            requiredMs: this.daytimeMinSleepContinuityMs,
           })
         }
       }
@@ -737,24 +786,39 @@ export class DreamScheduler {
     return Math.max(timestamp, normalizeTime(undefined, this.clock))
   }
 
-  #observeSleep(state, current, timestamp) {
-    if (current !== 'sleep') {
+  /**
+   * Track one *sleep episode* rather than one literal `sleep` state.
+   *
+   * `sleepy`, `rest` and `sleep` all keep the episode alive; a genuinely awake
+   * state ends it. A brief dozy blip therefore no longer resets the clock, which
+   * is what let a fragmented state machine starve Deep Dream (see
+   * DEEP_DREAM_MIN_SLEEP_CONTINUITY_MS).
+   */
+  #observeSleepContinuity(state, current, timestamp) {
+    const wasAsleep = DEEP_DREAM_ASLEEP_STATES.includes(this.lastObservedState)
+    const suppliedSleepSince = sleepSinceFromState(state)
+
+    if (!DEEP_DREAM_ASLEEP_STATES.includes(current)) {
+      // Awake: remember when this awakening was seen, so the next sleep episode
+      // is measured from it rather than from its own first observed tick.
+      this.lastAwakeAt = Number.isFinite(timestamp) ? timestamp : this.lastAwakeAt
       this.sleepSince = null
       this.lastObservedState = current
       return null
     }
 
-    const suppliedSleepSince = sleepSinceFromState(state)
     if (suppliedSleepSince !== null) {
-      this.sleepSince = suppliedSleepSince
-    } else if (
-      this.sleepSince === null ||
-      this.lastObservedState !== 'sleep' ||
-      timestamp < this.sleepSince
-    ) {
-      // Root can omit sleepSince if it calls observeState/ticks throughout a
-      // sleep episode; the scheduler then tracks the start in RAM.
-      this.sleepSince = timestamp
+      // The runtime published the episode start; trust it over RAM inference.
+      this.sleepSince = timestamp < suppliedSleepSince ? timestamp : suppliedSleepSince
+    } else if (this.sleepSince === null || timestamp < this.sleepSince) {
+      // Entering sleep, or a fresh process that woke up already asleep: start the
+      // episode at the last observed awakening when there was one. The episode
+      // start must NOT advance on every later asleep tick, or a long sleep could
+      // never satisfy a continuity threshold.
+      const fromAwake = !wasAsleep && Number.isFinite(this.lastAwakeAt) && this.lastAwakeAt <= timestamp
+        ? this.lastAwakeAt
+        : timestamp
+      this.sleepSince = fromAwake
     }
 
     this.lastObservedState = current

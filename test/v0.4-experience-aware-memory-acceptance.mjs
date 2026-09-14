@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
-import { EXPERIENCE_BUFFER_DB_FILENAME } from '../src/experience/experience-buffer.js'
+import { EXPERIENCE_BUFFER_DB_FILENAME } from '../src/experience/experience-buffer-schema.js'
 
 /**
  * Experience-aware Memory Pipeline — end to end acceptance.
@@ -91,11 +91,40 @@ async function withRuntime(run, { remember = false } = {}) {
   const runtime = new PetRuntime({ sandboxRoot: root })
   try {
     await runtime.initialize()
+    // `pet-runtime.js` injects the real gate into the consolidator itself; nothing
+    // is patched here, so these cases exercise the same wiring production uses.
     runtime.brain = stubBrain({ remember })
     await run({ runtime, root })
   } finally {
     try { runtime.close() } catch {}
     await rm(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Send one owner turn and then move the clock past the session idle gap, so the
+ * next turn lands in the *next* conversation.
+ *
+ * Consolidation may only claim "the same thing happened twice" across different
+ * conversations, and the session key rotates on an idle gap rather than on every
+ * turn. Two lines typed in one sitting are one conversation and must not become a
+ * life pattern, so a fixture that wants a repeatable pattern has to actually
+ * leave and come back.
+ */
+async function chatInNewSession(runtime, text) {
+  const result = await runtime.chat(text)
+  const gap = Math.max(60_000, Number(runtime.pipelineConfig.ownerSessionGapMs) || 30 * 60 * 1000)
+  runtime.lastOwnerTurnAt = Date.now() - gap - 1000
+  return result
+}
+
+function countExperiences(root, { processed = null } = {}) {
+  const db = openBufferDb(root)
+  try {
+    const where = processed === null ? '' : ` WHERE processed = ${processed === true ? 1 : 0}`
+    return Number(db.prepare(`SELECT COUNT(*) AS n FROM experience_events${where}`).get().n)
+  } finally {
+    db.close()
   }
 }
 
@@ -185,34 +214,50 @@ async function caseExplicitBirthdayEntersQueue() {
   })
 }
 
-/** Case 4 — reflection must consume the buffer and mark experiences processed. */
+/** Case 4 — nothing is consumed until something actually looked at it. */
 async function caseReflectionConsumesBuffer() {
   await withRuntime(async ({ runtime, root }) => {
     for (const line of ['黑莓今天睡沙发', '黑莓又睡沙发了', '黑莓还是睡沙发', '花花陪主人玩了一会儿']) {
       await runtime.chat(line)
     }
 
-    const before = openBufferDb(root)
-    let pendingBefore = 0
-    try {
-      pendingBefore = Number(before.prepare('SELECT COUNT(*) AS n FROM experience_events WHERE processed = 0').get().n)
-    } finally {
-      before.close()
-    }
+    const pendingBefore = countExperiences(root, { processed: false })
     assert.ok(pendingBefore >= 4, `expected pending experiences before reflection, got ${pendingBefore}`)
 
-    const reflection = await runtime.runReflectionNow()
-    assert.ok(reflection, 'reflection must return a result')
-
-    const after = openBufferDb(root)
-    try {
-      const pending = Number(after.prepare('SELECT COUNT(*) AS n FROM experience_events WHERE processed = 0').get().n)
-      const processed = Number(after.prepare('SELECT COUNT(*) AS n FROM experience_events WHERE processed = 1').get().n)
-      assert.ok(processed >= 1, 'reflection output must include consumed experiences')
-      assert.ok(pending < pendingBefore, `pending experiences must decrease (before=${pendingBefore} after=${pending})`)
-    } finally {
-      after.close()
+    // Watch every consumption, so these assertions describe what the lifecycle
+    // actually marked rather than what it reported.
+    const marked = []
+    const realMark = runtime.experienceBuffer.markProcessed.bind(runtime.experienceBuffer)
+    runtime.experienceBuffer.markProcessed = async (ids, options) => {
+      marked.push(...ids.map(Number))
+      return realMark(ids, options)
     }
+
+    // Four lines in one sitting are one conversation, so consolidation forms no
+    // stable pattern and correctly consumes nothing: a day of ordinary chat is not
+    // a life pattern, and it now stays in the buffer for Reflection to read. Before
+    // this fix, the tick's consolidation pass swallowed the whole pending set here,
+    // and Reflection then found an empty buffer to reflect on.
+    // (Precise cross-session, cross-day promotion is pinned with an explicit clock
+    // in `v0.4-experience-consolidator.mjs`; the completed-pass marking contract is
+    // pinned in `v0.4-reflection-consumption.mjs`.)
+    const consolidation = await runtime.consolidateExperiences()
+    assert.equal(consolidation.ok, true)
+    assert.deepEqual(marked, [], 'a pass that wrote nothing must consume nothing')
+    assert.equal(
+      countExperiences(root, { processed: false }),
+      pendingBefore,
+      'pending experiences must survive a no-pattern pass',
+    )
+
+    // A reflection that does not run consumes nothing either, however much is
+    // pending. This is the second half of the audit's finding.
+    const skipped = await runtime.runReflectionNow()
+    assert.equal(skipped.status, 'skipped')
+    assert.equal(skipped.consumedExperienceCount, 0)
+    assert.deepEqual(marked, [], 'a skipped reflection must consume nothing')
+    assert.equal(countExperiences(root, { processed: false }), pendingBefore)
+    assert.equal(countExperiences(root, { processed: true }), 0)
     console.log('CASE_4_REFLECTION_CONSUMES_BUFFER=PASS')
   })
 }

@@ -7,6 +7,7 @@ import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 import { BELIEF_OUTPUT_INSTRUCTION, formatBeliefContext, groundedBeliefReply } from '../memory/current-belief.js'
+import { planFinalRequestBudget, CONTEXT_OUTPUT_SAFETY_MARGIN_TOKENS } from '../conversation/context-budget.js'
 
 export const PET_VISUAL_STEP_RESPONSE_SCHEMA = Object.freeze({
   type: 'object', additionalProperties: false,
@@ -77,6 +78,37 @@ export function validateVisualStepResponse(value, { candidateIds = [], forceAnsw
   }
 }
 
+/**
+ * Validate the perception-only response used when the pet re-opens a remembered
+ * picture while consolidating memory.
+ *
+ * Hard invariants kept from the interactive validator: the observation must be
+ * non-empty, safe to store (no prompts, reasoning or payloads), and within the
+ * 180-character budget; the focus stays within 120. Dropped on purpose: `action`,
+ * `nextVisualId` and `replyMessages`, because a memory review neither navigates
+ * nor speaks to the owner — and the real model reliably supplies the perception
+ * while those protocol fields drift.
+ */
+export function validateMemoryReviewResponse(value, { requireObservation = true } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidVisualStep('object-required')
+  if (typeof value.observation !== 'string') return invalidVisualStep('observation-invalid')
+  const observation = value.observation.trim()
+  if (!observation && requireObservation) return invalidVisualStep('observation-invalid')
+  if (observation.length > 180) return invalidVisualStep('observation-invalid')
+  if (observation && !sanitizeSafeTraceText(observation, 180)) return invalidVisualStep('observation-unsafe')
+  const rawFocus = typeof value.focus === 'string' ? value.focus.trim() : ''
+  if (rawFocus.length > 120) return invalidVisualStep('focus-invalid')
+  const focus = rawFocus && sanitizeSafeTraceText(rawFocus, 120) ? rawFocus : ''
+  return {
+    ok: true,
+    observation,
+    action: 'answer',
+    nextVisualId: '',
+    focus,
+    replyMessages: [],
+  }
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -97,6 +129,33 @@ function monotonicNow() {
 
 function elapsedMs(startedAt) {
   return Math.max(0, Math.round(monotonicNow() - startedAt))
+}
+
+function recentMessagesToTurns(messages = []) {
+  const turns = []
+  let pendingUser = null
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || (message.role !== 'user' && message.role !== 'assistant')) continue
+    const content = typeof message.content === 'string' ? message.content : ''
+    if (message.role === 'user') {
+      if (pendingUser !== null) turns.push({ user: pendingUser, assistant: '' })
+      pendingUser = content
+    } else if (pendingUser !== null) {
+      turns.push({ user: pendingUser, assistant: content })
+      pendingUser = null
+    } else {
+      turns.push({ user: '', assistant: content })
+    }
+  }
+  if (pendingUser !== null) turns.push({ user: pendingUser, assistant: '' })
+  return turns
+}
+
+function turnsToRecentMessages(turns = []) {
+  return turns.flatMap(({ user, assistant }) => [
+    ...(user ? [{ role: 'user', content: user }] : []),
+    ...(assistant ? [{ role: 'assistant', content: assistant }] : []),
+  ])
 }
 
 async function chatWithBoundedQueueRetry(client, request) {
@@ -128,7 +187,7 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false }) {
+  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false, memoryReview = false }) {
     const visionImage = normalizeVisionImage(image)
     if (!visionImage) throw new LocalBrainApiError('visual step requires an image', { code: 'PET_INVALID_VISION_IMAGE' })
     const candidates = Array.isArray(candidatePool) ? candidatePool : []
@@ -149,7 +208,7 @@ export class LocalBrain {
       const safeFocus = sanitizeSafeTraceText(focus, 120)
       return safeSummary ? `${visualId}: ${safeSummary}${safeFocus ? `（重点：${safeFocus}）` : ''}` : ''
     }).filter(Boolean).join('\n') || '- 暂无'
-    const instruction = `你是李花花，正在分步看图片。只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+    const instruction = `你是李花花，正在分步看图片。只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
     const startedAt = monotonicNow()
     let requestId = null
@@ -164,7 +223,14 @@ export class LocalBrain {
       if (typeof raw !== 'string' || !raw.trim()) throw new LocalBrainApiError('visual step missing content', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId })
       let parsed
       try { parsed = JSON.parse(raw) } catch { throw new LocalBrainApiError('visual step invalid json', { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE', requestId }) }
-      const checked = validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer })
+      // A memory review only needs the perception, so it validates the security
+      // invariants (safe text, length) instead of the interactive protocol shape
+      // (action/nextVisualId/reply bubbles). Measured against the real model, the
+      // observation is reliable while those protocol fields drift; re-inspection is
+      // a background tidy-up and must not fail because of a bubble count.
+      const checked = memoryReview
+        ? validateMemoryReviewResponse(parsed)
+        : validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer })
       if (!checked.ok) throw new LocalBrainApiError(`invalid visual step: ${checked.reason}`, { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_STEP', requestId })
       return { ...checked, requestId, reasoning: { effort: PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
     } catch (error) {
@@ -215,7 +281,7 @@ export class LocalBrain {
       }) ?? null
       : null
 
-    const messages = buildPetMessages({
+    let messages = buildPetMessages({
       identity,
       state,
       stableRules: rules,
@@ -238,6 +304,35 @@ export class LocalBrain {
       content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}`,
     }
 
+    const maxTokens = 768
+    const recentTurns = recentMessagesToTurns(messages.slice(1, -1))
+    const budget = planFinalRequestBudget({
+      system: messages[0].content,
+      memories: [],
+      recentTurns,
+      currentUser: messages.at(-1),
+      outputReserveTokens: maxTokens + CONTEXT_OUTPUT_SAFETY_MARGIN_TOKENS,
+      contextWindowTokens: this.config.contextWindowTokens,
+    })
+    this.logger?.info?.(
+      `REQUEST_CONTEXT_OVERFLOW=${budget.overflow ? 'YES' : 'NO'} `
+      + `requestBudget=${JSON.stringify({
+        estimatedTokens: budget.estimatedTokens,
+        contextWindowTokens: budget.contextWindowTokens,
+        dropped: budget.dropped,
+      })}`,
+    )
+    if (budget.overflow) {
+      return {
+        ok: false,
+        unavailable: false,
+        reason: 'context-budget-exceeded',
+        petLine: '花花脑袋里的东西太多啦，主人可以分几次告诉花花。',
+        requestBudget: budget,
+      }
+    }
+    messages = [messages[0], ...turnsToRecentMessages(budget.turns), messages.at(-1)]
+
     try {
       // Start immediately before the actual Local Brain call. This includes
       // API queue admission and bounded QUEUE_FULL backoff, but excludes image
@@ -252,7 +347,7 @@ export class LocalBrain {
         // the structured JSON reply. Keep the visible Pet reply short via the
         // prompt/parser while leaving enough room for low/medium reasoning to
         // finish instead of returning an empty content field at length.
-        maxTokens: 768,
+        maxTokens,
         responseFormat: {
           type: 'json_object',
           schema: PET_CHAT_RESPONSE_SCHEMA,

@@ -34,6 +34,42 @@ assert.equal(validateMemoryCandidate({ ...candidate, confidence: 0.3 }, '我最�
 assert.equal(validateMemoryCandidate({ ...candidate, evidence: '不存在的证据' }, '我最喜欢蓝色。').accepted, false)
 assert.equal(validateMemoryCandidate(candidate, '别记住这个，我最喜欢蓝色。').accepted, false)
 
+// A candidate whose keywords are all ungrounded is refused outright, not
+// silently stripped. Accepting it would store a row with no retrieval handles —
+// and, because `MemoryGate` only consults its explicit-owner fallback when
+// validation *fails*, it would also let a model that invented its citation write
+// `主人说：一定要记住哦` as a durable fact. That is what the previous behaviour did.
+const ungroundedKeywords = validateMemoryCandidate({
+  ...candidate,
+  content: '主人明确说了一句话。',
+  evidence: '一定要记住哦',
+  keywords: ['黑莓', '猫'],
+}, '一定要记住哦')
+assert.equal(ungroundedKeywords.accepted, false)
+assert.equal(ungroundedKeywords.reason, 'keywords-ungrounded')
+assert.equal(ungroundedKeywords.candidate, null)
+
+// Declaring no keywords at all is not the same as inventing them: the explicit
+// owner path builds its candidate from the owner's own words and has no keyword
+// source at all, so it must still be accepted.
+const noKeywords = validateMemoryCandidate({
+  ...candidate,
+  content: '主人明确说了一句话。',
+  evidence: '一定要记住哦',
+  keywords: [],
+}, '一定要记住哦')
+assert.equal(noKeywords.accepted, true)
+assert.deepEqual(noKeywords.candidate.keywords, [])
+
+const groundedKeywords = validateMemoryCandidate({
+  ...candidate,
+  content: '主人家的猫叫黑莓。',
+  evidence: '我们家的猫猫叫黑莓',
+  keywords: ['黑莓', '猫猫'],
+}, '我们家的猫猫叫黑莓')
+assert.equal(groundedKeywords.accepted, true)
+assert.deepEqual(groundedKeywords.candidate.keywords, ['黑莓', '猫猫'])
+
 const structured = JSON.stringify({
   reply: '记住啦，蓝色很好看。',
   memory: candidate,

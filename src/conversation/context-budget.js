@@ -11,6 +11,8 @@ import {
 export const SHORT_TERM_CONTEXT_TURNS = SHORT_TERM_CONTEXT_TURNS_DEFAULT
 export const CONTEXT_BUDGET_DEFAULT_CHARS = CONTEXT_BUDGET_CHARS_DEFAULT
 export const CONTEXT_PRIORITY = Object.freeze({ HIGH: 3, MEDIUM: 2, LOW: 1 })
+export const CONTEXT_WINDOW_TOKENS_FALLBACK = 16_384
+export const CONTEXT_OUTPUT_SAFETY_MARGIN_TOKENS = 256
 
 const INVALID_TURNS_REASON = 'invalid-turns-input'
 const INVALID_OPTION_REASON = 'invalid-option-fallback'
@@ -204,4 +206,146 @@ export function selectContextTurns(turns, options = {}) {
     approxTokens: Math.ceil(totalChars / 2),
   }
   return result
+}
+
+function contentText(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return ''
+      if (typeof item.text === 'string') return item.text
+      if (typeof item.content === 'string') return item.content
+      if (Array.isArray(item.content)) return contentText(item.content)
+      if (item.type === 'image_url' || item.image_url || item.type === 'image') return '\u0000PET_IMAGE_CONTEXT\u0000'
+      return ''
+    }).join(' ')
+  }
+  if (content && typeof content === 'object') return contentText([content])
+  return textOf(content)
+}
+
+/**
+ * Conservative, dependency-free Qwen planning estimate. It intentionally
+ * overestimates CJK and short fragments, then adds message framing overhead;
+ * the Local Brain tokenizer remains the source of truth for measurement.
+ */
+export function estimateContextTokens(value) {
+  const text = contentText(value)
+  if (!text) return 0
+  const imageCount = (text.match(/\u0000PET_IMAGE_CONTEXT\u0000/gu) ?? []).length
+  const textWithoutImages = text.replace(/\u0000PET_IMAGE_CONTEXT\u0000/gu, '')
+  let cjk = 0
+  let ascii = 0
+  let other = 0
+  for (const character of textWithoutImages) {
+    if (/\p{Script=Han}/u.test(character)) cjk += 1
+    else if (/^[\x00-\x7F]$/u.test(character)) ascii += 1
+    else other += 1
+  }
+  // A single Qwen vision input can occupy substantially more context than its
+  // short JSON marker; reserve a conservative image budget for the final guard.
+  return imageCount * 4_096 + Math.ceil(cjk * 1.15 + ascii / 3.5 + other * 1.1)
+}
+
+function messageTokens(message) {
+  return estimateContextTokens(message?.content ?? message) + 8
+}
+
+function normalizeFinalTurns(turns) {
+  if (!Array.isArray(turns)) return []
+  return turns.filter((turn) => isTurn(turn)).map((turn) => ({
+    user: textOf(turn.user),
+    assistant: textOf(turn.assistant),
+  }))
+}
+
+function finalTurnTokens(turn) {
+  return estimateContextTokens(turn.user) + estimateContextTokens(turn.assistant) + 16
+}
+
+function finalPriority(turn) {
+  return CONTEXT_PRIORITY[classifyTurnPriority(turn)]
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const number = Number(value)
+  return Number.isInteger(number) && number > 0 ? number : fallback
+}
+
+/**
+ * Plan the final request payload against the model's real context window.
+ * Turns are removed in LOW -> MEDIUM -> HIGH / oldest-first order, while the
+ * newest reserve is protected until every older candidate has been removed.
+ * If even the system/current request cannot fit, `overflow` is true and the
+ * caller must not send it.
+ */
+export function planFinalRequestBudget({
+  system = '',
+  memories = [],
+  recentTurns = [],
+  currentUser = '',
+  outputReserveTokens = 1,
+  contextWindowTokens = CONTEXT_WINDOW_TOKENS_FALLBACK,
+  reservedTurns = 6,
+} = {}) {
+  const window = normalizePositiveInteger(contextWindowTokens, CONTEXT_WINDOW_TOKENS_FALLBACK)
+  const outputReserve = normalizePositiveInteger(outputReserveTokens, CONTEXT_OUTPUT_SAFETY_MARGIN_TOKENS)
+  const turns = normalizeFinalTurns(recentTurns)
+  const reserveCount = Math.min(normalizePositiveInteger(reservedTurns, 6), turns.length)
+  const reservedStart = turns.length - reserveCount
+  const systemTokens = messageTokens({ content: system })
+  const memoryTokens = (Array.isArray(memories) ? memories : [memories])
+    .reduce((total, memory) => total + messageTokens({ content: memory?.content ?? memory }), 0)
+  const currentTokens = messageTokens({ content: currentUser })
+  const baseTokens = systemTokens + memoryTokens + currentTokens + outputReserve
+  const turnEntries = turns.map((turn, index) => ({
+    index,
+    turn,
+    priority: finalPriority(turn),
+    tokens: finalTurnTokens(turn),
+    reserved: index >= reservedStart,
+  }))
+  const dropped = []
+  let promptTokens = baseTokens + turnEntries.reduce((total, entry) => total + entry.tokens, 0)
+
+  const oldCandidates = turnEntries
+    .filter((entry) => !entry.reserved)
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)
+  for (const entry of oldCandidates) {
+    if (promptTokens <= window) break
+    promptTokens -= entry.tokens
+    dropped.push({ index: entry.index, priority: priorityName(entry.priority), reserved: false })
+    entry.dropped = true
+  }
+
+  // Last resort: even the protected recent reserve may be reduced, oldest
+  // HIGH first, then MEDIUM/LOW, so an oversized payload is never sent.
+  if (promptTokens > window) {
+    const reserveCandidates = turnEntries
+      .filter((entry) => entry.reserved && !entry.dropped)
+      .sort((left, right) => right.priority - left.priority || left.index - right.index)
+    for (const entry of reserveCandidates) {
+      if (promptTokens <= window) break
+      promptTokens -= entry.tokens
+      dropped.push({ index: entry.index, priority: priorityName(entry.priority), reserved: true })
+      entry.dropped = true
+    }
+  }
+
+  const kept = turnEntries
+    .filter((entry) => !entry.dropped)
+    .sort((left, right) => left.index - right.index)
+    .map((entry) => entry.turn)
+  const overflow = promptTokens > window
+  return {
+    turns: kept,
+    dropped,
+    overflow,
+    estimatedTokens: promptTokens,
+    promptTokens: Math.max(0, promptTokens - outputReserve),
+    outputReserveTokens: outputReserve,
+    contextWindowTokens: window,
+    reservedTurns: reserveCount,
+  }
 }

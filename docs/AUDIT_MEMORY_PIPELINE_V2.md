@@ -267,3 +267,34 @@ Root 当前方案正是 `ExperienceConsolidator` 的这条路径：只扫描 own
 2. 当前 config/documentation 使用 48 turns；任务文字多次提到 50 turns。当前 `recent-conversation.js:1-3` 明确上限 48，是否要把产品目标定为 48 还是 50，需要 Root 做产品决策。
 3. 当前 fallback 的 queue metadata `source=USER_EXPLICIT` 是 runtime/返回层 metadata；实际 PetMemory provenance 仍由 Gate/`rememberCandidate` 归一化。若后续审计或 UI 要按 source 精确区分显式请求，应先确认不改 schema 的 provenance 映射策略。
 4. Root 的 consolidator 将重复 owner text 提升为 confirmed raw row 的语义边界需要测试覆盖；这决定“经验”是事实证据还是仅供 Reflection 的非证据上下文。
+
+---
+
+# 附录 — 本审计各条的最终处置（2026-09-14，生产发布轮）
+
+**上面的正文是 Phase 0 的历史记录，刻意保留原文不改**：它描述的是当时的代码与
+当时的判断。下面是逐条的最终状态。
+
+| 审计条目 | 当时结论 | 最终处置 |
+|---|---|---|
+| §4 显式记忆为什么没形成 durable memory | 「低分候选」被 MemoryGate 拒绝 | 已修：显式请求走 `highPriorityMemoryCandidate()` 逐字原话路径；关键词接地（Blocker E） |
+| §A 显式记忆故障最终裁定 | 需要确认候选是否逐字原文 | 已修：`formatMemoryContent()` 以 evidence 为准，`主人说：<原话>`；模型摘要只作 content 候选 |
+| §B「必须新增」Experience Buffer | 待建 | 已建：`experience_events`（18 列）+ `experience_buffer_meta`；schema 单一真源 `src/experience/experience-buffer-schema.js`，version=2 |
+| §B「必须修改」Reflection 消费 Buffer | 待接 | 已接：`#runReflectionWithExperienceSnapshot()`（Blocker B）；只有 completed 才消费 |
+| §B「绝对不能动」PetMemory schema / archive / visual dedup | 不得改 | 已遵守：彩排验证 `PETMEMORY_SCHEMA_UNCHANGED` / `CONVERSATION_ARCHIVE_UNCHANGED` / `VISUAL_DB_UNCHANGED` = true |
+| **§B 对 consolidator 的 HIGH 风险评价** | 「若 evidence 不是 owner 逐字原文，或把视觉/系统推断标成 USER_STATEMENT，就会把推断伪装成 raw 证据」 | **该风险已消除（Blocker A）**：consolidator 不再直接 `memory.remember()`，改为经 `memoryGate.consider()` 写入，provenance 由 Gate 归一化为 `MEMORY_GATE_ACCEPTED`；视觉推断走独立的 `VISUAL_OBSERVATION` / `evidence='inferred'`，`isRawEvidenceRow()` 与 `isObservationEvidenceRow()` 双重排除出 raw root；consolidator 只扫描 owner 行（`cleanOwnerText()` 还会切掉 `花花回复：` 之后的宠物文本），且证据为 owner 逐字原文 |
+| §「未能确认的疑点」1（模型 response metadata 不可复原） | 无法验证 | **保持未验证**，本次发布不声称已还原历史触发比例 |
+| §「未能确认的疑点」2（48 还是 50 turns） | 需产品决策 | 已决策并落地：短期上下文目标为 **50 turns**，`PROMPT_MAX_CONTEXT_TURNS=50` 与广告窗口一致；`SHORT_TERM_CONTEXT_TURNS_DEFAULT=50` |
+| §「未能确认的疑点」3（`source=USER_EXPLICIT` 是返回层 metadata） | 需确认 provenance 映射 | 已确认且保持：`EXPLICIT_MEMORY_SOURCE='USER_EXPLICIT'` 仅出现在 Gate 返回值与运行时队列条目上，**不写入 PetMemory provenance**；PetMemory 侧仍是 Gate 归一化结果，schema 未变 |
+| §「未能确认的疑点」4（consolidator 语义边界需要测试覆盖） | 缺测试 | 已补：`test/v0.4-experience-consolidator.mjs` 覆盖真实 SQLite regression（10 条：密码/opt-out/普通问句永不入库；真实 owner 事实跨 session + 跨 24h 才入库；duplicate 不产生重复行；gate 缺失 fail-closed；关键词接地两个边界） |
+
+## 审计之外新增的不变量
+
+发布轮把下面几条从「约定」升级为「有测试守住的不变量」：
+
+1. 关键词必须能在 evidence 中找到（NFKC + lowercase + 去标点空白后 substring），否则丢弃。
+2. 视觉观察不得进入 `evidenceCount` / `confidence` / `source_ids` / raw roots。
+3. Reflection 只消费它启动前看到的快照；skipped / failed 消费 0 条。
+4. Dream 日志的公开 summary 只由真正 commit 的行决定。
+5. 种子记忆（`vc-ai-pet:seed`）与旧沙箱的两条 bootstrap 模板不得作为 Dream/Reflection 的源。
+6. 最终请求在超窗时拒绝发送，而不是发出去被静默截断。

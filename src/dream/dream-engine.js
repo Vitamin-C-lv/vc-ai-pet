@@ -1,4 +1,4 @@
-import { isRawEvidenceRow } from '../memory/derived-evidence.js'
+import { isObservationEvidenceRow, isRawEvidenceRow } from '../memory/derived-evidence.js'
 import { randomUUID } from 'node:crypto'
 
 import { DreamGate, validateDreamCandidate } from './dream-gate.js'
@@ -300,6 +300,17 @@ function modelFailure(code, message = code) {
   return error
 }
 
+function deterministicDreamSummary(written) {
+  if (!Array.isArray(written) || written.length === 0) {
+    return '花花睡了一会儿，这次没有形成新的长期理解。'
+  }
+  const contents = written
+    .map((entry) => String(entry?.content ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  return `花花梦里把这些经历连在了一起：${contents.join('；')}`.slice(0, 600)
+}
+
 export class DreamEngine {
   constructor({
     memory,
@@ -440,7 +451,12 @@ export class DreamEngine {
         // Keep the adapter's historical related rows as-is: active Reflection
         // rows and old Dream rows are valid context. Only this run's NEW rows
         // are excluded, so candidates still cite only supplied IDs.
-        const related = dedupeRows(relatedRows, allNewIds).slice(0, this.relatedLimit)
+        // Visual observation memory rows are background perception only. They
+        // must never become Dream source_ids, raw roots, or evidence counts.
+        const related = dedupeRows(
+          relatedRows.filter((row) => !isObservationEvidenceRow(row)),
+          allNewIds,
+        ).slice(0, this.relatedLimit)
         const availableSourceIds = new Set([
           ...batchIds,
           ...related.map((row) => rowId(row)).filter(Boolean),
@@ -515,9 +531,15 @@ export class DreamEngine {
       for (const { rawCandidate, context } of proposals) {
         const result = this.gate.consider(rawCandidate, context)
         if (result.status === 'written') {
+          const committedContent = String(
+            result.row?.content ??
+            this.memory.findById?.(result.row?.id)?.row?.content ??
+            '',
+          ).trim()
           written.push({
             id: result.row?.id ?? null,
             level: result.row?.level ?? rawCandidate.level,
+            content: committedContent,
             sourceIds: result.sourceIds ?? [],
             provenance: result.provenance ?? rawCandidate.provenance,
           })
@@ -528,7 +550,7 @@ export class DreamEngine {
         }
       }
 
-      const summary = summaries.join(' ').trim().slice(0, 600)
+      const summary = deterministicDreamSummary(written)
       const changes = {
         kind: 'dream',
         checkpointFrom: previousCheckpoint,
@@ -537,6 +559,9 @@ export class DreamEngine {
         derived: written,
         duplicates,
         skipped: invalidCandidateCount,
+        // The model's prose is retained for diagnostics only. The public log
+        // summary above is derived solely from rows that actually committed.
+        modelSummary: summaries.join(' ').trim().slice(0, 600),
       }
 
       await this.memory.logDream(summary, changes, 'vc-ai-pet v0.3-B deep-dream')

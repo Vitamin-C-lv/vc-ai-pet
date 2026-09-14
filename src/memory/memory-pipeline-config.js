@@ -21,11 +21,11 @@ export const SHORT_TERM_CONTEXT_TURNS_MIN = 1
 export const SHORT_TERM_CONTEXT_TURNS_MAX = 200
 
 // Calibrated against the real Local Brain (n_ctx=16384) by tokenizing the actual
-// prompt: the system message alone costs ~11,975 content tokens, and a typical
-// 50-turn window adds ~11,753 more, which would overflow 16k. 18,000 characters
-// keeps a typical 50 turns fully intact while leaving room for the system
-// message, message wrapping and a 768-token completion. Raised only if the Local
-// Brain is moved to a larger context (60,000 suits 65,536).
+// prompt after the constant-size conversation evidence declaration: the
+// typical 50-turn system prompt measured ~1,755 tokens. 18,000 characters keeps
+// the normal short-term selector useful; the final request guard then accounts
+// for the complete system/messages/output reserve before delivery. Raise this
+// only if the Local Brain is moved to a larger context (60,000 suits 65,536).
 export const CONTEXT_BUDGET_CHARS_DEFAULT = 18_000
 export const CONTEXT_BUDGET_CHARS_MIN = 2_000
 export const CONTEXT_BUDGET_CHARS_MAX = 400_000
@@ -48,6 +48,18 @@ export const REFLECTION_TRIGGER_MIN = 1
 // just a summary of it. 12 was too small once the working window became 50 turns.
 export const DREAM_RECENT_EXPERIENCE_LIMIT_DEFAULT = 80
 export const DREAM_RECENT_EXPERIENCE_LIMIT_MAX = 500
+
+// How long a pause ends the current owner conversation.
+//
+// Consolidation may only claim "the same thing happened twice" across *different*
+// conversations. A per-turn id cannot express that — every turn is unique, so any
+// two turns would satisfy it — so consecutive turns inside this idle window share
+// one conversation key, and a longer pause (or a host restart) starts a new one.
+// The floor is deliberate: a misconfiguration must not degrade the rule back to
+// "every turn is its own conversation".
+export const OWNER_SESSION_GAP_MS_DEFAULT = 30 * 60 * 1000
+export const OWNER_SESSION_GAP_MS_MIN = 60 * 1000
+export const OWNER_SESSION_GAP_MS_MAX = 24 * 60 * 60 * 1000
 
 function readNumber(value) {
   if (value === null || value === undefined || value === '') return null
@@ -199,6 +211,18 @@ export function resolveMemoryPipelineConfig({ config = {}, env = process.env } =
   })
   if (dreamLimit.adjusted || dreamLimit.invalid) pushDiagnostics(diagnostics, 'dreamRecentExperienceLimit', dreamLimit)
 
+  const ownerSessionGap = resolveInteger({
+    envValue: env.OWNER_SESSION_GAP_MS,
+    configValue: raw.ownerSessionGapMs,
+    fallback: OWNER_SESSION_GAP_MS_DEFAULT,
+    min: OWNER_SESSION_GAP_MS_MIN,
+    max: OWNER_SESSION_GAP_MS_MAX,
+    integer: false,
+  })
+  if (ownerSessionGap.adjusted || ownerSessionGap.invalid) {
+    pushDiagnostics(diagnostics, 'ownerSessionGapMs', ownerSessionGap)
+  }
+
   const bufferEnabled = resolveBoolean({
     envValue: env.EXPERIENCE_BUFFER_ENABLED,
     configValue: raw.experienceBufferEnabled,
@@ -224,6 +248,7 @@ export function resolveMemoryPipelineConfig({ config = {}, env = process.env } =
     reflectionOnExperience: reflectionOnExperience.value,
     reflectionNewExperienceTrigger: reflectionTrigger.value,
     dreamRecentExperienceLimit: dreamLimit.value,
+    ownerSessionGapMs: ownerSessionGap.value,
     sources: Object.freeze({
       shortTermContextTurns: turns.source,
       shortTermContextChars: budget.source,
@@ -232,6 +257,7 @@ export function resolveMemoryPipelineConfig({ config = {}, env = process.env } =
       reflectionOnExperience: reflectionOnExperience.source,
       reflectionNewExperienceTrigger: reflectionTrigger.source,
       dreamRecentExperienceLimit: dreamLimit.source,
+      ownerSessionGapMs: ownerSessionGap.source,
     }),
     diagnostics: Object.freeze(diagnostics),
   })

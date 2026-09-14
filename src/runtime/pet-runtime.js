@@ -4,6 +4,8 @@ import { assertPetPolicy } from '../core/pet-policy.js'
 import { ensurePetIdentity } from '../core/pet-identity.js'
 import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
+import { containsSensitiveMemoryText, userOptedOutOfMemory } from '../brain/memory-candidate.js'
+import { containsNonAssertion } from '../memory/current-belief.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
@@ -15,7 +17,11 @@ import { ExplicitMemoryController } from '../memory/explicit-memory-controller.j
 import { ExplicitMemoryQueue } from '../memory/explicit-memory-queue.js'
 import { ExperienceBuffer } from '../experience/experience-buffer.js'
 import { ExperienceConsolidator } from '../experience/experience-consolidator.js'
-import { buildRecentExperienceContext, withExperienceDeclaration } from '../experience/experience-dream-context.js'
+import {
+  buildRecentExperienceContext,
+  formatRecentVisualObservations,
+  withExperienceDeclaration,
+} from '../experience/experience-dream-context.js'
 import { PetTurnOrchestrator } from './pet-turn-orchestrator.js'
 import { PetTurnManager } from './pet-turn-manager.js'
 import { createTurnId } from './pet-turn-events.js'
@@ -167,6 +173,127 @@ async function experienceAwareReflectionEligibility(runtime, memory, options = {
   }
 }
 
+/**
+ * How much of one visual turn may become memory.
+ *
+ * The perception budget is deliberately small: a memory row is a sentence the
+ * pet can carry, not a transcript of every inspection it performed. Three
+ * observations cover "what the owner showed me" without turning one photo into
+ * a paragraph, and the stored text is the sanitized summary the vision step
+ * already produced (never raw model output, never a data URL).
+ */
+const VISUAL_MEMORY_MAX_OBSERVATIONS = 3
+const VISUAL_MEMORY_OBSERVATION_MAX_CHARS = 220
+const VISUAL_MEMORY_KEYWORDS = Object.freeze(['图片', '照片', '看过', '主人发的'])
+/**
+ * A memory the pet formed by looking at an image is an *observation*, not an
+ * owner assertion. It is written with this source so the raw-evidence chain can
+ * keep it out of the confirmed roots while still letting Reflection/Dream cite
+ * it as supporting evidence.
+ */
+const VISUAL_MEMORY_SOURCE = 'VISUAL_OBSERVATION'
+/** Explicit instruction: an image memory may never present itself as confirmed. */
+const VISUAL_MEMORY_EVIDENCE = 'inferred'
+/** One fresh look per attachment per day; re-inspection is an aid, not a loop. */
+const VISUAL_REINSPECT_COOLDOWN_MS = 24 * 60 * 60 * 1000
+const VISUAL_REINSPECT_MAX_PER_RUN = 2
+/**
+ * Minimum spacing between re-inspection *passes*.
+ *
+ * Consolidation runs on every tick; re-inspection is a background model call. The
+ * per-attachment cooldown bounds repeats of one picture, but not how many
+ * different pictures a day can buy, so the pass itself needs a floor. Twenty
+ * minutes matches the daytime sleep-continuity threshold: re-inspection is a quiet
+ * activity, not something that should compete with the owner's conversation.
+ */
+const VISUAL_REINSPECT_PASS_INTERVAL_MS = 20 * 60 * 1000
+
+/**
+ * Does the file on disk still look like the image its data URL claims to be?
+ *
+ * The store builds a data URL from the recorded mime type plus the current bytes,
+ * so those two can disagree after a half-written file, a truncated copy or disk
+ * corruption. Re-inspection is the only path that reads an attachment back without
+ * going through the upload-time checks, so it validates the file signature itself.
+ * Cheap on purpose: a length + magic-byte check, no decoding, no model call.
+ */
+const IMAGE_SIGNATURES = Object.freeze([
+  { mime: 'image/png', bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { mime: 'image/jpeg', bytes: [0xff, 0xd8, 0xff] },
+])
+
+export function imageSignatureOf(dataUrl) {
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/u.exec(String(dataUrl ?? ''))
+  if (!match) return { ok: false, reason: 'data-url-malformed' }
+  const [, mime, payload] = match
+  let bytes
+  try {
+    bytes = Buffer.from(payload, 'base64')
+  } catch {
+    return { ok: false, reason: 'base64-undecodable' }
+  }
+  if (bytes.length < 12) return { ok: false, reason: 'file-too-small' }
+  if (mime === 'image/webp') {
+    const riff = bytes.subarray(0, 4).toString('ascii') === 'RIFF'
+    const webp = bytes.subarray(8, 12).toString('ascii') === 'WEBP'
+    return riff && webp ? { ok: true } : { ok: false, reason: 'not-webp' }
+  }
+  const expected = IMAGE_SIGNATURES.find((entry) => entry.mime === mime)
+  if (!expected) return { ok: false, reason: 'unsupported-mime' }
+  const matches = expected.bytes.every((byte, index) => bytes[index] === byte)
+  return matches ? { ok: true } : { ok: false, reason: 'signature-mismatch' }
+}
+
+function compactObservationText(value, max = VISUAL_MEMORY_OBSERVATION_MAX_CHARS) {
+  const text = String(value ?? '').replace(/\s+/gu, ' ').trim()
+  if (!text) return ''
+  const withoutDataUrls = text.replace(/data:[^\s,;]+;base64,[A-Za-z0-9+/=]+/gu, '[图片]')
+  return withoutDataUrls.length > max ? withoutDataUrls.slice(0, max) : withoutDataUrls
+}
+
+/**
+ * Read the perception out of a visual turn.
+ *
+ * `observations` is the sanitized public ledger the vision session assembled
+ * (`{ visualId, attachmentId, focus, summary }`); `inspections` is the raw
+ * "which images were looked at" list. Both are read here so a turn that saw an
+ * image without producing a safe summary still records *that* it looked.
+ */
+function visionFactsFromVisualTurn(result = null) {
+  const observations = []
+  const seen = new Set()
+  for (const item of Array.isArray(result?.observations) ? result.observations : []) {
+    const summary = compactObservationText(item?.summary)
+    if (!summary || seen.has(summary)) continue
+    seen.add(summary)
+    const focus = compactObservationText(item?.focus, 120)
+    observations.push({
+      visualId: compactObservationText(item?.visualId, 16) || null,
+      attachmentId: compactObservationText(item?.attachmentId, 80) || null,
+      ...(focus ? { focus } : {}),
+      summary,
+    })
+    if (observations.length >= VISUAL_MEMORY_MAX_OBSERVATIONS) break
+  }
+  const inspectionIds = []
+  for (const item of Array.isArray(result?.inspections) ? result.inspections : []) {
+    const attachmentId = compactObservationText(item?.attachmentId, 80)
+    if (attachmentId && !inspectionIds.includes(attachmentId)) inspectionIds.push(attachmentId)
+  }
+  const attachmentId = observations.find((item) => item.attachmentId)?.attachmentId
+    ?? inspectionIds[0]
+    ?? null
+  return { observations, inspectionIds, attachmentId }
+}
+
+function observationMemorySentence(observations = []) {
+  const parts = observations
+    .map((item) => compactObservationText(item?.summary))
+    .filter(Boolean)
+  if (parts.length === 0) return '花花看了这张图片，但没有形成可以记住的确定印象。'
+  return `花花看过这张图片，看到的是：${parts.join('；')}`
+}
+
 export class PetRuntime {
   #experienceWriteQueue = Promise.resolve()
 
@@ -194,6 +321,10 @@ export class PetRuntime {
         })
       : null
     this.experienceBufferReady = false
+    // One immutable pending-experience view belongs to one Reflection pass.
+    // Dream deliberately does not use this snapshot: processed experience is
+    // still part of recent life and remains visible to Dream.
+    this.reflectionExperienceSnapshot = null
     this.experienceConsolidator = null
     this.consolidationInFlight = false
     // Explicit Memory Queue: the owner's own instruction outranks a model that
@@ -216,6 +347,25 @@ export class PetRuntime {
     // and deliberately remains outside state.json and pet-memory.db.
     this.emotion = createEmotionState()
     this.lastInteractionFeedback = null
+    // Owner-session identity for experience rows. A per-turn id cannot express
+    // "the same conversation", so consecutive turns are grouped into one session
+    // that rotates after an idle gap or a host restart. Kept in RAM only: a
+    // restart is a new session by definition.
+    this.ownerSessionId = createTurnId()
+    this.lastOwnerTurnAt = 0
+    // Image-memory bookkeeping: which images already produced a raw anchor row,
+    // and when each attachment was last looked at again during consolidation.
+    this.imageMemoryBounds = new Map()
+    // Attachments whose own owner turn was refused by the MemoryGate vetoes.
+    // Re-inspection happens later, without the owner turn, so the refusal is
+    // carried per attachment instead of recomputed from text that is no longer
+    // available.
+    this.visualMemoryVetoes = new Map()
+    this.visualReinspections = new Map()
+    // When the re-inspection pass last ran. RAM-only on purpose: a restart may buy
+    // one extra pass, which is harmless, while a persisted timestamp could postpone
+    // the pass indefinitely after a crash loop.
+    this.lastVisualReinspectionAt = 0
   }
 
   async initialize() {
@@ -291,19 +441,40 @@ export class PetRuntime {
           buffer: this.experienceBuffer,
           memory: this.memory,
           logger: this.logger,
+          // Repeated life may become a raw PetMemory row only through the same
+          // gate an explicit owner statement passes. Without it the consolidator
+          // fails closed (`memory-gate-missing`) instead of writing directly, so
+          // this injection is what makes experience consolidation reachable at
+          // runtime instead of permanently skipped.
+          memoryGate: this.memoryGate,
         })
       : null
     const visualContextProvider = ({ query }) => buildVisualDreamContext({
       experienceStore: this.visualExperience,
       query,
     })
-    // Dream and Reflection keep their prompts and schemas untouched; the only
-    // change is that recent lived experience is prepended to the context they
-    // already receive. It is rendered with its own declaration so neither engine
-    // can mistake a recent experience for a verified long-term memory.
-    const experienceAwareContextProvider = async (request) => {
+    // Dream sees recent life, including processed experiences. Processed means
+    // "already reflected", not "deleted from the pet's lived history".
+    const dreamExperienceContextProvider = async (request) => {
       const visualSection = await visualContextProvider(request)
       const recent = await this.recentExperienceContext({ limit: this.pipelineConfig.dreamRecentExperienceLimit })
+      const experienceSection = withExperienceDeclaration(recent.rendered)
+      const observationSection = formatRecentVisualObservations(recent.entries, {
+        limit: 3,
+        now: Number.isFinite(Number(request?.now)) ? Number(request.now) : Date.now(),
+      })
+      if (!visualSection && !experienceSection && !observationSection) return null
+      return [visualSection, experienceSection, observationSection].filter(Boolean).join('\n\n')
+    }
+    // Reflection sees only the pending snapshot captured immediately before its
+    // engine starts. It never re-queries the buffer while the model is running.
+    const reflectionExperienceContextProvider = async (request) => {
+      const visualSection = await visualContextProvider(request)
+      const snapshotRows = this.reflectionExperienceSnapshot?.rows ?? []
+      const recent = buildRecentExperienceContext({
+        entries: snapshotRows,
+        limit: this.pipelineConfig.dreamRecentExperienceLimit,
+      })
       const experienceSection = withExperienceDeclaration(recent.rendered)
       if (!visualSection && !experienceSection) return null
       return [visualSection, experienceSection].filter(Boolean).join('\n\n')
@@ -312,13 +483,13 @@ export class PetRuntime {
       memory: this.memory,
       brain: this.brain,
       gate: new DreamGate({ memory: this.memory }),
-      visualContextProvider: experienceAwareContextProvider,
+      visualContextProvider: dreamExperienceContextProvider,
     })
     this.reflectionEngine = new ReflectionEngine({
       memory: this.memory,
       brain: this.brain,
       gate: new ReflectionGate({ memory: this.memory }),
-      visualContextProvider: experienceAwareContextProvider,
+      visualContextProvider: reflectionExperienceContextProvider,
     })
     this.dreamScheduler = new DreamScheduler({
       memory: this.memory,
@@ -327,6 +498,7 @@ export class PetRuntime {
       eligibility: (options) => dreamEligibility(this.memory, options),
       deepDreamEligibility: (options) => deepDreamEligibility(this.memory, options),
       reflectionEligibility: (options) => experienceAwareReflectionEligibility(this, this.memory, options),
+      reflectionRun: ({ force }) => this.#runReflectionWithExperienceSnapshot({ force }),
     })
     await this.persist()
     return this.snapshot()
@@ -391,6 +563,7 @@ export class PetRuntime {
     this.state = advanceState(this.state, now)
     this.emotion = advanceEmotion(this.emotion, now)
     await this.persist()
+    await this.flushExperienceWrites()
 
     // Experience consolidation runs before Dream/Reflection and only while the
     // pet is idle. It is the step that turns *repeated* recent life into raw
@@ -451,6 +624,201 @@ export class PetRuntime {
           ? config.confusedDurationMs
           : config.happyDurationMs
     return { kind: feedback.kind, until: Number(feedback.at) + duration }
+  }
+
+  /**
+   * The conversation key an experience belongs to.
+   *
+   * The buffer's consolidation rule needs "the same thing said twice in
+   * different conversations". A per-turn id can never express that: every turn
+   * is unique, so any two turns would satisfy it. Consecutive turns inside one
+   * sitting share a session id; an idle gap of more than
+   * `pipelineConfig.ownerSessionGapMs` (or a restart) starts a new one.
+   */
+  #ownerSessionKey(now = Date.now()) {
+    const gap = Math.max(60_000, Number(this.pipelineConfig.ownerSessionGapMs) || 30 * 60 * 1000)
+    if (!this.lastOwnerTurnAt || now - this.lastOwnerTurnAt > gap) this.ownerSessionId = createTurnId()
+    this.lastOwnerTurnAt = now
+    return this.ownerSessionId
+  }
+
+  /**
+   * Remember one visual turn: that an image was shown (owner-confirmed raw
+   * anchor) and what the pet perceived (inferred observation).
+   *
+   * Two rows, two evidence classes, on purpose:
+   * - `主人给花花看过一张图片` is a system event the owner caused, so it is a
+   *   confirmed raw root and can support derived memory.
+   * - `花花看到的是…` is the model's perception, so it is written inferred and
+   *   can never be upgraded to a fact. Both point at the same attachment so a
+   *   later reflection can re-open the original picture.
+   */
+  async recordVisualExperienceMemory({ ownerText = '', observationText = '', attachmentId = null, messageId = null, turnId = null } = {}) {
+    if (!this.memory) return { status: 'skipped', reason: 'memory-unavailable' }
+    const owner = compactObservationText(ownerText, 200)
+    const observation = compactObservationText(observationText)
+    const attachment = compactObservationText(attachmentId, 80) || null
+    const dedupeKey = attachment ?? `${turnId ?? ''}`
+    const now = Date.now()
+    // The MemoryGate vetoes are enforced here rather than only at the call site.
+    // This is a public method, and the picture path is the one place where a
+    // "harmless" row could carry the owner's own words verbatim — so an owner who
+    // says "记住我的密码是 hunter2" over a picture must get neither the password
+    // nor the picture remembered, no matter which caller reaches this method.
+    const veto = this.#visualMemoryVeto(ownerText)
+    if (veto) {
+      // Remember the refusal for this picture so the later, owner-less
+      // re-inspection pass cannot write the same row by a slower route.
+      if (attachment) this.visualMemoryVetoes.set(attachment, veto)
+      return { status: 'skipped', reason: veto }
+    }
+    if (this.imageMemoryBounds.has(dedupeKey)) return { status: 'duplicate', reason: 'image-already-remembered' }
+    try {
+      // `sourceIds` may only contain PetMemory row ids: the evidence chain walks
+      // them as parent rows, and an attachment id is not a memory row, so putting
+      // one there breaks `rawEvidenceRoots()` and silently invalidates every
+      // derivation that cites this image. The picture itself is referenced
+      // through `attachmentId`, which the chain does not traverse.
+      const provenance = {
+        source: 'SYSTEM_EVENT',
+        evidence: 'confirmed',
+        ...(attachment ? { attachmentId: attachment } : {}),
+        ...(messageId ? { messageId } : {}),
+        ...(owner ? { evidenceQuote: owner } : {}),
+      }
+      const anchor = this.memory.remember(
+        'fact',
+        owner ? `主人给花花看过一张图片，当时说：${owner}` : '主人给花花看过一张图片。',
+        2,
+        { keywords: [...VISUAL_MEMORY_KEYWORDS], provenance },
+      )
+      this.imageMemoryBounds.set(dedupeKey, { anchorId: anchor?.id ?? null, at: now })
+      let observationRow = null
+      if (observation) {
+        observationRow = this.memory.remember('fact', observation, 2, {
+          keywords: [...VISUAL_MEMORY_KEYWORDS],
+          provenance: {
+            source: VISUAL_MEMORY_SOURCE,
+            evidence: VISUAL_MEMORY_EVIDENCE,
+            // Cite the anchor row (real evidence root) and keep the picture in
+            // its own field, so "what I saw" always traces back to "the owner
+            // really did show me this".
+            sourceIds: [anchor?.id].filter(Boolean).map(String),
+            ...(attachment ? { attachmentId: attachment } : {}),
+            ...(messageId ? { messageId } : {}),
+          },
+        })
+      }
+      return {
+        status: 'written',
+        anchorId: anchor?.id ?? null,
+        observationId: observationRow?.id ?? null,
+      }
+    } catch (error) {
+      this.imageMemoryBounds.delete(dedupeKey)
+      this.logger?.warn?.(
+        `vc-ai-pet: image memory write failed code=${String(error?.code ?? error?.name ?? 'UNKNOWN').slice(0, 60)}`,
+      )
+      return { status: 'failed', reason: String(error?.code ?? 'image-memory-write-failed') }
+    }
+  }
+
+  /**
+   * Look at a remembered picture again while consolidating.
+   *
+   * The host only exposes one image-bearing call (`visualStep`), and the memory
+   * row keeps the attachment id — so the pet can genuinely re-open the original
+   * image instead of re-reading a stale sentence. Failures are logged and
+   * swallowed: re-inspection is an enhancement, never a precondition for
+   * reflecting, and it never touches the original file.
+   */
+  async reInspectVisualMemory({ attachmentId = null } = {}) {
+    const attachment = compactObservationText(attachmentId, 80)
+    if (!attachment) return { ok: false, reason: 'attachment-missing' }
+    if (typeof this.brain?.visualStep !== 'function' || typeof this.conversationStore?.readAttachmentDataUrl !== 'function') {
+      return { ok: false, reason: 'reinspection-unavailable' }
+    }
+    const now = Date.now()
+    const last = this.visualReinspections.get(attachment) ?? 0
+    if (now - last < VISUAL_REINSPECT_COOLDOWN_MS) return { ok: false, reason: 'reinspection-cooldown' }
+    this.visualReinspections.set(attachment, now)
+    try {
+      const stored = await this.conversationStore.readAttachmentDataUrl(attachment)
+      if (!stored?.dataUrl) return { ok: false, reason: 'attachment-unreadable' }
+      // Signature check before the brain is handed anything. `readAttachmentDataUrl`
+      // builds the data URL from the stored mime type and whatever bytes are on
+      // disk, so a corrupted or truncated asset would otherwise reach the model
+      // wearing a valid-looking prefix.
+      const signature = imageSignatureOf(stored.dataUrl)
+      if (!signature.ok) return { ok: false, reason: 'attachment-not-an-image', detail: signature.reason }
+      const image = normalizeVisionImage({ dataUrl: stored.dataUrl })
+      if (!image) return { ok: false, reason: 'attachment-unreadable' }
+      // The vision step is validated against a strict JSON contract (exactly the
+      // five fields, `action: 'answer'` with an empty `nextVisualId`, at least one
+      // reply bubble). A real model drifts, so the instruction states the shape it
+      // must produce: this is a memory tidy-up, not an interactive look.
+      //
+      // The candidate pool is deliberately empty. Measured against the real model:
+      // with a candidate present it answers `action: 'inspect'` (wanting to look at
+      // that picture again) and the schema rejects the reply; with an empty pool it
+      // returns a direct, longer observation for the image it is being shown.
+      const step = await this.brain.visualStep({
+        userText: '花花正在整理记忆，想再看一眼之前看过的那张图片。这是最后一次查看，不要再请求看别的图片，直接描述你看到的。',
+        image,
+        candidatePool: [],
+        forceAnswer: true,
+        // Perception-only validation: a background tidy-up must not fail on the
+        // interactive protocol fields a real model drifts on.
+        memoryReview: true,
+      })
+      if (!step?.ok) return { ok: false, reason: step?.reason ?? 'visual-step-failed' }
+      const summary = compactObservationText(step.observation)
+      if (!summary) return { ok: false, reason: 'observation-empty' }
+      return { ok: true, observation: summary, focus: compactObservationText(step.focus, 120) || null, attachmentId: attachment }
+    } catch (error) {
+      this.logger?.warn?.(
+        `vc-ai-pet: visual re-inspection failed code=${String(error?.code ?? error?.name ?? 'UNKNOWN').slice(0, 60)}`,
+      )
+      return { ok: false, reason: String(error?.code ?? 'reinspection-failed') }
+    }
+  }
+
+  /**
+   * Write what the pet saw when it re-opened a remembered picture.
+   *
+   * Same evidence class as the first look (inferred), and it cites the image
+   * anchor as its source root so a later reflection can trace the understanding
+   * back to "the owner really did show me this".
+   *
+   * A picture whose own turn was vetoed (credential text, opt-out, non-assertion)
+   * is never re-inspected. Re-inspection runs later, from the consolidation path,
+   * with no owner turn in hand — so the veto has to be remembered per attachment.
+   * Otherwise the very next consolidation would write a new visual memory for a
+   * turn the MemoryGate had deliberately refused, which is the same boundary
+   * crossed by a slower route.
+   */
+  #writeReinspectionMemory({ attachmentId = null, observation = '', focus = null, anchorId = null } = {}) {
+    if (!this.memory) return null
+    if (attachmentId && this.visualMemoryVetoes.has(attachmentId)) return null
+    const summary = compactObservationText(observation)
+    if (!summary) return null
+    try {
+      const row = this.memory.remember('fact', `花花又看了一眼这张图片：${summary}`, 2, {
+        keywords: [...VISUAL_MEMORY_KEYWORDS],
+        provenance: {
+          source: VISUAL_MEMORY_SOURCE,
+          evidence: VISUAL_MEMORY_EVIDENCE,
+          sourceIds: [anchorId, attachmentId].filter(Boolean).map(String),
+          ...(focus ? { evidenceQuote: compactObservationText(focus, 120) } : {}),
+        },
+      })
+      return { id: row?.id ?? null }
+    } catch (error) {
+      this.logger?.warn?.(
+        `vc-ai-pet: visual re-inspection memory failed code=${String(error?.code ?? error?.name ?? 'UNKNOWN').slice(0, 60)}`,
+      )
+      return null
+    }
   }
 
   #shouldRouteVisualFollowUp(followUp, preResolve) {
@@ -720,7 +1088,38 @@ export class PetRuntime {
       const hasExplicitMemoryControl = explicit.decision !== 'none'
         || explicit.detection?.explicit === true
         || explicit.detection?.optOut === true
-      if (!hasExplicitMemoryControl) return result
+
+      // Image memory. A picture the owner showed is part of the pet's life even
+      // when the owner said no keyword at all, so the lived turn is recorded
+      // first (buffer + memory), independently of the explicit-memory path
+      // below: that path answers "did the owner tell me to remember something",
+      // this one answers "did I see something today".
+      //
+      // The buffer row always happens — it is short-lived life record, and the
+      // picture's own wording goes there. The *PetMemory* write does not: the
+      // MemoryGate's vetoes (opt-out, sensitive text, non-assertion) are the
+      // boundary for long-term memory and must not be bypassed just because an
+      // image was attached. An owner who says "记住我的密码是 x" over a picture
+      // gets neither the password nor the picture remembered.
+      const visionFacts = visionFactsFromVisualTurn(result)
+      const sessionKey = this.#ownerSessionKey()
+      const visualMemory = await this.#recordVisualTurnExperience({
+        turnId,
+        sessionKey,
+        ownerText,
+        visionFacts,
+        // The picture the owner actually showed this turn outranks any id that
+        // appears inside an observation (the session may inspect recalled images).
+        attachmentId: result.attachmentId ?? null,
+        memoryVeto: this.#visualMemoryVeto(ownerText),
+      })
+
+      if (!hasExplicitMemoryControl) {
+        return {
+          ...result,
+          ...(visualMemory ? { imageMemory: visualMemory.status } : {}),
+        }
+      }
 
       const messages = await this.conversationStore.listForRecentVisualRecall()
       const ownerMessage = [...messages].reverse().find((message) => message?.role === 'user' && message?.turnId === turnId)
@@ -774,6 +1173,7 @@ export class PetRuntime {
         memoryWrite: gate.status,
         ...(gate.source ? { memoryPriority: gate.priority, memorySource: gate.source } : {}),
         ...(gate.reason ? { memoryWriteReason: gate.reason } : {}),
+        ...(visualMemory ? { imageMemory: visualMemory.status } : {}),
       }
     } finally { this.chatInFlight -= 1 }
   }
@@ -854,8 +1254,14 @@ export class PetRuntime {
       chatInFlight: this.chatInFlight > 0,
       dreamInFlight: this.dreamEngine?.isInFlight?.() ?? false,
       reflectionInFlight: this.reflectionEngine?.isInFlight?.() ?? false,
-    }).then(async (result) => {
-      await this.#markExperiencesConsumed(result)
+    }).then((result) => {
+      // The scheduler skips before reaching `#runReflectionWithExperienceSnapshot`
+      // (interval gate, in-flight gate, eligibility). Those paths consume nothing,
+      // so report the same explicit zero the completed path reports instead of
+      // `undefined` — "consumed 0" and "never asked" must not look alike.
+      if (result && typeof result === 'object' && result.consumedExperienceCount === undefined) {
+        return { ...result, reflectionExperienceSnapshotIds: [], consumedExperienceIds: [], consumedExperienceCount: 0 }
+      }
       return result
     })
   }
@@ -866,23 +1272,59 @@ export class PetRuntime {
    * completed pass marks anything: a skipped or failed reflection must leave the
    * buffer intact or the life it was supposed to reflect on is lost.
    */
-  async #markExperiencesConsumed(result) {
+  async #markExperiencesConsumed(result, ids = []) {
     if (!this.experienceBuffer || !this.experienceBufferReady) return 0
     if (result?.status !== 'completed' || result?.ok !== true) return 0
     try {
-      // Only the rows the pass could actually have been shown are consumed;
-      // marking unseen rows processed would silently discard life.
-      const limit = Math.max(1, Number(this.pipelineConfig.dreamRecentExperienceLimit) || 1)
-      const pending = await this.experienceBuffer.pendingExperience({ limit })
-      const ids = (pending ?? []).map((row) => row.id).filter((id) => Number.isInteger(id))
-      if (ids.length === 0) return 0
-      await this.experienceBuffer.markProcessed(ids)
-      return ids.length
+      // Only the rows captured before this pass are consumed. Never re-query
+      // pending rows here: experiences arriving during Reflection were unseen.
+      const snapshotIds = [...new Set((Array.isArray(ids) ? ids : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0))]
+      if (snapshotIds.length === 0) return 0
+      const marked = await this.experienceBuffer.markProcessed(snapshotIds)
+      return Number(marked?.processedCount ?? 0)
     } catch (error) {
       this.logger?.warn?.(
         `vc-ai-pet: experience mark-processed failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`,
       )
       return 0
+    }
+  }
+
+  /**
+   * One Reflection lifecycle for both tick and manual runs:
+   * flush queued writes, freeze pending experience, run the engine with that
+   * view, then consume exactly that view only after a successful completion.
+   */
+  async #runReflectionWithExperienceSnapshot({ force = false } = {}) {
+    await this.flushExperienceWrites()
+    const limit = Math.max(1, Number(this.pipelineConfig.dreamRecentExperienceLimit) || 1)
+    let rows = []
+    if (this.experienceBuffer && this.experienceBufferReady) {
+      try {
+        rows = (await this.experienceBuffer.pendingExperience({ limit })) ?? []
+      } catch (error) {
+        this.logger?.warn?.(`vc-ai-pet: reflection experience snapshot failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
+      }
+    }
+    const snapshot = {
+      ids: rows.map((row) => Number(row?.id)).filter((id) => Number.isInteger(id) && id > 0),
+      rows: rows.map((row) => ({ ...row })),
+    }
+    this.reflectionExperienceSnapshot = snapshot
+    try {
+      const result = await this.reflectionEngine.run({ force })
+      const consumedIds = result?.status === 'completed' && result?.ok === true ? snapshot.ids : []
+      const consumedCount = await this.#markExperiencesConsumed(result, consumedIds)
+      return {
+        ...result,
+        reflectionExperienceSnapshotIds: [...snapshot.ids],
+        consumedExperienceIds: consumedIds.slice(0, consumedCount),
+        consumedExperienceCount: consumedCount,
+      }
+    } finally {
+      this.reflectionExperienceSnapshot = null
     }
   }
 
@@ -905,13 +1347,23 @@ export class PetRuntime {
     if (this.consolidationInFlight) return { status: 'skipped', ok: false, reason: 'consolidation-in-flight' }
     this.consolidationInFlight = true
     try {
+      // Before turning life into memory, give the pet a chance to actually look
+      // at the pictures it remembers instead of trusting an old sentence. This
+      // is best-effort: no brain, no cooldown left, or an unreadable attachment
+      // all just skip.
+      const reinspection = await this.#reInspectVisualMemories({ limit })
       const result = await this.experienceConsolidator.consolidate({ limit })
       if (result?.written > 0) {
         this.logger?.info?.(
           `vc-ai-pet: experience consolidation written=${result.written} candidates=${result.candidates} scanned=${result.scanned}`,
         )
       }
-      return result
+      return {
+        ...result,
+        ...(reinspection.inspected > 0
+          ? { visualReinspections: reinspection.inspected, visualReinspectionSkips: reinspection.skipped }
+          : {}),
+      }
     } catch (error) {
       this.logger?.warn?.(
         `vc-ai-pet: experience consolidation failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`,
@@ -920,6 +1372,67 @@ export class PetRuntime {
     } finally {
       this.consolidationInFlight = false
     }
+  }
+
+  /**
+   * Look again at the pictures the pet remembers, before consolidating them.
+   *
+   * Bounded on purpose: at most `VISUAL_REINSPECT_MAX_PER_RUN` images per run,
+   * one look per attachment per cooldown window, one *pass* per
+   * `VISUAL_REINSPECT_PASS_INTERVAL_MS`, and the refresh is written as a *new
+   * inferred* row that cites the image anchor. The original attachment is only
+   * read, never rewritten, and a failure never fails the run.
+   *
+   * The per-pass interval is the piece that makes the whole feature bounded. The
+   * per-attachment cooldown only stops the pet looking at the *same* picture
+   * twice; consolidation itself runs on every tick, so without a pass-level gate a
+   * day of new photos would buy one model call per tick for as long as the owner
+   * keeps sending pictures. Re-inspection is a background tidy-up: a few times an
+   * hour is already generous, and consolidation still runs every tick regardless.
+   */
+  async #reInspectVisualMemories({ limit = 50 } = {}) {
+    const result = { inspected: 0, skipped: 0 }
+    if (!this.experienceBuffer || !this.experienceBufferReady || !this.memory) return result
+    if (typeof this.experienceBuffer.pendingExperience !== 'function') return result
+    const now = Date.now()
+    const lastPass = Number(this.lastVisualReinspectionAt) || 0
+    if (lastPass && now - lastPass < VISUAL_REINSPECT_PASS_INTERVAL_MS) {
+      return { ...result, skipped: 0, reason: 'reinspection-pass-interval' }
+    }
+    // Claim the slot before the model call, so a slow or failing pass cannot be
+    // retried on the very next tick.
+    this.lastVisualReinspectionAt = now
+    let pending = []
+    try {
+      pending = (await this.experienceBuffer.pendingExperience({ limit })) ?? []
+    } catch {
+      return result
+    }
+    const candidates = []
+    for (const row of pending) {
+      if (row?.sourceType !== 'pet_vision') continue
+      const attachmentId = compactObservationText(row?.attachmentId ?? row?.sourceAttachmentId, 80)
+      if (!attachmentId || candidates.includes(attachmentId)) continue
+      candidates.push(attachmentId)
+      if (candidates.length >= VISUAL_REINSPECT_MAX_PER_RUN) break
+    }
+    for (const attachmentId of candidates) {
+      const look = await this.reInspectVisualMemory({ attachmentId })
+      if (!look?.ok) {
+        result.skipped += 1
+        continue
+      }
+      const anchorId = this.imageMemoryBounds.get(attachmentId)?.anchorId ?? null
+      const written = this.#writeReinspectionMemory({
+        attachmentId,
+        observation: look.observation,
+        focus: look.focus,
+        anchorId,
+      })
+      if (written) result.inspected += 1
+      else result.skipped += 1
+    }
+    return result
   }
 
   /**
@@ -997,18 +1510,36 @@ export class PetRuntime {
     messageId = null,
     explicitMemoryRequest = false,
     currentVisionImage = null,
+    conversationKey = null,
+    attachmentId = null,
+    observations = [],
   } = {}) {
     if (!this.experienceBuffer || !this.experienceBufferReady) return null
     try {
       const emotion = this.emotion && typeof this.emotion === 'object'
         ? { mood: this.emotion.mood ?? null, intensity: this.emotion.intensity ?? null }
         : null
+      const visionObservations = (Array.isArray(observations) ? observations : [])
+        .map((item) => ({
+          visualId: compactObservationText(item?.visualId, 16) || null,
+          attachmentId: compactObservationText(item?.attachmentId, 80) || null,
+          ...(compactObservationText(item?.focus, 120) ? { focus: compactObservationText(item?.focus, 120) } : {}),
+          summary: compactObservationText(item?.summary),
+        }))
+        .filter((item) => item.summary)
+        .slice(0, VISUAL_MEMORY_MAX_OBSERVATIONS)
+      const visualAttachment = compactObservationText(attachmentId, 80) || null
+      const visualFocus = visionObservations.find((item) => item.focus)?.focus ?? null
       // The store owns the canonical `experience_events` column names. The
       // runtime only supplies the values, and supplies both the canonical name
       // and the pre-rename alias so a schema migration behind this store cannot
       // silently drop the content.
       const payload = {
         conversationId: turnId,
+        // The conversation an experience belongs to — not the turn. Consecutive
+        // turns in one sitting share it, so "the same thing twice" can only be
+        // claimed across sittings.
+        ...(conversationKey ? { conversationKey, sessionKey: conversationKey } : {}),
         turnId,
         messageId,
         actorId: 'owner',
@@ -1018,6 +1549,14 @@ export class PetRuntime {
         assistantText,
         hadVision: Boolean(hadVision),
         visionSummary: hadVision && currentVisionImage ? '主人这一轮发送了图片' : null,
+        // What the pet actually perceived, not a placeholder sentence: the
+        // sanitized observations the vision step already produced, plus the
+        // attachment they belong to. Never an image payload — the original file
+        // stays under ConversationStore and is re-opened by id when needed.
+        ...(visionObservations.length > 0 ? { visualObservation: visionObservations } : {}),
+        ...(visionObservations[0]?.visualId ? { visionId: visionObservations[0].visualId } : {}),
+        ...(visualFocus ? { visualFocus } : {}),
+        ...(visualAttachment ? { attachmentId: visualAttachment } : {}),
         emotion,
         explicitMemoryRequest,
         sourceType: explicitMemoryRequest ? 'explicit_memory' : null,
@@ -1030,6 +1569,69 @@ export class PetRuntime {
       this.logger?.warn?.(`vc-ai-pet: experience record failed code=${String(error?.code ?? 'UNKNOWN').slice(0, 60)}`)
       return null
     }
+  }
+
+  /**
+   * Does this owner turn forbid its picture from becoming long-term memory?
+   *
+   * Reuses the exact predicates MemoryGate applies before any write, so the
+   * image path cannot become a side door around the sensitive-text, opt-out or
+   * non-assertion boundaries. Returns null when nothing blocks the write, or the
+   * gate's own reason string so telemetry stays consistent.
+   */
+  #visualMemoryVeto(ownerText) {
+    const text = String(ownerText ?? '')
+    if (userOptedOutOfMemory(text)) return 'user-opt-out'
+    if (containsSensitiveMemoryText(text)) return 'memory-sensitive-reject'
+    if (containsNonAssertion(text)) return 'not-owner-assertion'
+    return null
+  }
+
+  /**
+   * Record a visual turn end to end: buffer row (with the real perception),
+   * owner-confirmed image anchor, and the pet's own inferred observation.
+   *
+   * One attachment is remembered once, so a re-inspection or a repeated view of
+   * the same picture cannot inflate the pet's memory of it.
+   */
+  async #recordVisualTurnExperience({ turnId = null, sessionKey = null, ownerText = '', visionFacts = null, attachmentId = null, memoryVeto = null } = {}) {
+    const observations = visionFacts?.observations ?? []
+    // Only the turn's own attachment is authoritative; an observation's id is a
+    // fallback for recall-only turns (where no new picture was uploaded).
+    const effectiveAttachmentId = attachmentId ?? visionFacts?.attachmentId ?? null
+    if (!effectiveAttachmentId && observations.length === 0) return null
+    this.#recordExperience({
+      turnId,
+      conversationKey: sessionKey,
+      ownerText,
+      hadVision: true,
+      currentVisionImage: true,
+      attachmentId: effectiveAttachmentId,
+      observations,
+    })
+    const dedicated = typeof this.experienceBuffer?.recordVisualExperience === 'function'
+      ? this.experienceBuffer.recordVisualExperience({
+          turnId,
+          conversationKey: sessionKey,
+          ownerText,
+          attachmentId: effectiveAttachmentId,
+          observations,
+        })
+      : null
+    if (dedicated && typeof dedicated.then === 'function') await dedicated.catch(() => {})
+    if (memoryVeto) {
+      return { status: 'skipped', reason: memoryVeto, observations: observations.length }
+    }
+    const memory = await this.recordVisualExperienceMemory({
+      ownerText,
+      // No perception, no observation row. A "I looked but formed no impression"
+      // sentence would be a memory of nothing that later reads like a memory of
+      // something; the anchor row already records that the picture was shown.
+      observationText: observations.length > 0 ? observationMemorySentence(observations) : '',
+      attachmentId: effectiveAttachmentId,
+      turnId,
+    })
+    return { ...(memory ?? { status: 'skipped' }), observations: observations.length }
   }
 
   async conversationHistory(limit = 50) {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   EXPERIENCE_DREAM_CONTEXT_DECLARATION,
   buildRecentExperienceContext,
+  formatRecentVisualObservations,
   formatExperienceEntry,
   formatExperienceSection,
   withExperienceDeclaration,
@@ -22,6 +23,18 @@ const entries = [
   { id: 1, createdAt: 1_700_000_000_000, sourceType: 'owner_chat', content: '主人说黑莓今天睡沙发', importanceScore: 0.4 },
   { id: 2, createdAt: 1_700_000_060_000, sourceType: 'repeated_behavior', content: '主人说黑莓又睡沙发', importanceScore: 0.7 },
   { id: 3, createdAt: 1_700_000_120_000, sourceType: 'emotion_event', content: '主人今天有点难过', importanceScore: 0.9 },
+  {
+    id: 4,
+    createdAt: 1_700_000_180_000,
+    sourceType: 'pet_vision',
+    importanceScore: 0.6,
+    content: '主人这一轮发送了图片',
+    visionSummary: '主人这一轮发送了图片',
+    visionId: 'V0',
+    attachmentId: 'attachment-cat-window',
+    visualObservation: ['窗边有一只橘猫，尾巴轻轻卷着'],
+    visualFocus: '猫的姿态',
+  },
 ]
 
 // --- empty input never produces a dangling section ---------------------------
@@ -37,8 +50,43 @@ assert.equal(withExperienceDeclaration(''), '', 'an empty section must not emit 
   const section = formatExperienceSection({ entries })
   assert.ok(section.includes('RECENT EXPERIENCES'), 'the section must be labelled')
   for (const entry of entries) {
-    assert.ok(section.includes(entry.content), `missing experience: ${entry.content}`)
+    if (entry.visualObservation) {
+      assert.ok(section.includes(entry.visualObservation[0]), 'missing real visual observation')
+    } else {
+      assert.ok(section.includes(entry.content), `missing experience: ${entry.content}`)
+    }
   }
+}
+
+// Visual observations are Dream background only: visible, bounded, and never
+// part of the memory evidence graph.
+{
+  const now = 1_700_000_200_000
+  const visualSection = formatRecentVisualObservations([
+    {
+      id: 7,
+      createdAt: now - 60_000,
+      sourceType: 'pet_vision',
+      attachmentId: 'attachment-cat-window',
+      visualObservation: ['窗边有一只橘猫，尾巴轻轻卷着'],
+    },
+    {
+      id: 8,
+      createdAt: now - 48 * 60 * 60 * 1000,
+      sourceType: 'pet_vision',
+      visualObservation: ['两天前的观察不应出现'],
+    },
+  ], { now, limit: 3 })
+  assert.match(visualSection, /RECENT VISUAL OBSERVATIONS/)
+  assert.match(visualSection, /\[INFERRED\]/)
+  assert.match(visualSection, /窗边有一只橘猫/)
+  assert.doesNotMatch(visualSection, /两天前的观察不应出现/)
+  assert.match(visualSection, /不能作为 source_ids/)
+  assert.match(visualSection, /不能增加 evidenceCount/)
+  assert.match(visualSection, /不能提高 confidence/)
+  console.log('DREAM_SEES_VISUAL_OBSERVATION=YES')
+  console.log('VISUAL_OBSERVATION_IN_SOURCE_IDS=NO')
+  console.log('VISUAL_OBSERVATION_COUNTS_AS_RAW_ROOT=NO')
 }
 
 // --- the declaration must accompany the section ------------------------------
@@ -54,6 +102,9 @@ assert.equal(withExperienceDeclaration(''), '', 'an empty section must not emit 
     /source_ids/.test(composed),
     'the declaration must forbid using experiences as source_ids',
   )
+  assert.ok(/感知记录/.test(composed), 'the declaration must distinguish visual perception records')
+  assert.ok(/attachmentId/.test(composed), 'the declaration must explain how to re-view an attachment')
+  assert.ok(composed.includes('窗边有一只橘猫，尾巴轻轻卷着'), 'real visual observation must be rendered')
 }
 
 // --- ordering and limits are deterministic -----------------------------------
@@ -87,6 +138,14 @@ assert.equal(withExperienceDeclaration(''), '', 'an empty section must not emit 
   const weird = formatExperienceEntry({ createdAt: 'not-a-time', sourceType: 'unknown_type', content: '' })
   assert.ok(weird.includes('unknown'), 'an unparseable timestamp must be reported, not printed as NaN')
   assert.ok(weird.includes('(empty experience)'), 'empty content must be obvious')
+  const oldVision = formatExperienceEntry({
+    createdAt: 1_700_000_000_000,
+    sourceType: 'pet_vision',
+    content: '主人这一轮发送了图片',
+    visionSummary: '主人这一轮发送了图片',
+  })
+  assert.ok(oldVision.includes('暂无真实观察记录'), 'old visual rows must not pretend the template is an observation')
+  assert.ok(oldVision.includes('历史图片摘要（非观察）'), 'old visual summary must stay clearly labelled')
 }
 
 // --- source labels stay human readable for the prompt ------------------------

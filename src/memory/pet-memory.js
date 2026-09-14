@@ -27,9 +27,11 @@ import {
 import {
   MemoryProvenanceStore,
   normalizeProvenance,
+  resolveMemoryProvenance,
 } from './memory-provenance.js'
 
 const PET_SOURCE_SESSION = 'vc-ai-pet'
+export const PET_SEED_SOURCE_SESSION = 'vc-ai-pet:seed'
 export const PET_RAW_SOURCE_SESSION = PET_SOURCE_SESSION
 export const PET_DREAM_SOURCE_SESSION = 'vc-ai-pet:dream'
 export const PET_DREAM_WINDOW = 'vc-ai-pet:dream-window'
@@ -46,6 +48,26 @@ const REFLECTION_DERIVED_LEVELS = new Set(['user', 'fact', 'lesson', 'topic'])
 const DREAM_DEDUPE_LEVELS = ['soul', ...MEMORY_WRITE_LEVELS]
 const CURRENT_SELF_QUERY = '李花花 自己 性格 习惯 喜欢 相处 主人 自我'
 export const HISTORICAL_RECALL_CONTEXT_MAX = 16
+
+function isLegacyBootstrapPattern(content) {
+  const text = String(content ?? '')
+  return text.startsWith('我第一次醒来了。时间戳：') || (
+    text.includes('VC_AI_PET_V0_1_PASS') &&
+    text.includes('正式通过') &&
+    text.includes('作为出生纪念日')
+  )
+}
+
+/**
+ * Old sandboxes used the runtime source session for internal seed rows. Keep
+ * those rows intact, but do not let the two known bootstrap templates become
+ * an empty-night Dream/Reflection source. An explicit owner provenance wins.
+ */
+function isLegacyBootstrapRow(row, metadata = null) {
+  if (!isLegacyBootstrapPattern(row?.content)) return false
+  if (!metadata) return true
+  return resolveMemoryProvenance(row, metadata).source === 'SYSTEM_EVENT'
+}
 
 export { memorySourceKind }
 
@@ -150,11 +172,12 @@ export class PetMemory {
 
   seedIfFresh(now = Date.now()) {
     if (!this.db.isFresh()) return false
-    this.remember('soul', '我是一个住在这里的像素伯恩山小狗。', 3, { keywords: ['伯恩山','小狗','宠物','身份','自己','住在这里'] })
-    this.remember('rules', '我不是工作代理，也不能替主人执行任务。', 3)
-    this.remember('rules', '我不能操作宿主电脑；我只能接触自己的小房间和玩具箱。', 3)
-    this.remember('rules', '我不调用 DeepSeek，也不读取 DeepSeek、Luna 或 Codex 的工作上下文。', 3)
-    this.remember('fact', `我第一次醒来了。时间戳：${now}`, 2)
+    const seed = { source_session: PET_SEED_SOURCE_SESSION }
+    this.remember('soul', '我是一个住在这里的像素伯恩山小狗。', 3, { ...seed, keywords: ['伯恩山','小狗','宠物','身份','自己','住在这里'] })
+    this.remember('rules', '我不是工作代理，也不能替主人执行任务。', 3, seed)
+    this.remember('rules', '我不能操作宿主电脑；我只能接触自己的小房间和玩具箱。', 3, seed)
+    this.remember('rules', '我不调用 DeepSeek，也不读取 DeepSeek、Luna 或 Codex 的工作上下文。', 3, seed)
+    this.remember('fact', `我第一次醒来了。时间戳：${now}`, 2, seed)
     return true
   }
 
@@ -165,10 +188,10 @@ export class PetMemory {
     if (!already) {
       // Soul is append-only. Keep the seed as historical evidence instead of
       // rewriting it in place when the fixed Identity Kernel is materialized.
-      this.remember('soul', desiredSoul, 3, { keywords: ['李花花','生日','伯恩山犬','主人','宠物','身份','自己','2026-08-31'] })
+      this.remember('soul', desiredSoul, 3, { source_session: PET_SEED_SOURCE_SESSION, keywords: ['李花花','生日','伯恩山犬','主人','宠物','身份','自己','2026-08-31'] })
     }
     const birthdayFactExists = this.db.list('fact').some((row) => row.content.includes(identity.birthday) && row.content.includes('生日'))
-    if (!birthdayFactExists) this.remember('fact', `${identity.name}的生日是 ${identity.birthday}；这一天 ${identity.birthEvent} 正式通过，作为出生纪念日。`, 3, { keywords: ['李花花','生日','出生','2026-08-31','v0.1','封板','纪念日','伯恩山犬'] })
+    if (!birthdayFactExists) this.remember('fact', `${identity.name}的生日是 ${identity.birthday}；这一天 ${identity.birthEvent} 正式通过，作为出生纪念日。`, 3, { source_session: PET_SEED_SOURCE_SESSION, keywords: ['李花花','生日','出生','2026-08-31','v0.1','封板','纪念日','伯恩山犬'] })
     return true
   }
 
@@ -601,6 +624,36 @@ export class PetMemory {
       : found
   }
 
+  /**
+   * Remove one memory row this process just wrote, together with its provenance.
+   *
+   * Deliberately narrow, and deliberately not a general "delete memory" feature:
+   * it exists so a caller that must write several rows as one unit — experience
+   * consolidation committing its candidates through the MemoryGate — can undo the
+   * rows it already wrote when a later row fails. Without it, a gate that throws
+   * on the second candidate leaves the first candidate's row behind while the
+   * whole pass reports failure and keeps its experiences pending, so a retry
+   * would find a row the failure report said was never created.
+   *
+   * It does not touch the Dream/Reflection window checkpoints: a window that was
+   * advanced by a row that no longer exists only means Dream looks at a slightly
+   * older range next time, which is the safe direction (it never skips life).
+   *
+   * Returns true when a row was actually removed.
+   */
+  forget(id) {
+    const memoryId = String(id ?? '').trim()
+    if (!memoryId) return false
+    const found = this.#findMemoryById(memoryId)
+    if (!found?.row || !found.level) return false
+    // `MemoryDb` has no delete; the underlying handle is the only way to remove a
+    // row, and the level decides the table (the level *is* the table name).
+    const removed = this.db.db.prepare(`DELETE FROM ${found.level} WHERE id = ?`).run(memoryId)
+    if (Number(removed?.changes ?? 0) === 0) return false
+    try { this.provenanceStore.remove(memoryId) } catch {}
+    return true
+  }
+
   provenanceForMemory(id) {
     const found = this.#findMemoryById(id)
     return found?.row ? this.provenanceStore.resolve(found.row) : null
@@ -632,6 +685,7 @@ export class PetMemory {
       const latest = this.db.list(level, { status: 'active' })
         .filter((row) =>
           row.source_session === PET_SOURCE_SESSION &&
+          !isLegacyBootstrapRow(row, this.provenanceStore.get(row.id)) &&
           Number(row.importance) >= 2 &&
           Number.isFinite(Number(row.created_at)),
         )
@@ -651,6 +705,7 @@ export class PetMemory {
       .map((row) => this.provenanceStore.decorate(row))
       .filter((row) =>
         row.source_session === PET_SOURCE_SESSION &&
+        !isLegacyBootstrapRow(row, this.provenanceStore.get(row.id)) &&
         isRawEvidenceRow(row) &&
         Number(row.importance) >= 2 &&
         Number.isFinite(Number(row.created_at)) &&

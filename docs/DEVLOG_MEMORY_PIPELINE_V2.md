@@ -372,3 +372,207 @@ MIGRATION_REQUIRED_ON_DEPLOY=YES
 2. archive 无法复原当年 Local Brain 的真实 candidate，因此「低分候选」对历史事故的
    实际触发比例**无法验证**（审计已明确标注，未用构造数据冒充）。
 3. 重复计数器的持久化（跨重启保留 occurrence 基线）是已知次优项，建议后续单独跟进。
+
+---
+
+# 附录 A — v2 Final Hardening（生产发布轮，2026-09-14）
+
+本节记录把 v2 从「代码写完」推到「可以上生产」的最后一轮：8 个 Blocker（A–H）
+的裁定与修复、schema 单一真源、一次性回填工具、验收口径修正，以及发布前的彩排结果。
+
+**所有数字都在本机实测得到；凡是没能实测的，明确标注为未验证，不用构造数据冒充。**
+
+## A.1 Blocker 清单与裁定
+
+| # | 问题 | 根因 | 修复 |
+|---|---|---|---|
+| A | Consolidator 直接写 PetMemory，绕过 MemoryGate | `experience-consolidator.js` 调用 `memory.remember()` | 改经 `memoryGate.consider(evidence, rawCandidate, {messageId})`；gate 缺失时 **fail-closed**（`status=failed`, `reason=memory-gate-missing`），不写、不 markProcessed、保留 pending 可重试 |
+| B | 定时 Reflection 不消费 Experience Buffer | `tick()` 调用 `maybeRunReflection()` 后无人 markProcessed；`runReflectionNow()` 事后重新查询 pending | 统一 `#runReflectionWithExperienceSnapshot()`：先 flush → 冻结 pending 快照 → 引擎带快照运行 → **只有 `completed && ok===true`** 才 markProcessed，且只 mark 快照里的 id |
+| C | Dream 与 Reflection 共用同一个 context provider | 二者语义不同：Reflection 只应看 pending，Dream 应看到「已反思但仍是生活」的经历 | 拆成 `dreamExperienceContextProvider`（`recent()`，含 processed）与 `reflectionExperienceContextProvider`（只用快照） |
+| D | 系统提示词随轮数线性膨胀 | `formatConversationEvidenceBoundary()` 为每条消息输出一行 `RECENT_MESSAGE_n` | 改为常量大小的声明式策略段；`PROMPT_MAX_CONTEXT_TURNS` 200→50，广告窗口 = 实际窗口 |
+| D2 | 最坏情况请求会超 16384 | 无最终请求预算检查 | `planFinalRequestBudget()`：按 LOW→MEDIUM→HIGH、旧→新裁剪，最近 6 轮为保留区；仍超则连保留区一起裁剪；仍超则**拒绝发送**而不是发出去被截断 |
+| E | 关键词可以凭空生成 | `validateMemoryCandidate()` 只过滤类型与空串 | 逐条关键词必须在 evidence 中（NFKC → lowercase → 去标点空白后 substring）；`一定要记住哦 + ['黑莓','猫']` → `[]` |
+| F | Dream 看不到图片观察；且观察可能污染证据链 | 视觉观察未进入 Dream 背景 | 新增 `RECENT VISUAL OBSERVATIONS` 段（仅 Dream 背景，最多 24h 内 3 条）；`isObservationEvidenceRow()` 让观察**永不**进入 `dreamSourceRows()` / `raw roots` / `evidenceCount` / `confidence` |
+| G | Dream 日志的 summary 由模型散文决定 | `summary = summaries.join(' ')` | 改为从**真正 commit 的行**确定性生成；模型散文保留在 `changes.modelSummary`（仅诊断） |
+| H | 种子记忆制造「空白夜做梦」 | 种子行与真实 raw evidence 用同一个 `source_session='vc-ai-pet'` | 新种子用 `vc-ai-pet:seed`；旧沙箱的两条 bootstrap 模板由 `isLegacyBootstrapRow()` 在**不改写、不删除**的前提下排除出 Dream/Reflection 源 |
+| §15 | schema 版本有两个真源 | runtime（18 列）与迁移脚本（12 列、version 1）各写一份 | 新建 `src/experience/experience-buffer-schema.js` 作为唯一真源，runtime 与迁移脚本共同 import；`EXPERIENCE_BUFFER_SCHEMA_VERSION = 2` |
+| §16 | 历史显式记忆请求没有被回填 | 早期事故里的「记住…」从未写入 PetMemory | 新增 `scripts/backfill-explicit-memory-from-archive.mjs`：archive **只读**、无模型调用、默认 dry-run、`--apply` 幂等 |
+
+## A.2 计划外的两处改动（说明理由）
+
+发布轮中发现两个计划没有覆盖、但不改就不能通过验收的问题：
+
+1. **`pet-runtime.js` 注入 `memoryGate`（Blocker A 的必要条件）。**
+   Consolidator 改成经 gate 写入后，如果构造函数没拿到 gate，生产上
+   consolidation 会 100% fail-closed——「修好了」等于「彻底不工作」。因此必须
+   在 `new ExperienceConsolidator({...})` 里传入 `this.memoryGate`。
+
+2. **`derived-evidence.js`：观察不再计入证据预算。**
+   G2 的初版把 observation id 追加进 `sourceRoots`，于是
+   `confidenceForRoots()` 与 `evidenceCount` 都会把它算进去——而 G2 自己写进
+   Dream/Reflection prompt 的声明恰恰是「不能作为 source_ids，不能增加
+   evidenceCount，不能提高 confidence」。两者直接冲突，按声明修正：budget 只由
+   raw roots 计算。观察的价值在于**可追溯**（重检行引用图片锚点，锚点是真实
+   confirmed root），不在于数量。对应测试断言同步改为
+   `evidenceCount`/`confidence` 在「引用观察」与「不引用观察」时**完全相等**。
+
+3. **`runReflectionNow()` 的调度器短路补零。**
+   DreamScheduler 在到达 helper 之前就可能 skip（interval gate / in-flight /
+   eligibility）。那时返回值里没有 `consumedExperienceCount`，
+   「消费了 0」与「根本没问」看起来一样。现在统一报 `0` + 空 id 列表。
+
+## A.3 Blocker D 实测收益
+
+用**真实 Local Brain tokenizer**（`POST http://127.0.0.1:17862/tokenize`）测量，
+基线为未修改的 `db8e8e5` 检出（`/tmp/vc-ai-pet-prerelease-base-*`）：
+
+| 场景 | 基线 systemChars | 现在 systemChars | 基线 system tokens | 现在 system tokens | 基线 total tokens | 现在 total tokens |
+|---|---|---|---|---|---|---|
+| typical 50 turns | 11210 | **3581** | 3947 | **1436** | 4742 | **2231** |
+| worst-case 50 turns（1200 字符/条） | 11210 | **3581** | 3947 | **1436** | 16742（**超 16384**） | **14231** |
+| 12 turns | 5091 | **3581** | 1970 | **1436** | — | 1649 |
+| 24 turns | 7023 | **3581** | 2594 | **1436** | — | 1821 |
+
+`RECENT_MESSAGE_n` 行数：100 → **0**（不再随轮数增长）。
+
+**最终请求 guard 的保守性**（同一 tokenizer，window=16384）：
+
+| 场景 | guard 估计 tokens | 实际投递 tokens | 保留轮数 | 是否超窗 |
+|---|---|---|---|---|
+| normal 50 turns | 7214 | 3271 | 50/50 | 否 |
+| worst-case 50 turns | 14588 | 6269 | 5/50 | 否 |
+| worst-case，window=8192 | 7589 | 3221 | 2/50 | 否 |
+
+估算**始终高于**真实 token 数（保守 1.2–2.3 倍）。代价是极端输入下会多裁几轮；
+收益是不会把超长请求发给 16384 窗口的模型。正常使用（50 轮真实中文）实测
+3271 tokens，不触发任何裁剪。
+
+## A.4 黑莓召回：口径修正与实测
+
+原来的验收标准写的是「真事实必须排在污染行**之上**」。用真实数据测下来这条**不成立，
+也不该成立**：
+
+在**生产 PetMemory 的副本**上（212 条索引行，查询 `猫猫叫什么名字`）：
+
+| 阶段 | 真事实的位置 | 查询「黑莓叫什么」 | 查询「黑莓长什么样」 |
+|---|---|---|---|
+| 回填前 | **不存在**（生产库里没有任何一行说明猫叫黑莓） | 真事实 ABSENT | 真事实 ABSENT |
+| 回填后 | top-5 内 | `rank#3` | `rank#3` |
+
+宠物每轮实际拿到的是 `recall(ownerText, 5)`（`local-brain.js`，层级
+user/project/fact/lesson/topic）。真正决定它能不能回答的问题是
+**「真事实在不在这 5 条里」**，而不是「它是不是第 1 条」——模型读的是全部 5 条。
+因此验收口径改为 `BLACKBERRY_TRUE_FACT_VISIBLE_TO_PET`，彩排实测：
+
+```
+INDEXED_DOCS=215  RECALL_K=5
+  q="猫猫叫什么名字" -> true-fact rank#2 of top-5
+  q="黑莓叫什么"     -> true-fact rank#4 of top-5
+  q="黑莓长什么样"   -> true-fact rank#4 of top-5
+  q="我们家猫叫什么" -> true-fact rank#1 of top-5
+ABSENT_FROM_TOP_K=[]
+```
+
+污染行 `主人说：一定要记住哦`（关键词 `猫猫,名字,黑莓`）在回填前后都占着最宽松
+查询的第 1 名。**本次发布不新增 reranker**（用户明确约束）。它既不是回填造成的，
+也没有被回填加剧；`猫猫/名字/黑莓` 这组关键词与内容不接地，是历史写入的遗留，
+按「不改写既有行」的原则保持原样。
+
+**为什么回填行的关键词是空的**：`highPriorityMemoryCandidate()` 返回
+`keywords: []`，`validateMemoryCandidate()` 又要求每个关键词都能在 evidence 中
+找到，所以回填行只带 content、不带关键词。曾尝试自动抽取关键词以把真事实抬到
+第 1 名，实测**收益不确定且会引入碎片关键词**（机械 2-gram 抽出的是 `叫黑`、`们家`
+这类词，既不是真人会输入的东西，又可能污染后续查询），故**放弃该启发式**，留作
+后续单独跟进的增强项，而不是塞进这次发布。
+
+## A.5 生产库彩排结果（28/28 PASS）
+
+`production-db-rehearsal.sh` 在**生产数据的副本**上跑完整升级流程，不写生产：
+
+```
+REHEARSAL_PASS=28 REHEARSAL_FAIL=0
+MIGRATION_DRY_DB_CREATED=false          # dry-run 不建库
+MIGRATION_DRY_NO_DRIFT=no-drift
+EXPERIENCE_DB_CREATED=true
+EXPERIENCE_DB_MODE=600                  # 0600
+EXPERIENCE_SCHEMA_VERSION_PRESENT=true  # meta.schema_version=2
+MIGRATION_REFUSES_DRIFTED_LEGACY_DB=SCHEMA_DRIFT   # 迁移脚本拒绝改写旧库
+MIGRATION_REFUSAL_PRESERVED_LEGACY_ROWS=1
+LEGACY_UPGRADE_COLUMNS=18               # runtime initialize 补齐 6 列
+LEGACY_UPGRADE_ROWS_KEPT=1
+LEGACY_UPGRADE_CONTENT_KEPT=true
+LEGACY_UPGRADE_VISUAL_COLUMNS_ADDED=true
+LEGACY_UPGRADE_META_VERSION=2
+BACKFILL_DRY_ROW_DELTA=0                # dry-run 不写记忆行
+SECOND_APPLY_NEW_ROWS=0                 # --apply 幂等
+EXPLICIT_BACKFILL_IDEMPOTENT=true
+BLACKBERRY_TRUE_FACT_PRESENT=true
+BLACKBERRY_TRUE_FACT_VISIBLE_TO_PET=YES
+PETMEMORY_SCHEMA_UNCHANGED=true
+CONVERSATION_ARCHIVE_UNCHANGED=true
+VISUAL_DB_UNCHANGED=true
+ARCHIVE_ROWS_AFTER=472
+VISUAL_ROOTS_SAME=46
+VISUAL_OCCURRENCES_SAME=47
+PETMEMORY_ROWS_NOT_LOST=true
+DREAM_LOG_ROWS_NOT_LOST=true
+FRESH_DB_META_EXISTS=true
+SECOND_INIT_NO_DIFF=true
+SEED_ROWS_DREAM_ELIGIBLE=NO
+```
+
+两条容易误解的检查：
+
+- `MIGRATION_REFUSES_DRIFTED_LEGACY_DB` 与 `LEGACY_UPGRADE_*` 看似矛盾，其实是
+  **两条不同的路径**：迁移脚本对既有库一律拒绝改写（保护数据），而真正把旧
+  12 列库升到 18 列的是 runtime 的 `initialize()`（`ALTER TABLE ADD COLUMN`，
+  SQLite 没有 `ADD COLUMN IF NOT EXISTS`，所以先查 `PRAGMA table_info`）。
+  生产当前没有 `experience-buffer.sqlite`，首次启动是全新创建；旧库升级属于保险路径。
+- dry-run 的「没写」不能用整文件 hash 证明：脚本会打开 PetMemory，而 meow-memory
+  会执行 `PRAGMA journal_mode = WAL`，这会改写副本的 SQLite 头。因此改用
+  **行数比对**（`BACKFILL_DRY_ROW_DELTA=0`）。
+
+## A.6 未验证 / 明确排除
+
+1. **未在生产上强制跑一次真实 Dream/Reflection**（按用户约束），改为临时 sandbox
+   的实测 + 只读观察调度器状态。
+2. **没有新增 reranker**，因此「污染行占第 1 名」这一历史现象保持原样；真事实
+   进入 top-5 已足以让模型读到。
+3. **回填不重写既有记忆行**：`主人说：一定要记住哦` 这类历史行保持原 content 与
+   原 keywords，只做「新写入必须接地」的前向约束。
+4. 自动关键词抽取是**已知未做的增强**（见 A.4）。
+
+## A.7 独立审计发现并修复的 6 条缺陷
+
+发布轮跑了两轮独立只读审计（记忆证据链 / 调度与生命周期），两条各发现真实缺陷，
+**全部修复并补了回归测试**。审计报告原文见
+`vc-ai-pet-agent-share/handoffs/release-memory-v2/AUDIT-A-report.md` 与 `AUDIT-B-report.md`。
+
+| # | 审计发现 | 为什么是真问题 | 修复 |
+|---|---|---|---|
+| A1 | Consolidator 逐候选写入没有事务；第 1 个候选写入后第 2 个候选抛错，第 1 行留在 PetMemory，而整趟报告 failed 且不消费 | 「这趟失败了」与「这趟什么都没写」必须一致；否则重跑会撞上一行失败报告声称不存在的记忆 | 新增 `PetMemory.forget(id)` 与 `MemoryProvenanceStore.remove(id)`；提交循环抛错时先回滚本次已写入的行再 rethrow。回归：`runRollbackRegression`（注入「第 2 个候选抛错」的 gate，断言 `memoryRowCount=0`、pending 不变、重跑恰好写 2 行） |
+| B1 | **每个 tick 的 consolidation 会把整批 pending 全部标为 processed**，Reflection 因此永远看不到它们 | 白天普通聊天没有稳定模式，却被一趟「什么都没找到」的 pass 吃掉；Reflection 面对的是空 buffer | Consolidation 只消费**它真的做出判断**的行：进入 MemoryGate 的稳定候选组，或携带凭证文本被主动清除的行。无稳定组的行留在 buffer 给 Reflection。回归：`v0.4-experience-consolidator`（「一次性事件留在 pending」）、`v0.4-experience-aware-memory-acceptance` CASE_4 |
+| E1 | 关键词全部不接地时，只把关键词过滤掉、仍接受候选 | 因为 MemoryGate 只在**验证失败**时才走 explicit fallback，被接受的候选会以 `主人说：一定要记住哦` 落盘——一条既无检索句柄、又来自「凭空引用」的候选 | 全部关键词不接地 → `accepted:false, reason:'keywords-ungrounded'`，交回 gate 的 owner 原话 fallback。**注意区分**：模型声明 `keywords: []`（没有关键词）仍然接受，显式 owner 路径没有关键词来源，不能被误伤 |
+| 3A | 公开方法 `recordVisualExperienceMemory()` 自身不检查 veto | 它是公开方法；「记住我的密码是 hunter2」+ 图片仍能写两行 | veto 移到方法**内部**；命中时按附件记录拒绝，供后续无 owner 轮次的重检使用 |
+| 3B | 图片回看（consolidation 期间、无 owner 文本）会在 veto 之后写入新的推断行 | 同一道边界被慢路径绕过 | `visualMemoryVetoes` 按附件记住拒绝，`#writeReinspectionMemory` 直接放弃 |
+| B3 | `migrate-experience-buffer.mjs --apply` 拒绝旧 12 列库（exit 3） | 运维入口失效，而启动路径却在悄悄升级 | 区分两种「不匹配」：**纯旧 12 列**（缺失列全部已知、无未知列）→ `ADDITIVE_UPGRADE`，`--apply` 用 `ALTER TABLE ADD COLUMN` 原地补齐并保留全部行；**含未知列** → 仍然 `SCHEMA_DRIFT` + `REFUSED` |
+| B4 | 每次 consolidation 都可能调用本地大脑做图片重检（24h 冷却只挡同一附件） | 一天的新图片 = 每 tick 一次模型调用 | 新增 pass 级间隔 `VISUAL_REINSPECT_PASS_INTERVAL_MS = 20 分钟`，并在模型调用**之前**占位，失败或慢速也不会在下一个 tick 重试 |
+
+修完后的完整复核（feature worktree，代码冻结）：
+
+```
+单测矩阵            29/29  EXIT=0
+npm 测试矩阵        11/11  NPM_EXIT=0
+生产库彩排          34/34  REHEARSAL_PASS=34 REHEARSAL_FAIL=0
+```
+
+## A.8 审计确认无问题的部分
+
+- Experience Buffer **不是** PetMemory 的 raw evidence root；派生证据链只从 PetMemory 行解析。
+- 源码 / 种子 / 迁移中**没有**硬编码的派生理解（grep 命中均为注释示例）。
+- 回填脚本归档库以 `readOnly` 打开；dry-run 不增加记忆行；`--apply` 幂等。
+- runtime 与迁移脚本共用同一份 schema 真值；旧库升级后列集合齐全、`meta=2`、权限 0600。
+- 无脑 / 附件不可读时重检安全退出，不抛错、不递归、不重试。
+- 发布安全：改动路径与生产 dirty 路径（22 项，全在 `android-companion/**`）**交集为空**；
+  `android-companion/**` 完全未被触碰；`git merge-base --is-ancestor 4a3b8ef HEAD` = 0；
+  diff 与新增测试文件中未发现密钥 / token / 真实密码 / 敏感文件名。

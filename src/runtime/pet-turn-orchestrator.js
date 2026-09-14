@@ -270,6 +270,29 @@ export class PetTurnOrchestrator {
       capped: result.capped,
       prematureAnswersBlocked: result.prematureAnswersBlocked ?? 0,
       prematureReplyMessagesDiscarded: result.prematureReplyMessagesDiscarded ?? 0,
+      // Which attachment this turn actually showed the pet. The runtime must not
+      // infer that from an observation: the visual session may inspect recalled
+      // pictures too, so its `attachmentId` can belong to an older image and would
+      // make a brand-new upload look like a duplicate of it.
+      attachmentId: attachment?.id ?? null,
+      // What the pet actually perceived this turn. The vision session already
+      // sanitized both lists (safe summary ≤180 chars, focus ≤120), and the
+      // runtime needs them to remember the picture it was shown — the raw
+      // `result` is not exposed, only these two vetted projections.
+      inspections: Array.isArray(result.inspections)
+        ? result.inspections.map((item) => ({
+            visualId: item?.visualId ?? null,
+            attachmentId: item?.attachmentId ?? null,
+          }))
+        : [],
+      observations: Array.isArray(result.observations)
+        ? result.observations.map((item) => ({
+            visualId: item?.visualId ?? null,
+            attachmentId: item?.attachmentId ?? null,
+            focus: item?.focus ?? '',
+            summary: item?.summary ?? '',
+          }))
+        : [],
     }
   }
 
