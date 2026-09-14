@@ -673,3 +673,47 @@ system 只随 memories / currentSelfContext / stableRules 的**真实内容量**
 **教训**：报告 system 规模时不能只写一个由自造夹具得到的数字。夹具里的
 rules / memories 文本长度会直接搬运到结果里（本例差 334 字符 / 139 tokens），
 所以必须同时给出夹具内容来源与参数敏感性，否则数字看起来精确、实际上不可复现。
+
+### A.11 部署后真实生产证据：调度器路径消费了自己冻结的快照
+
+上线后独立验收把「生产有没有跑过一次真实的、自动触发的 Reflection」列为
+INCONCLUSIVE。复核 `dream_log` 后发现**这次真的跑过**，证据在 id=15：
+
+```text
+run_at          2026-09-14 21:52:09 CST      ← 回填 apply 完成后 12 秒，自动触发
+kind            reflection
+sourceIds       ["0mu1axrae-f3…", "0mu1axrbe-ab…", "0mu1axrca-04…"]
+derived         []                            ← 三个候选全部 duplicate，正确地为 0
+duplicates      ["0mtwd0fel-1c44…"]
+checkpointFrom  1789095063758  (2026-09-09)
+checkpointTo    1789393925068  (2026-09-14)
+summary         主人反复强调要记住黑莓的长相、花色和面部细节，并提供了多张照片作为视觉参考。
+```
+
+三个 `sourceIds` **逐条对应回填写入的 3 行**（都是 21:51:57 写入的
+`主人说：…` fact，imp=3）。回填 21:51:57 → Reflection 21:52:09，间隔 12 秒。
+
+这条记录同时正面证实了三件事：
+
+1. **调度器路径（不是手动 wrapper）在生产真实触发并完成**了一次 Reflection。
+2. **它消费的正是自己冻结的快照**：`sourceIds` 是那 3 行，没有多、没有少。
+3. **它在没有产生新理解时正确地消费为 0**：3 个候选经 gate 全部判为 `duplicate`，
+   `derived` 为空数组，checkpoint 才推进。这正是用户要求的
+   「不能在 Reflection 结束后把新进来、其实没看过的事件一起标掉」的反面 ——
+   该消费的消费了，不该产生的没有产生。
+
+**关于 summary 是模型散文而非确定性文案**：这不是缺陷。`deterministicDreamSummary()`
+只用于 Dream 路径（`dream-engine.js:553`）；Reflection 路径的 summary 按设计使用模型
+散文，落库点在 `reflection-engine.js:441`。用户的要求第 6 条明确只针对
+**Dream summary**（「Dream summary 改成由系统根据真正落库的 derived rows 确定性生成」）。
+
+**同时更正上一轮的一个误判**：初查时用「`derived=0` 但 summary 不含
+『没有形成新的长期理解』」当判据，把 id=15 标成了不一致。该判据对 Reflection 不适用，
+因为确定性文案只属于 Dream。生产**历史上唯一的 `kind=dream, derived=0` 行是 id=3**
+（2026-09-02，早于 v2 部署），属于历史数据，不该也不可能被改写。
+
+**仍未闭环的唯一一项**：部署后尚无一次真实的 `kind=dream`。因此「确定性 Dream summary
+在真实生产 Dream 中落库」只有代码级与沙盒级证据
+（`v0.4-dream-summary-determinism`：`MODEL_SUMMARY_SAYS_3_FINAL_DERIVED_0=PASS`、
+`DREAM_PUBLIC_SUMMARY_DETERMINISTIC=PASS`），没有生产样本。用户 §33 明确不要求为了
+验收去强制触发真实 Dream，所以这一项保持「已证明逻辑、未取得生产样本」。
