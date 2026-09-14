@@ -1573,3 +1573,21 @@ npm 测试矩阵    11/11  NPM_EXIT=0 + 新增 test:reflection-scheduler
 4. 测量口径：`POST /tokenize` 入参字段名是 `content`，传 text/prompt/input 会返回空
    tokens。本轮所有 token 数字都出自 content 字段（TOKENIZER=LOCAL_BRAIN_QWEN_TOKENIZE）。
 ```
+#### 口径陷阱（同轮发现，务必不要误用）
+
+`handoffs/measure-system-prompt.mjs` 在**基线 `db8e8e5`** 上跑得出
+`systemChars=5091`（12 turns，`RECENT_MESSAGE_N_LINES=24`）→ `11210`（50 turns，
+`RECENT_MESSAGE_N_LINES=100`），线性增长；在**发布版**上跑得出恒定的
+`3581 / RECENT_MESSAGE_N_LINES=0`。这组对照是有效的（同一脚本、同一分词器）。
+
+但若把那个脚本的 fixture 换成生产真实内容（真实 rules / soul / fact）再同时跑
+基线与发布版，两边**都会**得到恒定值（基线 3509、发布版 3915，`RECENT_MESSAGE_N_LINES`
+都为 0）。原因是该路径下基线也没有逐条复制 source map —— 说明**基线的膨胀只在特定
+输入路径上出现**，而这些路径恰好就是脚本默认 fixture 覆盖的那些。
+
+因此正确的表述是：**默认 fixture 口径**下基线线性膨胀、发布版恒定；
+**真实内容口径**下两者都恒定，但发布版的常量比基线高 406 字符（相同内容下这是
+boundary 声明的固定成本差异，不是膨胀）。判断「是否与 turns 解耦」必须看
+`contextTurns` 的敏感性（发布版 12/24/50 全部 3229/1255，影响为 0），
+不能只看两个常量是否相等。
+
