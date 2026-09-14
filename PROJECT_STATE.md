@@ -1442,3 +1442,115 @@ RETRIEVAL_MODIFIED=NO
 PRODUCTION_DATA_MODIFIED=NO
 PRODUCTION_DEPLOYED=NO
 ```
+
+## 2026-09-14 — Memory Pipeline v2 最终审计 / 硬化 / 生产发布
+
+Status: `FINAL_STATUS=MEMORY_PIPELINE_V2_LIVE_IN_PRODUCTION`
+
+用户下达生产发布任务：完成最终源码审计 → 修复必要 bug → 完整 regression → commit → push
+→ 推入当前 production → 必要时自动 rollback。用户同时冻结了全部设计选择（八条 blocker、
+24h 跨度、30min 会话间隔、8min/20min 睡眠连续性、seed 排除、确定性摘要、关键词接地、
+final request guard、schema 版本化、回填工具），并要求**不要再询问设计选择**。
+
+### 最终上线版本
+
+```text
+FEATURE_BRANCH      feat/life-experience-buffer
+FEATURE_HEAD        8312ce66cd65700450305185246c31edcc28b1d9   （已推 origin）
+PRODUCTION_HEAD     8312ce66cd65700450305185246c31edcc28b1d9   （ff-only，无 merge commit）
+DEPLOY_BASE         4a3b8ef91d6fa806616a4b29825405b8fe02d938
+COMMITS             a4cab9d  feat(memory): harden Memory Pipeline v2 for production
+                    8312ce6  test(memory): pin the scheduled reflection lifecycle
+DELTA               63 个文件；android-companion/** 命中 0
+```
+
+### 八条 blocker 的落地
+
+```text
+A  Consolidator 提交路径改走 MemoryGate，gate 缺失即 fail-closed；
+   并在 pet-runtime.js 真实注入 memoryGate（此前 gate 存在但从未接线）。
+A1 提交循环整趟原子：抛错时用 PetMemory.forget() 回滚本趟已写入的行，
+   「报告失败」与「确实没写」不再互相矛盾。
+B  tick 与手动共用同一套 reflection 生命周期：先 flush → 冻结 pending 快照 →
+   用该视图跑引擎 → 仅在 completed 后消费该快照。
+B1 Consolidation 只消费它真的做出判断的行（稳定候选组、或凭证文本被主动清除）；
+   没有稳定模式的日常对话留在 buffer 给 Reflection（此前一个 tick 会吞掉整批）。
+C  Dream 与 Reflection 拆开可见性：Reflection 只看 pending，Dream 看近期生活含已整理。
+D  formatConversationEvidenceBoundary() 改为常量大小声明，system prompt 不再逐条复制
+   source map：典型 50 turns 11210→3581 字符、3947→1436 tokens（真实分词器实测）。
+D2 planFinalRequestBudget() 按 LOW→MEDIUM→HIGH 从最旧开始裁轮，保护最新 6 轮，
+   宁可拒发也不溢出；实测估算对真实分词器有 1.2x–2.3x 余量。
+E  关键词必须接地：全部不接地的候选直接拒绝（keywords-ungrounded），交回 gate 的
+   owner 原话兜底；模型声明 keywords: [] 时仍接受（显式 owner 路径没有关键词来源）。
+F  图片 observation 只作为 Dream 背景，永不进入 source_ids，不增加 evidenceCount，
+   不提高 confidence。
+G  对外 dream summary 由真正落库的 derived rows 确定性生成，模型散文留在
+   changes.modelSummary。生产 dream_log id=15 已见 understandingCount=0 与
+   evidence:"inferred" 的真实样本。
+H  seed 行使用独立 source session；两条遗留 bootstrap 行从 Dream/Reflection 来源排除，
+   但不改写、不删除。
+```
+
+### 独立只读审计发现并修复的 6 条缺陷
+
+```text
+A1/B1/E1/3A/3B/B3/B4  详见 docs/DEVLOG_MEMORY_PIPELINE_V2.md 附录 A.7
+其中最关键的一条（审计 B DEFECT 1）：
+  实测 beforePending=10 helperSnapshot=none afterPending=0 reflectionLast=null
+  ——「一次什么都没找到的 consolidation 把 10 条 pending 全部吃掉，Reflection 连跑都
+  没轮到」。
+```
+
+### 发布前验证（feature worktree，代码冻结）
+
+```text
+单测矩阵        29/29  EXIT=0
+npm 测试矩阵    11/11  NPM_EXIT=0 + 新增 test:reflection-scheduler
+生产库彩排      34/34  REHEARSAL_PASS=34 REHEARSAL_FAIL=0
+真实大脑 live    v0.4-context-safety-live / v0.4-image-memory-live /
+                v0.4-dream-live-quality 全部 EXIT=0
+```
+
+### 生产数据操作与不变量
+
+```text
+迁移         experience-buffer.sqlite 由无到有：18 列 / meta.schema_version=2 /
+             mode=0600 / ROWS=0；dry-run 不落盘已核对
+回填         SCANNED_USER_MESSAGES=164 → EXPLICIT_CANDIDATES=4 → WOULD_WRITE=3 /
+             DUPLICATES=1；--apply 后 fact 220→223、provenance 144→147；
+             第二次 --apply WOULD_WRITE=0（幂等）；archive SHA256 前后一致
+黑莓验收     回填前真实事实对四个查询全部不在 top-5；回填后
+             「猫猫叫什么名字」#2、「黑莓叫什么」#4、「黑莓长什么样」#4、
+             「我们家猫叫什么」#1，ABSENT_FROM_TOP_K=[]
+未动         conversation-archive.db（472 行 / max_sequence 10669）
+             visual-experience.db（46/47/54/5027）
+             PetMemory 原有 220 条 fact、14 条 dream_log 逐条复核未丢
+生产 dirty   22 项全部在 android-companion/**，部署前后逐字节 SHA256 比对一致
+```
+
+### 部署过程
+
+```text
+1. 备份：分支 backup/life-experience-pre-production-* 与
+   backup/production-pre-memory-v2-*；回填前再备份到
+   ~/.local/share/vc-ai-pet/backups/pre-backfill-apply-20260914-215143/
+   （raw + VACUUM INTO logical + sha256.txt）
+2. git merge --ff-only（两次：a4cab9d、8312ce6），无 merge commit
+3. DSH Web 重启：旧 PID 522122 → 新 PID 1983032（22:44:37 启动，
+   晚于 21:52 的代码合入），3080 与 17870 均在新进程上
+4. 复活验证：GET /api/pet/state 与 GET /api/inner-life 均 200；
+   世界状态文件在重启后被写入；experience-buffer.sqlite 在进程内被创建
+```
+
+### 已知遗留（本轮明确未做，不隐藏）
+
+```text
+1. 生产 PetMemory 里那条被污染的 lesson「主人说：一定要记住哦」
+   （keywords=猫猫,名字,黑莓）在部分黑莓查询里仍占 rank 1。
+   本轮没有加 reranker —— 它确实把真实事实压到 #2/#4，但真实事实已在 top-5 内可见。
+   根治需要 reranker 或给被污染行清关键词，属于下一轮。
+2. 回填写入的 3 条 fact 的 keywords 为空数组（highPriorityMemoryCandidate() 不产生
+   关键词）。它们靠 BM25 正文匹配与 importance=3 被召回，不靠关键词索引。
+3. settings.yaml 声明 contextWindow=131072，而本地大脑实际以 -ContextSize 32768 启动；
+   final request guard 保守地退回 16384，宁可少发也不溢出。未修改模型启动参数。
+```
