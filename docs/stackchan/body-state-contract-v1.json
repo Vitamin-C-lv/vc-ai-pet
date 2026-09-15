@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "online": true,
+  "reachable": true,
+  "observedAt": "2026-09-15T00:00:00.000Z",
+  "pet": {
+    "name": "李花花"
+  },
+  "presentation": {
+    "visualState": "relaxed",
+    "emotion": {
+      "happiness": 0.47,
+      "energy": 0.69
+    },
+    "dream": false,
+    "sleeping": false,
+    "thinking": false,
+    "speaking": false,
+    "avatar": "lihuahua-default",
+    "expression": "relaxed",
+    "animation": "stretch",
+    "actionCue": "idle",
+    "speechText": null
+  },
+  "source": {
+    "kind": "vc-ai-pet",
+    "stateAgeMs": 0
+  }
+}
