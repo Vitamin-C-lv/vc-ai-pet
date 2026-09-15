@@ -8,7 +8,7 @@ This record keeps the commands and results needed to reproduce the offline check
 
 ```text
 PRODUCTION_HEAD=5731cc023c34a832cec80bdbdc9fdcf9301104f0
-FEATURE_BASE=8ceb7cf4fe626e4ffc892e799671d81870de637a
+FEATURE_BASE=5731cc023c34a832cec80bdbdc9fdcf9301104f0
 FEATURE_BRANCH=feat/stackchan-body-mvp
 PRODUCTION_DIRTY_SCOPE=android-companion/** only; preserved
 ```

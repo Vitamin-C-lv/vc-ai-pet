@@ -12,7 +12,7 @@ The Windows host network precondition was confirmed by a live WLAN-interface rea
 
 ```text
 PRODUCTION_HEAD=5731cc023c34a832cec80bdbdc9fdcf9301104f0
-STACKCHAN_BASE_COMMIT=8ceb7cf4fe626e4ffc892e799671d81870de637a
+STACKCHAN_BASE_COMMIT=5731cc023c34a832cec80bdbdc9fdcf9301104f0
 STACKCHAN_BRANCH=feat/stackchan-body-mvp
 FACTORY_SOURCE_COMMIT=1b5765599fba8aaad1811d9a79358ccc7051f5f3
 ESP_IDF_VERSION=v5.5.4
