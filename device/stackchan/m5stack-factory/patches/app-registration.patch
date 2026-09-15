@@ -23,10 +23,9 @@ diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
 index 3f11ed6..04c139d 100644
 --- a/firmware/main/main.cpp
 +++ b/firmware/main/main.cpp
-@@ -38,5 +38,6 @@
+@@ -38,4 +38,5 @@
          GetMooncake().installApp(std::make_unique<AppAppCenter>());
          GetMooncake().installApp(std::make_unique<AppEzdata>());
          GetMooncake().installApp(std::make_unique<AppDance>());
 +        GetMooncake().installApp(std::make_unique<LiHuahuaBodyApp>());
          GetMooncake().installApp(std::make_unique<AppSetup>());
-         // Main loop
