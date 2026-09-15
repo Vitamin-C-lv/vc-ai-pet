@@ -44,3 +44,7 @@
 - 如未来选择自定义 firmware，官方编程路径包含 M5Burner/USB 下载模式/写入；本轮不进入该流程。具体恢复镜像、配置备份及兼容性仍须先做只读确认。
 - PC bridge 与 fake-upstream 测试可以独立完成；CoreS3 HTTP JSON polling、表情映射和离线脸仍未在设备上验证。
 - 不刷机、不测试舵机、不调用音频/摄像头/触摸/IMU 控制能力。
+
+## Phase 2 后续补充
+
+上述 `DEVICE_RECOVERY_PATH=UNVERIFIED` 是 Phase 0 初始取证时的记录。后续只读整片备份、官方 M5Burner 恢复路径证据、版本匹配限制和自定义源码构建结果见 [`DEVICE_PHASE_2_CAPABILITY_AND_RECOVERY.md`](DEVICE_PHASE_2_CAPABILITY_AND_RECOVERY.md) 与 [`PHASE2_ACCEPTANCE.md`](PHASE2_ACCEPTANCE.md)。Phase 2 未执行任何刷写，不能把本地 build 误读为设备已更新。
