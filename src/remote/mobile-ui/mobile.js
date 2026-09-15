@@ -708,18 +708,24 @@ function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
   return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true } = {}) {
+// System and transport copy is never attributed to the pet: a notice line has no
+// speaker label and never renders through the pet dialogue bubble.
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true, variant = null } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
+  const noticeMessage = role === 'notice'
   const petMessage = role === 'pet' || role === 'assistant'
-  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}${kind === 'media_ref' ? ' media-ref-line' : kind === 'activity' ? ' activity-line' : ''}`
+  const noticeClass = noticeMessage ? ` notice-line${variant === 'error' ? ' notice-error' : ''}` : ' pet-line'
+  node.className = `message ${userMessage ? 'user-line' : noticeClass}${kind === 'media_ref' ? ' media-ref-line' : kind === 'activity' ? ' activity-line' : ''}`
   const bubble = document.createElement('div')
   bubble.className = 'message-bubble'
 
-  const label = document.createElement('div')
-  label.className = 'message-label'
-  label.textContent = userMessage ? '主人' : '李花花'
-  bubble.append(label)
+  if (!noticeMessage) {
+    const label = document.createElement('div')
+    label.className = 'message-label'
+    label.textContent = userMessage ? '主人' : '李花花'
+    bubble.append(label)
+  }
 
   const cleanText = String(text ?? '').trim()
   if (cleanText) {
@@ -1244,9 +1250,9 @@ function clearSubmissionStatus() {
   submissionStatusNode = null
 }
 
-function showSubmissionStatus(text, { resume = false } = {}) {
+function showSubmissionStatus(text, { resume = false, variant = null } = {}) {
   clearSubmissionStatus()
-  submissionStatusNode = line('pet', text)
+  submissionStatusNode = renderMessage({ role: 'notice', text, variant })
   if (resume) {
     const bubble = submissionStatusNode.querySelector?.('.message-bubble')
     if (bubble) {
@@ -1304,7 +1310,7 @@ function createMobileSubmissionController() {
       activeTurnId = null
       input.value = state.draftText
       restoreImageSelection(state.pendingImage)
-      line('pet', '花花脑袋刚刚卡了一下……')
+      showSubmissionStatus('这条消息没有发出去，可以重新发送。', { variant: 'error' })
       scrollMessagesToBottom()
       setOnline(false)
     },
@@ -1316,7 +1322,7 @@ function createMobileSubmissionController() {
       activeTurnId = null
       showSubmissionStatus(error?.code === 'SUBMISSION_ID_CONFLICT'
         ? '发送状态冲突，请刷新后重试。'
-        : '消息可能已经交给花花了，正在确认……')
+        : '消息可能已经交给花花了，正在确认……', { variant: 'error' })
       setOnline(false)
     },
     onAcceptedFailure: (state) => {
@@ -1325,7 +1331,7 @@ function createMobileSubmissionController() {
       input.value = ''
       clearImageSelection()
       activeTurnId = state.turnId
-      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。', { resume: true })
+      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。', { resume: true, variant: 'error' })
       setOnline(false)
     },
     onServerFailure: (state) => {
@@ -1334,7 +1340,7 @@ function createMobileSubmissionController() {
       input.value = ''
       clearImageSelection()
       activeTurnId = null
-      showSubmissionStatus('这条消息没有完成；如需重试，请重新发送。')
+      showSubmissionStatus('这条消息没有完成；如需重试，请重新发送。', { variant: 'error' })
       setOnline(true)
     },
     onResume: (state) => {
@@ -1353,14 +1359,14 @@ async function recoverPendingSubmission() {
   pendingRecoveryStarted = true
   const result = pendingSubmissionStore.read?.()
   if (result?.status === 'stale') {
-    showSubmissionStatus('之前未完成的发送已经过期。')
+    showSubmissionStatus('之前未完成的发送已经过期。', { variant: 'error' })
     return
   }
   if (result?.status !== 'pending') return
   const pending = result.pending
   if (pending?.stage === SUBMISSION_STAGE.PRE_UPLOAD) {
     pendingSubmissionStore.clear?.()
-    showSubmissionStatus('上次图片还没有完成上传，请重新选择图片。')
+    showSubmissionStatus('上次图片还没有完成上传，请重新选择图片。', { variant: 'error' })
     return
   }
   const recoverable = new Set([
@@ -1393,7 +1399,7 @@ async function submitComposer(message = input.value.trim()) {
     if (result?.status === 'pending-recovery') {
       input.value = draftText
       restoreImageSelection(pendingImage)
-      showSubmissionStatus('上一条消息还在确认中，请稍候。')
+      showSubmissionStatus('上一条消息还在确认中，请稍候。', { variant: 'error' })
     }
   } finally {
     input.readOnly = false

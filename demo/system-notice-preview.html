@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>李花花 · 系统信息归属对照</title>
+  <!-- Loads the real production stylesheet so the comparison cannot drift. -->
+  <link rel="stylesheet" href="../src/remote/mobile-ui/mobile.css">
+  <style>
+    body { margin: 0; background: #f6efe7; color: #4a392e; font: 14px/1.5 system-ui, -apple-system, "Noto Sans CJK SC", sans-serif; }
+    main { max-width: 980px; margin: auto; padding: 26px 20px 56px; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p.intro { margin: 0 0 22px; color: #7a6a5d; }
+    .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+    section { padding: 14px; border: 1px solid #e5d9cc; border-radius: 18px; background: #fffaf3; }
+    h2 { margin: 0 0 4px; font-size: 15px; }
+    .note { margin: 0 0 12px; color: #8d7c70; font-size: 12px; }
+    .phone { padding: 12px; border-radius: 16px; background: #fbf6ef; }
+    .messages { display: flex; flex-direction: column; }
+    .label { margin: 18px 0 6px; color: #8d7c70; font-size: 11px; letter-spacing: .04em; }
+  </style>
+  <main>
+    <h1>系统信息不再由花花发送</h1>
+    <p class="intro">左边是改动前的样子（系统提示套着「李花花」的对话框），右边是改动后（无署名的系统提示条）。两份都直接加载生产 <code>mobile.css</code>，所以配色、圆角、居中都和真机一致。</p>
+    <div class="columns">
+      <section>
+        <h2>改动前</h2>
+        <p class="note">系统状态顶着小狗的对话框和「李花花」署名。</p>
+        <div class="phone">
+          <div class="messages">
+            <article class="message pet-line">
+              <div class="message-bubble">
+                <div class="message-label">李花花</div>
+                <p class="message-text">汪！hi！主人好呀！❤️🐾 花花好开心见到主人！呼噜呼噜～</p>
+              </div>
+            </article>
+            <article class="message pet-line">
+              <div class="message-bubble">
+                <div class="message-label">李花花</div>
+                <p class="message-text">之前未完成的发送已经过期。</p>
+              </div>
+            </article>
+            <article class="message pet-line">
+              <div class="message-bubble">
+                <div class="message-label">李花花</div>
+                <p class="message-text">这条消息没有完成；如需重试，请重新发送。</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>改动后</h2>
+        <p class="note">系统状态居中、无署名，和花花的对话气泡一眼可分。</p>
+        <div class="phone">
+          <div class="messages">
+            <article class="message pet-line">
+              <div class="message-bubble">
+                <div class="message-label">李花花</div>
+                <p class="message-text">汪！hi！主人好呀！❤️🐾 花花好开心见到主人！呼噜呼噜～</p>
+              </div>
+            </article>
+            <article class="message notice-line notice-error">
+              <div class="message-bubble">
+                <p class="message-text">之前未完成的发送已经过期。</p>
+              </div>
+            </article>
+            <article class="message notice-line notice-error">
+              <div class="message-bubble">
+                <p class="message-text">这条消息没有完成；如需重试，请重新发送。</p>
+              </div>
+            </article>
+            <article class="message notice-line">
+              <div class="message-bubble">
+                <p class="message-text">上次图片还没有完成上传，请重新选择图片。</p>
+              </div>
+            </article>
+            <article class="message notice-line notice-error">
+              <div class="message-bubble">
+                <p class="message-text">消息已经交给花花了，但连接暂时中断。</p>
+                <button class="submission-resume-button" type="button">继续等待</button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</html>

@@ -524,6 +524,46 @@ button:disabled {
   display: none;
 }
 
+/* System and transport copy: centred and speakerless so it can never read as
+   the pet talking. Errors use .notice-error on the same line. */
+.message.notice-line {
+  justify-content: center;
+  align-items: center;
+  flex-direction: row;
+  min-height: 0;
+  margin: 2px 0 10px;
+}
+
+.notice-line .message-bubble {
+  display: block;
+  max-width: min(94%, 360px);
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(88, 63, 41, .07);
+  box-shadow: none;
+  color: #7a6a5d;
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.notice-line.notice-error .message-bubble {
+  background: rgba(176, 84, 63, .12);
+  color: #8f4632;
+}
+
+.notice-line .message-text {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+  text-align: center;
+}
+
+.notice-line .submission-resume-button {
+  margin-top: 8px;
+}
+
 .vm-recall .message-bubble {
   max-width: min(92%, 360px);
   white-space: nowrap;

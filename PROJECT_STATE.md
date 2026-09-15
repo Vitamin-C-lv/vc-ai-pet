@@ -1591,3 +1591,28 @@ boundary 声明的固定成本差异，不是膨胀）。判断「是否与 turn
 `contextTurns` 的敏感性（发布版 12/24/50 全部 3229/1255，影响为 0），
 不能只看两个常量是否相等。
 
+## 2026-09-15 — 手机端「系统信息不再由花花发送」
+
+用户口径（原话）：**「修复bu系统信息不应该由花花发送」→「所有系统信息和报错都不应该由花花发」**。
+
+改动前：`showSubmissionStatus()` 走 `line('pet', text)`，所有传输/系统文案都渲染成
+带「李花花」署名的对话气泡——真机上表现为「李花花：之前未完成的发送已经过期。」；
+发送失败还额外让花花说一句「花花脑袋刚刚卡了一下……」。
+
+改动（`src/remote/mobile-ui/mobile.js` + `mobile.css`）：
+
+```text
+renderMessage({ role: 'notice' })   新通道：无 .message-label、.notice-line 居中小条
+showSubmissionStatus(text, { variant })  → renderMessage({ role: 'notice', text, variant })
+variant: 'error'                    → .notice-error（系统/报错文案统一走这条）
+onPreAcceptFailure                  → 不再用花花口吻，改为「这条消息没有发出去，可以重新发送。」
+```
+
+复现与验收：`test/v0.5-mobile-system-notice.mjs`（真实 mobile.js 在 Node VM 里跑 +
+可查询 DOM stub + CSS 规则断言）。5 组 CASE、7 条系统文案全部验证：
+`NOTICE_SPEAKER_LABEL=NONE` / `NOTICE_RENDERS_AS_PET_LINE=NO` / `SYSTEM_COPY_ATTRIBUTED_TO_PET=NO`。
+对照预览：`demo/system-notice-preview.html`（直接加载生产 `mobile.css`）。
+回归：`npm run smoke` 全绿（含 `verify:client`，`lib/client.js` 字节级无变化，
+因为手机端 UI 是 lan-server 直接从 `src/remote/mobile-ui/` 读盘提供的）。
+生产 `pet-memory.db` 全程只读核验：fact 227 / provenance 154 / 今日新建行 0（测试零污染）。
+
