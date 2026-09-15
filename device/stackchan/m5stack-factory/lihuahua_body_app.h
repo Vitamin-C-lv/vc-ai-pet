@@ -32,8 +32,5 @@ private:
     lv_obj_t* name_label_ = nullptr;
     lv_obj_t* state_label_ = nullptr;
     lv_obj_t* reachability_label_ = nullptr;
-    lihuahua_body::Face rendered_face_ = lihuahua_body::Face::Offline;
-    bool has_rendered_face_ = false;
     uint32_t last_blink_ = 0;
-    bool eyes_closed_ = false;
 };

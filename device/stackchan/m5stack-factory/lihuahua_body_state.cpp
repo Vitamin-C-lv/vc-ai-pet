@@ -109,4 +109,70 @@ const char* faceName(Face face)
     return "IDLE";
 }
 
+FaceGeometry faceGeometry(Face face, bool eyes_closed)
+{
+    FaceGeometry geometry{16, 20, 16, 20, 24, 6, 65, 104, 0xA64D58};
+    switch (face) {
+        case Face::Relaxed:
+            geometry.left_eye_height = geometry.right_eye_height = 8;
+            geometry.mouth_width = 20;
+            geometry.mouth_height = 5;
+            geometry.mouth_x = 67;
+            geometry.mouth_y = 103;
+            break;
+        case Face::Happy:
+            geometry.mouth_width = 34;
+            geometry.mouth_height = 12;
+            geometry.mouth_x = 60;
+            geometry.mouth_y = 100;
+            break;
+        case Face::Thinking:
+            geometry.right_eye_height = 16;
+            geometry.mouth_width = 16;
+            geometry.mouth_height = 5;
+            geometry.mouth_x = 69;
+            geometry.mouth_y = 102;
+            break;
+        case Face::Curious:
+            geometry.left_eye_width = geometry.right_eye_width = 22;
+            geometry.left_eye_height = geometry.right_eye_height = 22;
+            geometry.mouth_width = 12;
+            geometry.mouth_height = 7;
+            geometry.mouth_x = 71;
+            geometry.mouth_y = 101;
+            break;
+        case Face::Confused:
+            geometry.left_eye_height = 23;
+            geometry.right_eye_height = 17;
+            geometry.mouth_width = 20;
+            geometry.mouth_height = 5;
+            geometry.mouth_x = 67;
+            geometry.mouth_y = 105;
+            break;
+        case Face::Sleep:
+        case Face::Dreaming:
+            geometry.left_eye_height = geometry.right_eye_height = 4;
+            geometry.mouth_width = 14;
+            geometry.mouth_height = 4;
+            geometry.mouth_x = 70;
+            geometry.mouth_y = 105;
+            break;
+        case Face::Offline:
+            geometry.left_eye_height = geometry.right_eye_height = 4;
+            geometry.mouth_width = 18;
+            geometry.mouth_height = 4;
+            geometry.mouth_x = 68;
+            geometry.mouth_y = 105;
+            geometry.mouth_color = 0x777B86;
+            break;
+        case Face::Idle:
+            break;
+    }
+
+    if (eyes_closed) {
+        geometry.left_eye_height = geometry.right_eye_height = 4;
+    }
+    return geometry;
+}
+
 }  // namespace lihuahua_body

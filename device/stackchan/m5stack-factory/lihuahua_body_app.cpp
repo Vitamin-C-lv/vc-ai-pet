@@ -219,68 +219,12 @@ void LiHuahuaBodyApp::renderState()
         lv_label_set_text(reachability_label_, reachability_text);
     }
 
-    if (!has_rendered_face_ || face != rendered_face_) {
-        rendered_face_ = face;
-        has_rendered_face_ = true;
-        int left_width = 16;
-        int right_width = 16;
-        int left_height = 20;
-        int right_height = 20;
-        int mouth_width = 24;
-        int mouth_height = 6;
-        int mouth_x = 65;
-        int mouth_y = 104;
-        lv_color_t mouth_color = lv_color_hex(0xA64D58);
-        switch (face) {
-            case lihuahua_body::Face::Relaxed:
-                left_height = right_height = 8;
-                mouth_width = 20; mouth_height = 5; mouth_x = 67; mouth_y = 103;
-                break;
-            case lihuahua_body::Face::Happy:
-                mouth_width = 34; mouth_height = 12; mouth_x = 60; mouth_y = 100;
-                break;
-            case lihuahua_body::Face::Thinking:
-                right_height = 16; mouth_width = 16; mouth_height = 5; mouth_x = 69; mouth_y = 102;
-                break;
-            case lihuahua_body::Face::Curious:
-                left_width = right_width = 22; left_height = right_height = 22;
-                mouth_width = 12; mouth_height = 7; mouth_x = 71; mouth_y = 101;
-                break;
-            case lihuahua_body::Face::Confused:
-                left_height = 23; right_height = 17;
-                mouth_width = 20; mouth_height = 5; mouth_x = 67; mouth_y = 105;
-                break;
-            case lihuahua_body::Face::Sleep:
-            case lihuahua_body::Face::Dreaming:
-                left_height = right_height = 4;
-                mouth_width = 14; mouth_height = 4; mouth_x = 70; mouth_y = 105;
-                break;
-            case lihuahua_body::Face::Offline:
-                left_height = right_height = 4;
-                mouth_width = 18; mouth_height = 4; mouth_x = 68; mouth_y = 105;
-                mouth_color = lv_color_hex(0x777B86);
-                break;
-            case lihuahua_body::Face::Idle:
-                break;
-        }
-        lv_obj_set_size(left_eye_, left_width, left_height);
-        lv_obj_set_size(right_eye_, right_width, right_height);
-        lv_obj_set_size(mouth_, mouth_width, mouth_height);
-        lv_obj_set_pos(mouth_, mouth_x, mouth_y);
-        stylePill(mouth_, mouth_color);
-    }
-
-    if (blink != eyes_closed_) {
-        eyes_closed_ = blink;
-        const int eye_height = (sleeping || blink) ? 4 : 20;
-        if (face == lihuahua_body::Face::Relaxed) {
-            lv_obj_set_height(left_eye_, blink ? 4 : 8);
-            lv_obj_set_height(right_eye_, blink ? 4 : 8);
-        } else {
-            lv_obj_set_height(left_eye_, eye_height);
-            lv_obj_set_height(right_eye_, eye_height);
-        }
-    }
+    const auto geometry = lihuahua_body::faceGeometry(face, blink);
+    lv_obj_set_size(left_eye_, geometry.left_eye_width, geometry.left_eye_height);
+    lv_obj_set_size(right_eye_, geometry.right_eye_width, geometry.right_eye_height);
+    lv_obj_set_size(mouth_, geometry.mouth_width, geometry.mouth_height);
+    lv_obj_set_pos(mouth_, geometry.mouth_x, geometry.mouth_y);
+    lv_obj_set_style_bg_color(mouth_, lv_color_hex(geometry.mouth_color), 0);
 }
 
 void LiHuahuaBodyApp::onRunning()
