@@ -1,0 +1,32 @@
+diff --git a/firmware/main/CMakeLists.txt b/firmware/main/CMakeLists.txt
+index 22cfebb..19d0566 100644
+--- a/firmware/main/CMakeLists.txt
++++ b/firmware/main/CMakeLists.txt
+@@ -305,6 +305,7 @@
+                         esp_driver_jpeg
+                         esp_driver_ppa
+                         esp_app_format
++                        esp_http_client
+                         app_update
+                         spi_flash
+                         console
+diff --git a/firmware/main/apps/apps.h b/firmware/main/apps/apps.h
+index 77cc9b7..1f10806 100644
+--- a/firmware/main/apps/apps.h
++++ b/firmware/main/apps/apps.h
+@@ -12,3 +12,4 @@
+ #include "app_app_center/app_app_center.h"
+ #include "app_ezdata/app_ezdata.h"
+ #include "app_dance/app_dance.h"
++#include "app_lihuahua_body/lihuahua_body_app.h"
+diff --git a/firmware/main/main.cpp b/firmware/main/main.cpp
+index 3f11ed6..04c139d 100644
+--- a/firmware/main/main.cpp
++++ b/firmware/main/main.cpp
+@@ -38,5 +38,6 @@
+         GetMooncake().installApp(std::make_unique<AppAppCenter>());
+         GetMooncake().installApp(std::make_unique<AppEzdata>());
+         GetMooncake().installApp(std::make_unique<AppDance>());
++        GetMooncake().installApp(std::make_unique<LiHuahuaBodyApp>());
+         GetMooncake().installApp(std::make_unique<AppSetup>());
+         // Main loop

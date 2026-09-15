@@ -13,6 +13,8 @@ The complete new app code is in this directory. Integrate into a separate upstre
 
 The upstream `main/CMakeLists.txt` recursively globs `apps/*.cpp` and `apps/*.h`, so a separate source-list edit is not needed. No changes are required to VC-AI-PET `src/`, Android Companion, Memory, Dream, Reflection, or PetRuntime.
 
+The three tracked upstream registration/dependency edits are also provided as a ready-to-apply diff at patches/app-registration.patch. Copy the app source directory first, then apply that diff from the upstream repository root.
+
 ## Review constraints
 
 - `fetchBodyState()` does only HTTP GET. It does not write to VC-AI-PET or device flash.
