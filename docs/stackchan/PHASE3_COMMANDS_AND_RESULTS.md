@@ -7,11 +7,13 @@ This record keeps the commands and results needed to reproduce the offline check
 ## Repository provenance
 
 ```text
-PRODUCTION_HEAD=5731cc023c34a832cec80bdbdc9fdcf9301104f0
+PRODUCTION_HEAD_AT_START=5731cc023c34a832cec80bdbdc9fdcf9301104f0
 FEATURE_BASE=5731cc023c34a832cec80bdbdc9fdcf9301104f0
 FEATURE_BRANCH=feat/stackchan-body-mvp
 PRODUCTION_DIRTY_SCOPE=android-companion/** only; preserved
 ```
+
+At the final packaging check the production worktree reported HEAD `1e1af4c7c99463e727888c95eb6eba08b5c764b7`, while the same Android dirty paths remained present. This HEAD movement was not made by the StackChan task; its cause is unknown. No reset, checkout, stash, or production modification was performed. The feature worktree remains based on the initially observed production HEAD `5731cc0...`.
 
 ## Bridge tests
 

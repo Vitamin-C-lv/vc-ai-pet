@@ -13,7 +13,9 @@ The user performed one ordinary short press on the device's labeled reset contro
 ## Source provenance
 
 ```text
-PRODUCTION_HEAD=5731cc023c34a832cec80bdbdc9fdcf9301104f0
+PRODUCTION_HEAD=5731cc023c34a832cec80bdbdc9fdcf9301104f0 (observed at task start and used as feature base)
+PRODUCTION_HEAD_FINAL_OBSERVED=1e1af4c7c99463e727888c95eb6eba08b5c764b7
+PRODUCTION_HEAD_CHANGE_SOURCE=UNKNOWN (HEAD advanced during the task; no production ref operation was performed by this task)
 STACKCHAN_BASE_COMMIT=5731cc023c34a832cec80bdbdc9fdcf9301104f0
 STACKCHAN_BRANCH=feat/stackchan-body-mvp
 FEATURE_HEAD_BEFORE_FINAL_DOC_UPDATE=352c97f3a79c583d4270458da5d87fe255b8d6fe
