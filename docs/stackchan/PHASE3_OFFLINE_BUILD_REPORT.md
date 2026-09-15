@@ -6,7 +6,7 @@ Date: 2026-09-15 (Asia/Shanghai)
 
 The Phase 3 face-geometry change builds successfully against the isolated M5Stack StackChan factory source and ESP-IDF v5.5.4. Bridge and host-side state/face tests pass. This is **offline build acceptance only**: the device has not been written, the new app has not been opened on the device, and no relaxed/offline/recovery physical loop is claimed.
 
-The Windows host network precondition is now confirmed: the latest `netsh wlan show interfaces` check reported `connected`, the physical WLAN adapter was `Up`, and a current RFC1918 address plus gateway were present. The earlier adapter-only snapshot had reported `Disconnected`; it was stale relative to the user's newer WLAN screenshot and the subsequent direct WLAN-interface read. The StackChan's own association to the same LAN has not yet been confirmed. No bridge listener, firewall rule, port forwarding, or device write has been started.
+The Windows host network precondition was confirmed by a live WLAN-interface read. The user then confirmed that StackChan was connected to Wi-Fi; this is user-reported, not independently confirmed by a device network log. No SSID, address, or credential is retained. No bridge listener, firewall rule, or port forwarding was started.
 
 ## Provenance and scope
 
@@ -37,7 +37,7 @@ CUSTOM_APP_PARTITION_FREE_BYTES=1386160
 CUSTOM_APP_PARTITION_FREE_HEX=0x1526b0
 ```
 
-The custom image was built with an unset `STACKCHAN_BODY_BRIDGE_URL`, so this artifact is not configured to reach a PC bridge. Build output and firmware binaries are excluded from Git and the handoff ZIP. A current WLAN endpoint may only be configured locally after the host WLAN is connected; no DHCP address is committed.
+The custom image was built with an unset `STACKCHAN_BODY_BRIDGE_URL`, so this artifact is not configured to reach a PC bridge. A subsequent local attempt to add the URL did not reach the authoritative WSL source: the exact endpoint string was absent from the resulting image. That build is therefore not device-ready and must not be flashed. Build output and firmware binaries are excluded from Git and the handoff ZIP. No DHCP address is committed.
 
 The host test checks parsing/state behavior and deterministic geometry for idle, relaxed, happy, thinking, curious, confused, sleep, dreaming, and offline faces, including blink geometry and mouth color. It does not exercise rendering on the physical display.
 
@@ -49,16 +49,11 @@ The user-owned complete flash readback was verified in its private location duri
 
 ## Physical write gate
 
-Not attempted in this run:
+Read-only checks were performed after the user confirmed the device was connected and visible. The user performed one ordinary short press on the labeled reset control; no BOOT/download-mode operation or serial command was sent. A 115200 8N1 read-only serial window observed `Loaded app from partition at offset 0x20000`, which identifies `ota_0` as the app loaded at that boot. The actual partition table reported `ota_0` at `0x20000` and `ota_1` at `0x510000`, each 5056 KiB. Read-only security information reported Secure Boot disabled and Flash Encryption disabled. A private read of the 8 KiB `otadata` partition completed; an `ota_0` backup attempt failed integrity/length validation at both 460800 and 115200 baud. The failed slot backup is not usable, and `ota_1` was not read.
 
-- no serial reset or boot-mode operation;
-- no partition-table, OTA metadata, active-slot, or per-slot flash readback;
-- no proof of the currently running OTA partition from boot log;
-- no inactive-slot backup in this phase;
-- no firmware write, OTA switch, reboot, M5Burner operation, erase, or factory reset;
-- no bridge LAN binding, firewall rule, portproxy, or public exposure.
+The mandatory pre-write gate therefore failed: the required app-slot backup set is incomplete, and the candidate image does not contain a bridge endpoint. No firmware write, OTA switch, erase, M5Burner operation, factory reset, or additional device operation was attempted. No bridge LAN binding, firewall rule, portproxy, or public exposure was created. The running factory app and OTA metadata were not written.
 
-Before any future app-partition write, first establish a live physical WLAN connection for the PC and device, then capture the actual running-slot evidence and exact partition table, make private backups of the relevant OTA metadata and app slots, and independently verify that the intended target is not the running slot. If any precondition remains ambiguous, stop without writing. Keep the complete prior factory readback private and recovery operations separately authorized.
+Before any future app-partition write, build a candidate image with a locally configured, currently reachable bridge URL, verify it fits the exact inactive OTA slot, and obtain valid private readbacks of `otadata` and both app slots at a baud/rate that passes integrity checks. Reconfirm the actual running slot from a fresh boot banner and the exact partition table. If any precondition remains ambiguous or any backup fails, stop without writing. Keep the complete prior factory readback private and recovery operations separately authorized.
 
 ## OTA tool safety review
 
@@ -68,7 +63,7 @@ The ESP-IDF v5.5.4 tool source was reviewed without using it to write the device
 
 ```text
 DEVICE_REFLASHED=NO
-DEVICE_FACE_CLIENT=SOURCE_BUILT_NOT_INSTALLED
+DEVICE_FACE_CLIENT=BLOCKED_BY_FLASH_PRECONDITIONS
 PET_RUNTIME_MODIFIED=NO
 MEMORY_MODIFIED=NO
 DREAM_MODIFIED=NO
@@ -81,4 +76,4 @@ PUBLIC_EXPOSURE_CREATED=NO
 
 ## Next action
 
-Confirm that StackChan itself is associated with the same local Wi-Fi as Windows, using only its visible factory setup/status UI. Do not send the Wi-Fi password, SSID, or IP in chat. Re-check both endpoints before starting a narrowly bound bridge; do not use a stale address or Ethernet/VPN/Tailscale as a substitute.
+Stop this phase before any write. Preserve the factory firmware. For a later authorized attempt, first correct the build configuration so the image embeds a current bridge endpoint, then obtain complete validated private OTA backups; do not retry the failed serial backup by repeatedly changing baud rates within this phase.

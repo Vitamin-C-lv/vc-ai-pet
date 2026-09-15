@@ -72,14 +72,14 @@ RFC1918_IPV4_PRESENT=YES
 GATEWAY_PRESENT=YES
 ```
 
-No SSID, exact IPv4, BSSID, or MAC is retained here. The StackChan's own Wi-Fi association is not yet confirmed; therefore bridge/firewall setup and device flash remain gated.
+No SSID, exact IPv4, BSSID, or MAC is retained here. The user subsequently confirmed the StackChan was connected to Wi-Fi; this is user-reported and was not independently confirmed by a device network log. It does not prove reachability to the Windows host, so bridge/firewall setup and device flash remain gated.
 
 ## Scope and write evidence
 
 ```text
 LIVE_PRODUCTION_GET=/api/pet/state previously returned HTTP 200 (Phase 1 evidence; not repeated here)
 HTTP_POSTS_THIS_PHASE=0
-DEVICE_PARTITION_READS_THIS_PHASE=0
+DEVICE_PARTITION_READS_THIS_PHASE=YES_READ_ONLY
 DEVICE_FLASH_WRITES_THIS_PHASE=0
 OTA_SWITCHES_THIS_PHASE=0
 BRIDGE_LAN_LISTENER_STARTED=NO
@@ -93,4 +93,43 @@ ANDROID_MODIFIED=NO
 PRODUCTION_RESTARTED=NO
 ```
 
-Do not interpret the prior private complete flash readback as a current OTA-slot backup. No active-slot proof or per-slot backup has been made in this phase.
+## Read-only physical slot evidence and final gate
+
+The user performed one ordinary short press on the labeled reset control. A passive serial read at COM5, 115200 8N1, DTR/RTS disabled, observed:
+
+```text
+Loaded app from partition at offset 0x20000
+```
+
+This supports that `ota_0` (partition offset `0x20000`) was loaded for that boot. No BOOT button, download mode, serial command, or reset command was used. The actual partition table was read-only and reported:
+
+```text
+nvs       data/nvs    0x9000    16K
+otadata   data/ota    0xd000     8K
+phy_init  data        0xf000     4K
+ota_0     app/ota_0   0x20000 5056K (0x4f0000)
+ota_1     app/ota_1   0x510000 5056K (0x4f0000)
+assets    data        0xa00000    4M
+coredump  data        0xe00000   64K
+```
+
+Read-only security information reported Secure Boot disabled and Flash Encryption disabled. An 8 KiB `otadata` private readback succeeded. A readback of `ota_0` failed integrity/length validation at both 460800 baud (`0xfee` bytes received) and the 115200 retry (`0xfaf` bytes received); it is not a valid backup. `ota_1` was not read. No backup file, raw serial log, MAC, unique device serial, or network identifier is included in this handoff.
+
+The locally built image fits the inactive partition size, but the candidate was built without `STACKCHAN_BODY_BRIDGE_URL`; the attempted local configuration did not reach the authoritative source/build, and the exact URL string was absent from the output image. It must not be flashed as a device-ready image. Its identification hash is recorded in `PHASE3_FINAL_REPORT.md` only.
+
+Final fail-closed decision:
+
+```text
+FINAL_STATUS=STACKCHAN_PHASE3_FLASH_ABORTED_PRECONDITION_FAILED
+ACTIVE_SLOT=ota_0 (boot log offset 0x20000)
+INACTIVE_SLOT=ota_1 (partition offset 0x510000)
+PREFLASH_OTADATA_BACKUP=PASS_PRIVATE
+PREFLASH_OTA0_BACKUP=FAIL_INVALID_READBACK
+PREFLASH_OTA1_BACKUP=NOT_ATTEMPTED
+BRIDGE_URL_EMBEDDED=NO
+DEVICE_FLASH_WRITES_THIS_PHASE=0
+OTA_SWITCHES_THIS_PHASE=0
+ROLLBACK_REQUIRED=NO (no write occurred)
+```
+
+The prior private complete flash readback is not a substitute for required per-slot preflash backups. No device write, OTA switch, bridge LAN listener, firewall rule, portproxy, or public exposure was performed.
