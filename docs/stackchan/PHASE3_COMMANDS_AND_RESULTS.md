@@ -56,6 +56,11 @@ APP_SLOT_FREE=1386160 bytes / 0x1526b0
 
 Firmware binaries and build caches are intentionally excluded from the repository and handoff archive.
 
+## Delegated review summaries
+
+- Geometry fix review: the delegated reviewer moved complete face geometry (including mouth color) into a pure `face + blink` mapping and added host tests covering nine faces and blink restoration. Root reran the corrected host test and the custom firmware build successfully.
+- OTA tool safety review: ESP-IDF v5.5.4 `parttool.py write_partition` erases the selected app partition before checking image size and does not enforce inactive-slot selection. `otatool.py read_otadata` sequence/CRC output alone does not prove the actually running slot; bootloader fallback/rollback can change the result. No OTA tool was used against the device. A fuller phase 0/recovery research summary is retained in `SUBAGENT_AUDIT_SUMMARY.md`.
+
 ## WLAN check
 
 The Windows WLAN interface was re-read after the user's screenshot:

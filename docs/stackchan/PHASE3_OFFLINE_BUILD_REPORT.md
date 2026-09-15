@@ -60,6 +60,10 @@ Not attempted in this run:
 
 Before any future app-partition write, first establish a live physical WLAN connection for the PC and device, then capture the actual running-slot evidence and exact partition table, make private backups of the relevant OTA metadata and app slots, and independently verify that the intended target is not the running slot. If any precondition remains ambiguous, stop without writing. Keep the complete prior factory readback private and recovery operations separately authorized.
 
+## OTA tool safety review
+
+The ESP-IDF v5.5.4 tool source was reviewed without using it to write the device. `components/partition_table/parttool.py` erases the selected partition before checking whether the input image fits and does not protect the currently running OTA slot. `components/app_update/otatool.py read_otadata` reports sequence/CRC data but does not by itself prove which partition is actually running; bootloader fallback/rollback behavior can make configured selection differ from actual execution. Any future write must therefore prove the actual running partition from boot evidence, independently verify the complete partition table and target size, and keep a verified private backup of each relevant OTA target and metadata. The tool audit is also summarized in `SUBAGENT_AUDIT_SUMMARY.md`.
+
 ## Required invariants
 
 ```text
