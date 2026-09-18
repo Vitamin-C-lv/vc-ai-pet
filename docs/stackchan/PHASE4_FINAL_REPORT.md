@@ -83,8 +83,8 @@ Bridge 的 GET /v1/body/state 返回 schema v1 DTO，已映射花花名字、vis
 
 打包时重新读取 Bridge：
 
-- GET http://192.168.1.70:17871/healthz：HTTP 200。
-- GET http://192.168.1.70:17871/v1/body/state：HTTP 200。
+- GET <current-private-LAN>:17871/healthz：HTTP 200。
+- GET <current-private-LAN>:17871/v1/body/state：HTTP 200。
 - 设备持续产生 state requests；live health 的 lastAck.kind=speaker 且 ok=true。
 
 原始 JSON 与构建日志位于本报告 ZIP 的 03-live-evidence；LAN 地址只作为本机当时的运行证据，不写入固件配置和源码。
