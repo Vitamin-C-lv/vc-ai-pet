@@ -25,6 +25,7 @@ APP_FILES = (
     "lihuahua_body_state.cpp",
     "lihuahua_body_state.h",
 )
+ENTRY_FILE = "lihuahua_body_main.cpp"
 
 
 def valid_bridge_url(value: str) -> bool:
@@ -104,6 +105,9 @@ def main() -> int:
         check=True,
         stdout=subprocess.DEVNULL,
     )
+    # The body firmware owns the entry point so the factory AI agent and App
+    # Center are not started as a side effect of boot.
+    shutil.copy2(app_source / ENTRY_FILE, output / "firmware/main/main.cpp")
     (app_target / "stackchan_body_config.h").write_text(
         "#pragma once\n"
         f'#define STACKCHAN_BODY_BRIDGE_URL "{args.bridge_url}"\n',

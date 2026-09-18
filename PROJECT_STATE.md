@@ -1,5 +1,13 @@
 # VC AI Pet — Project State
 
+## 2026-09-18 — 李花花实体 StackChan Phase 4 已部署
+
+基于既有 Phase 3C handoff 的已确认事实，本轮完成实体身体的 app-only OTA1 部署和真实端到端验收。ota_0 @ 0x20000 Factory 恢复槽保留，未写入其应用区；ota_1 @ 0x510000 运行音量 90 固件。部署结果为 OTA0_APP_WRITES=0、OTA1_WRITE_VERIFIED=YES、OTA1_FIRST_BOOT_VALIDATED=YES。
+
+PC Body Bridge 已连接 VC-AI-PET 17870 与 StackChan Wi-Fi，显示状态和表情同步通过；摄像头 JPEG 已进入现有 Qwen3.5-4B 原生多模态视觉路径并返回真实环境描述；实体扬声器已播放花花回复，音量 90 固件已重部署并收到 speaker ACK；麦克风 PCM → 本地 Vosk 中文 STT → 花花 4B → 本地 TTS → 实体扬声器闭环已实测。未使用收费 API，没有新增独立 0.8B 模型，也没有上传私人 Memory。
+
+完整报告：docs/stackchan/PHASE4_FINAL_REPORT.md、docs/stackchan/PHASE4_ACCEPTANCE.md，以及本轮生成的 ZIP 报告包。
+
 Status: FINAL_STATUS=READY_FOR_EXPERIENCE_AWARE_MEMORY_PIPELINE_REVIEW
 
 ## 2026-09-13 — 生产只读覆盖度审计 + 视觉轮显式记忆修复
@@ -1590,4 +1598,3 @@ npm 测试矩阵    11/11  NPM_EXIT=0 + 新增 test:reflection-scheduler
 boundary 声明的固定成本差异，不是膨胀）。判断「是否与 turns 解耦」必须看
 `contextTurns` 的敏感性（发布版 12/24/50 全部 3229/1255，影响为 0），
 不能只看两个常量是否相等。
-

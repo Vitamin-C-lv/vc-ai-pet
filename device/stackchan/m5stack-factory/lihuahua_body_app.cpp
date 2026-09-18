@@ -1,5 +1,7 @@
 #include "lihuahua_body_app.h"
 #include "lihuahua_body_state.h"
+#include "lihuahua_body_io.h"
+#include <esp_log.h>
 
 #include <hal/hal.h>
 #include <esp_http_client.h>
@@ -54,7 +56,7 @@ bool fetchBodyState(lihuahua_body::BodyState* output)
 
     HttpResponse response;
     esp_http_client_config_t config{};
-    config.url = STACKCHAN_BODY_BRIDGE_URL;
+    auto state_url = lihuahuaBodyEndpoint("/v1/body/state"); config.url = state_url.c_str();
     config.timeout_ms = kHttpTimeoutMs;
     config.buffer_size = 512;
     config.event_handler = onHttpEvent;
@@ -145,10 +147,13 @@ void LiHuahuaBodyApp::onOpen()
     lv_obj_align(reachability_label_, LV_ALIGN_BOTTOM_MID, 0, -5);
     lv_label_set_text(reachability_label_, "BRIDGE: OFFLINE");
 
+    lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestCapture(); }, LV_EVENT_SHORT_CLICKED, nullptr);
+    lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestRecord(); }, LV_EVENT_LONG_PRESSED, nullptr);
+    lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     running_.store(true);
     if (state_mutex_ != nullptr && xTaskCreate([](void* context) {
             static_cast<LiHuahuaBodyApp*>(context)->pollLoop();
-        }, "lihuahua_body", 6144, this, 3, &poll_task_) != pdPASS) {
+        }, "lihuahua_body", 16384, this, 3, &poll_task_) != pdPASS) {
         poll_task_ = nullptr;
         running_.store(false);
     }
@@ -156,6 +161,8 @@ void LiHuahuaBodyApp::onOpen()
 
 void LiHuahuaBodyApp::pollLoop()
 {
+    GetHAL().startNetwork(nullptr);
+    lihuahuaBodyDiscover();
     lihuahua_body::BodyState last_known;
     bool has_last_known = false;
     uint32_t last_success = 0;
@@ -183,6 +190,9 @@ void LiHuahuaBodyApp::pollLoop()
             xSemaphoreGive(state_mutex_);
         }
 
+        ESP_LOGI("LiHuahua", "state=%s reachable=%d", lihuahua_body::faceName(lihuahua_body::faceFor(current)), current.reachable);
+        if (!current.reachable) lihuahuaBodyDiscover();
+        lihuahuaBodyIOPoll();
         vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
     }
 
