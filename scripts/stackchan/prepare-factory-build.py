@@ -26,8 +26,11 @@ APP_FILES = (
     "lihuahua_body_state.h",
     "lihuahua_body_io.cpp",
     "lihuahua_body_io.h",
+    "lihuahua_wake.cpp",
+    "lihuahua_wake.h",
 )
 ENTRY_FILE = "lihuahua_body_main.cpp"
+WAKE_DEFAULTS_FILE = "wake-sdkconfig.defaults"
 
 
 def valid_bridge_url(value: str) -> bool:
@@ -56,6 +59,30 @@ def run_git(root: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def apply_body_safety_edits(output: Path) -> None:
+    hal_path = output / "firmware/main/hal/hal.cpp"
+    hal_text = hal_path.read_text(encoding="utf-8")
+    nvs_block = (
+        "    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {\n"
+        "        ESP_ERROR_CHECK(nvs_flash_erase());\n"
+        "        ret = nvs_flash_init();\n"
+        "    }\n"
+    )
+    if hal_text.count(nvs_block) != 1:
+        raise SystemExit("NVS_ERASE_BLOCK_NOT_FOUND_OR_NOT_UNIQUE")
+    hal_path.write_text(hal_text.replace(nvs_block, "", 1), encoding="utf-8", newline="\n")
+
+    camera_path = output / "firmware/main/hal/board/stackchan_camera.cc"
+    camera_text = camera_path.read_text(encoding="utf-8")
+    shutter = "    hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);"
+    preview = "    if (display != nullptr) {"
+    if camera_text.count(shutter) != 1 or camera_text.count(preview) != 1:
+        raise SystemExit("CAMERA_FACTORY_SIDE_EFFECTS_NOT_FOUND_OR_NOT_UNIQUE")
+    camera_text = camera_text.replace(shutter, "    if (hal_bridge::is_xiaozhi_mode()) hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);", 1)
+    camera_text = camera_text.replace(preview, "    if (display != nullptr && hal_bridge::is_xiaozhi_mode()) {", 1)
+    camera_path.write_text(camera_text, encoding="utf-8", newline="\n")
 
 
 def main() -> int:
@@ -89,6 +116,9 @@ def main() -> int:
             raise SystemExit(f"FEATURE_APP_SOURCE_MISSING:{filename}")
     if not patch.is_file():
         raise SystemExit("REGISTRATION_PATCH_MISSING")
+    wake_defaults = app_source / WAKE_DEFAULTS_FILE
+    if not wake_defaults.is_file():
+        raise SystemExit("WAKE_DEFAULTS_MISSING")
 
     subprocess.run(
         ["git", "clone", "--no-hardlinks", str(source), str(output)],
@@ -108,12 +138,17 @@ def main() -> int:
     app_target.mkdir(parents=True, exist_ok=False)
     for filename in APP_FILES:
         shutil.copy2(app_source / filename, app_target / filename)
+    defaults_path = output / "firmware/sdkconfig.defaults"
+    with defaults_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n# VC-AI-PET Phase 4.2 local wake\n")
+        handle.write(wake_defaults.read_text(encoding="utf-8"))
 
     subprocess.run(
         ["git", "-C", str(output), "apply", "--whitespace=nowarn", str(patch)],
         check=True,
         stdout=subprocess.DEVNULL,
     )
+    apply_body_safety_edits(output)
     # The body firmware owns the entry point so the factory AI agent and App
     # Center are not started as a side effect of boot.
     shutil.copy2(app_source / ENTRY_FILE, output / "firmware/main/main.cpp")

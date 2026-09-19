@@ -9,6 +9,8 @@ import { mapPetStateToBodyContract } from './contract.mjs'
 import { isAllowedLanAddress } from './lan-guard.mjs'
 import { hasValidBodyKey, loadBodyKey } from './body-auth.mjs'
 import { TurnSpeechAggregator } from './turn-speech-aggregator.mjs'
+import { classifyWakeTranscript, stripWakePhrase } from './wake-phrase.mjs'
+import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
 const root = dirname(fileURLToPath(import.meta.url))
@@ -24,6 +26,7 @@ const status = {
   camera: null,
   microphone: null,
   speech: null,
+  wake: null,
   authConfigured: Boolean(bodyKey),
 }
 let capture = false
@@ -33,6 +36,12 @@ let inFlightAudio = null
 let speechQueue = []
 let speechWorkerRunning = false
 let speaking = false
+let wakeSpeakingState = false
+const wakeSession = new WakeSession({
+  onStateChange: ({ state }) => {
+    status.wake = { ...(status.wake ?? {}), session: state }
+  },
+})
 
 const json = (res, code, value) => {
   res.writeHead(code, {
@@ -55,7 +64,12 @@ async function body(req, limit = 1024 * 1024) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function refreshSpeaking() {
-  speaking = speechWorkerRunning || speechQueue.length > 0 || audioQueue.length > 0 || Boolean(inFlightAudio)
+  const next = speechWorkerRunning || speechQueue.length > 0 || audioQueue.length > 0 || Boolean(inFlightAudio)
+  speaking = next
+  if (next !== wakeSpeakingState) {
+    wakeSpeakingState = next
+    wakeSession.markSpeaking(next)
+  }
 }
 
 async function renderSpeech(text) {
@@ -176,21 +190,72 @@ async function askHuahuaByVoice(message) {
   throw Error('voice-turn-timeout')
 }
 
-async function processMicrophone(pcmPath) {
-  const speechPython = process.env.STACKCHAN_SPEECH_PYTHON || join(data, 'speech-venv', 'Scripts', 'python.exe')
+function speechPythonPath() {
+  if (process.env.STACKCHAN_SPEECH_PYTHON) return process.env.STACKCHAN_SPEECH_PYTHON
+  return process.platform === 'win32'
+    ? join(data, 'speech-venv', 'Scripts', 'python.exe')
+    : join(data, 'speech-venv', 'bin', 'python')
+}
+
+async function transcribeLocal(pcmPath, sampleRate) {
+  const speechPython = speechPythonPath()
   const speechModel = process.env.STACKCHAN_SPEECH_MODEL || join(data, 'vosk-model-small-cn-0.22')
-  const result = await run(speechPython, [join(root, '../transcribe-local.py'), '--model', speechModel, '--pcm', pcmPath, '--sample-rate', '24000'], {
+  const result = await run(speechPython, [join(root, '../transcribe-local.py'), '--model', speechModel, '--pcm', pcmPath, '--sample-rate', String(sampleRate)], {
     windowsHide: true,
     timeout: 90000,
     env: { ...process.env, PYTHONUTF8: '1' },
   })
-  const transcript = result.stdout.trim()
+  return result.stdout.trim()
+}
+
+async function processMicrophone(pcmPath) {
+  const transcript = await transcribeLocal(pcmPath, 24000)
+  status.microphone ??= {}
   status.microphone.transcript = transcript
   if (!transcript) {
     status.microphone.voice = { status: 'no-speech' }
     return
   }
   status.microphone.voice = await askHuahuaByVoice(transcript)
+}
+
+async function processWake(pcmPath, candidate, sampleRate) {
+  status.wake ??= {}
+  status.wake.session = wakeSession.state
+  status.wake.candidate = candidate
+  status.wake.status = 'transcribing'
+  const transcript = await transcribeLocal(pcmPath, sampleRate)
+  status.wake.transcript = transcript
+
+  if (wakeSession.state === 'LISTENING') {
+    const accepted = wakeSession.acceptFollowUp(stripWakePhrase(transcript, candidate))
+    if (!accepted.accepted) {
+      status.wake.status = accepted.reason
+      return
+    }
+    status.wake.status = accepted.kind
+    status.wake.query = accepted.query
+    status.wake.voice = await askHuahuaByVoice(accepted.query)
+    return
+  }
+
+  const classified = classifyWakeTranscript(transcript, candidate)
+  if (!classified.confirmed) {
+    status.wake.status = 'candidate-rejected'
+    return
+  }
+  if (!wakeSession.beginCandidate()) {
+    status.wake.status = 'session-busy'
+    return
+  }
+  const accepted = wakeSession.acceptWake(classified.query)
+  if (!accepted.accepted) {
+    status.wake.status = accepted.reason
+    return
+  }
+  status.wake.status = accepted.kind
+  status.wake.query = accepted.query
+  if (accepted.kind === 'query') status.wake.voice = await askHuahuaByVoice(accepted.query)
 }
 
 const eventCursorPath = join(data, 'turn-events.cursor.json')
@@ -254,7 +319,8 @@ const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://local').pathname
     if (req.method === 'GET' && path === '/healthz') {
       refreshSpeaking()
-      return json(res, 200, { ok: true, ...status, speaking, audioQueue: audioQueue.length, speechQueue: speechQueue.length })
+      wakeSession.tick()
+      return json(res, 200, { ok: true, ...status, speaking, wakeSession: wakeSession.state, audioQueue: audioQueue.length, speechQueue: speechQueue.length })
     }
     if (path.startsWith('/v1/body/') && !hasValidBodyKey(req, bodyKey)) {
       return json(res, 401, { error: 'body-key-required' })
@@ -348,6 +414,31 @@ const server = createServer(async (req, res) => {
         console.error('MICROPHONE_ERROR', error.message)
       })
       return json(res, 200, { ok: true })
+    }
+    if (req.method === 'POST' && path === '/v1/body/wake') {
+      const sampleRate = Number(req.headers['x-lihuahua-audio-rate'] ?? 16000)
+      const candidate = String(req.headers['x-lihuahua-wake-candidate'] ?? 'huahua')
+      if (sampleRate !== 16000) return json(res, 400, { error: 'wake-audio-rate-must-be-16000' })
+      if (!['huahua', 'huahua_zaima'].includes(candidate)) return json(res, 400, { error: 'wake-candidate-invalid' })
+      const pcm = await body(req, 512 * 1024)
+      if (pcm.length === 0 || pcm.length % 2 !== 0) return json(res, 400, { error: 'wake-pcm-invalid' })
+      const pcmPath = join(data, 'wake.pcm')
+      await writeFile(pcmPath, pcm)
+      status.wake = {
+        at: new Date().toISOString(),
+        bytes: pcm.length,
+        sampleRate,
+        candidate,
+        status: 'running',
+        session: wakeSession.state,
+      }
+      void processWake(pcmPath, candidate, sampleRate)
+        .then(() => console.log('WAKE', JSON.stringify(status.wake)))
+        .catch((error) => {
+          status.wake = { ...(status.wake ?? {}), status: 'error', error: error.message }
+          console.error('WAKE_ERROR', error.message)
+        })
+      return json(res, 202, { ok: true, accepted: true, bytes: pcm.length })
     }
     if (req.method === 'POST' && path === '/v1/body/control') {
       const value = JSON.parse(await body(req, 16 * 1024))

@@ -1,4 +1,5 @@
 #include "lihuahua_body_io.h"
+#include "lihuahua_wake.h"
 #include "stackchan_body_config.h"
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
@@ -15,10 +16,13 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace {
 std::atomic<bool> capture_requested{false}, record_requested{false};
 std::string bridge_base;
+LiHuahuaWake wake;
 void setBodyKey(esp_http_client_handle_t client) {
     const char* key=STACKCHAN_BODY_KEY;
     if(key && key[0]) esp_http_client_set_header(client,"X-LiHuahua-Body-Key",key);
@@ -56,11 +60,12 @@ void capture() {
     free(jpeg); ack("camera",ok,size);
 }
 void record() {
+    wake.Pause();
     auto codec=Board::GetInstance().GetAudioCodec();
-    if(!codec) { ack("microphone",false,0); return; }
+    if(!codec) { ack("microphone",false,0); wake.Resume(); return; }
     constexpr size_t frames=24000*5;
     auto pcm=static_cast<int16_t*>(heap_caps_malloc(frames*2,MALLOC_CAP_SPIRAM));
-    if(!pcm) { ack("microphone",false,0); return; }
+    if(!pcm) { ack("microphone",false,0); wake.Resume(); return; }
     codec->EnableInput(true); size_t done=0; int channels=codec->input_channels();
     std::vector<int16_t> chunk(480*channels);
     while(done<frames && codec->InputData(chunk)) {
@@ -69,12 +74,13 @@ void record() {
     }
     codec->EnableInput(false); std::string out;
     bool ok=done==frames && request("/v1/body/microphone",pcm,done*2,"audio/pcm",out);
-    heap_caps_free(pcm); ack("microphone",ok,done*2);
+    heap_caps_free(pcm); ack("microphone",ok,done*2); wake.Resume();
 }
 void play() {
+    wake.Pause();
     auto url=lihuahuaBodyEndpoint("/v1/body/audio"); esp_http_client_config_t cfg{};
     cfg.url=url.c_str(); cfg.timeout_ms=8000;
-    auto c=esp_http_client_init(&cfg); if(!c) return;
+    auto c=esp_http_client_init(&cfg); if(!c) { wake.Resume(); return; }
     setBodyKey(c);
     auto codec=Board::GetInstance().GetAudioCodec(); size_t total=0; bool ok=false;
     if(codec && esp_http_client_open(c,0)==ESP_OK) {
@@ -96,10 +102,36 @@ void play() {
         }
     }
     esp_http_client_cleanup(c); ack("speaker",ok,total);
+    vTaskDelay(pdMS_TO_TICKS(700));
+    wake.Resume();
 }
 }
 void lihuahuaBodyRequestCapture() { capture_requested=true; }
 void lihuahuaBodyRequestRecord() { record_requested=true; }
+bool lihuahuaBodyWakeStart() {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (!codec) return false;
+    return wake.Start(codec, [](std::vector<int16_t>&& pcm, const char* candidate) {
+        lihuahuaBodySubmitWake(std::move(pcm), candidate);
+    });
+}
+void lihuahuaBodyWakeStop() { wake.Stop(); }
+void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate) {
+    if (pcm.empty()) return;
+    auto url = lihuahuaBodyEndpoint("/v1/body/wake");
+    esp_http_client_config_t cfg{}; cfg.url = url.c_str(); cfg.timeout_ms = 10000;
+    auto c = esp_http_client_init(&cfg); if (!c) return;
+    setBodyKey(c);
+    esp_http_client_set_method(c, HTTP_METHOD_POST);
+    esp_http_client_set_header(c, "Content-Type", "audio/pcm");
+    esp_http_client_set_header(c, "X-LiHuahua-Audio-Rate", "16000");
+    esp_http_client_set_header(c, "X-LiHuahua-Wake-Candidate", candidate ? candidate : "huahua");
+    esp_http_client_set_post_field(c, reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(int16_t));
+    const auto result = esp_http_client_perform(c);
+    const int status = esp_http_client_get_status_code(c);
+    esp_http_client_cleanup(c);
+    ESP_LOGI("LiHuahua", "wake candidate=%s bytes=%u result=%d status=%d", candidate ? candidate : "huahua", unsigned(pcm.size() * sizeof(int16_t)), result, status);
+}
 void lihuahuaBodyIOPoll() {
     std::string out;
     if(request("/v1/body/commands",nullptr,0,nullptr,out)) {

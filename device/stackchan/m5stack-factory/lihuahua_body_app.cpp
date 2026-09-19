@@ -163,6 +163,7 @@ void LiHuahuaBodyApp::pollLoop()
 {
     GetHAL().startNetwork(nullptr);
     lihuahuaBodyDiscover();
+    if (!lihuahuaBodyWakeStart()) ESP_LOGW("LiHuahua", "local wake start failed; manual recording remains available");
     lihuahua_body::BodyState last_known;
     bool has_last_known = false;
     uint32_t last_success = 0;
@@ -247,6 +248,7 @@ void LiHuahuaBodyApp::onClose()
 {
     running_.store(false);
     while (poll_task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
+    lihuahuaBodyWakeStop();
 
     LvglLockGuard lock;
     if (root_ != nullptr) lv_obj_delete(root_);

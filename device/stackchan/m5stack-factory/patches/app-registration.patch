@@ -29,21 +29,3 @@ index 3f11ed6..04c139d 100644
          GetMooncake().installApp(std::make_unique<AppDance>());
 +        GetMooncake().installApp(std::make_unique<LiHuahuaBodyApp>());
          GetMooncake().installApp(std::make_unique<AppSetup>());
-
-diff --git a/firmware/main/hal/hal.cpp b/firmware/main/hal/hal.cpp
---- a/firmware/main/hal/hal.cpp
-+++ b/firmware/main/hal/hal.cpp
-@@ -29,4 +29,0 @@
--    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
--        ESP_ERROR_CHECK(nvs_flash_erase());
--        ret = nvs_flash_init();
--    }
-diff --git a/firmware/main/hal/board/stackchan_camera.cc b/firmware/main/hal/board/stackchan_camera.cc
---- a/firmware/main/hal/board/stackchan_camera.cc
-+++ b/firmware/main/hal/board/stackchan_camera.cc
-@@ -406,1 +406,1 @@
--    hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
-+    if (hal_bridge::is_xiaozhi_mode()) hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);
-@@ -745,1 +745,1 @@
--    if (display != nullptr) {
-+    if (display != nullptr && hal_bridge::is_xiaozhi_mode()) {
