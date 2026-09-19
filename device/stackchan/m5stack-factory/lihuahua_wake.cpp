@@ -226,6 +226,11 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_min_noise_ms = 100;
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
+    // Keep the AFE speech-enhancement worker on CPU1.  MultiNet inference is
+    // deliberately scheduled on CPU0 below so the AFE feed ringbuffer keeps
+    // draining while the ESP-SR command model runs.
+    afe_config->afe_perferred_core = 1;
+    afe_config->afe_perferred_priority = 2;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config_check(afe_config);
 
@@ -319,7 +324,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->feedTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_feed", 8192, this, 7, &task_, 0) != pdPASS) {
+        }, "lihuahua_wake_feed", 8192, this, 3, &task_, 0) != pdPASS) {
         running_.store(false);
         cleanupRuntime();
         callback_ = nullptr;
@@ -329,7 +334,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, 7, &afe_task_, 1) != pdPASS) {
+        }, "lihuahua_wake_afe", 8192, this, 3, &afe_task_, 0) != pdPASS) {
         running_.store(false);
         while (task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
         cleanupRuntime();
@@ -428,6 +433,7 @@ void LiHuahuaWake::feedTaskLoop() {
             continue;
         }
         feedAfe(frame);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     task_ = nullptr;
 }
@@ -444,6 +450,10 @@ void LiHuahuaWake::fetchTaskLoop() {
         if (!running_.load()) break;
         if (result == nullptr || result->ret_value == ESP_FAIL) continue;
         processAfeResult(result);
+        // MultiNet5 inference is intentionally bounded to the command-word
+        // path, but it can take longer than one AFE fetch frame. Yield here so
+        // the feed/fetch scheduler and the CPU0 idle task keep making progress.
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     afe_task_ = nullptr;
 }
