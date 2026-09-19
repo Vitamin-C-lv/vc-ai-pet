@@ -13,7 +13,10 @@ import argparse
 import ipaddress
 import re
 import shutil
+import struct
 import subprocess
+import sys
+import zlib
 from urllib.parse import urlparse
 from pathlib import Path
 
@@ -31,6 +34,7 @@ APP_FILES = (
 )
 ENTRY_FILE = "lihuahua_body_main.cpp"
 WAKE_DEFAULTS_FILE = "wake-sdkconfig.defaults"
+EMBEDDED_WAKE_MODEL_FILE = "lihuahua_mn5q8_cn_srmodels.zlib"
 
 
 def valid_bridge_url(value: str) -> bool:
@@ -83,6 +87,50 @@ def apply_body_safety_edits(output: Path) -> None:
     camera_text = camera_text.replace(shutter, "    if (hal_bridge::is_xiaozhi_mode()) hal_bridge::app_play_sound(OGG_CAMERA_SHUTTER);", 1)
     camera_text = camera_text.replace(preview, "    if (display != nullptr && hal_bridge::is_xiaozhi_mode()) {", 1)
     camera_path.write_text(camera_text, encoding="utf-8", newline="\n")
+
+
+def stage_embedded_wake_model(output: Path, app_target: Path) -> None:
+    """Pack the already-present compact ESP-SR model into the OTA1 app.
+
+    The Factory assets partition is shared by ota_0 and ota_1.  Embedding the
+    small quantized Chinese MultiNet pack keeps this phase app-only while
+    leaving that recovery data untouched.
+    """
+    source_model = output / "firmware/managed_components/espressif__esp-sr/model/multinet_model/mn5q8_cn"
+    if not source_model.is_dir():
+        raise SystemExit("ESP_SR_MN5Q8_CN_MODEL_MISSING")
+    model_stage = output / "firmware/.vc-ai-pet-local-wake/multinet_model"
+    model_stage.mkdir(parents=True, exist_ok=False)
+    shutil.copytree(source_model, model_stage / "mn5q8_cn")
+    packer = output / "firmware/xiaozhi-esp32/scripts/spiffs_assets/pack_model.py"
+    packed = model_stage / "srmodels.bin"
+    subprocess.run(
+        [sys.executable, str(packer), "--model_path", str(model_stage)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    if not packed.is_file() or packed.stat().st_size <= 0:
+        raise SystemExit("ESP_SR_EMBEDDED_MODEL_PACK_FAILED")
+    compressed = zlib.compress(packed.read_bytes(), level=9)
+    (app_target / EMBEDDED_WAKE_MODEL_FILE).write_bytes(struct.pack("<I", packed.stat().st_size) + compressed)
+
+    cmake_path = output / "firmware/main/CMakeLists.txt"
+    cmake_text = cmake_path.read_text(encoding="utf-8")
+    marker = "                    )\n\n# Use target_compile_definitions"
+    addition = (
+        "                    )\n\n"
+        "# VC-AI-PET local wake model is embedded in the OTA1 app; do not flash\n"
+        "# the shared assets partition used by the ota_0 recovery image.\n"
+        "set(LIHUAHUA_WAKE_MODEL_FILE \"${CMAKE_CURRENT_SOURCE_DIR}/apps/app_lihuahua_body/"
+        f"{EMBEDDED_WAKE_MODEL_FILE}\")\n"
+        "if(EXISTS \"${LIHUAHUA_WAKE_MODEL_FILE}\")\n"
+        "    target_add_binary_data(${COMPONENT_LIB} \"${LIHUAHUA_WAKE_MODEL_FILE}\" BINARY)\n"
+        "endif()\n\n"
+        "# Use target_compile_definitions"
+    )
+    if cmake_text.count(marker) != 1:
+        raise SystemExit("MAIN_CMAKE_COMPONENT_MARKER_NOT_FOUND_OR_NOT_UNIQUE")
+    cmake_path.write_text(cmake_text.replace(marker, addition, 1), encoding="utf-8", newline="\n")
 
 
 def main() -> int:
@@ -138,6 +186,7 @@ def main() -> int:
     app_target.mkdir(parents=True, exist_ok=False)
     for filename in APP_FILES:
         shutil.copy2(app_source / filename, app_target / filename)
+    stage_embedded_wake_model(output, app_target)
     defaults_path = output / "firmware/sdkconfig.defaults"
     with defaults_path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write("\n# VC-AI-PET Phase 4.2 local wake\n")

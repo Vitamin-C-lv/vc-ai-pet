@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -61,6 +63,7 @@ void capture() {
 }
 void record() {
     wake.Pause();
+    ESP_LOGI("LiHuahua", "MANUAL_RECORD_WAKE_MUTEX=PASS");
     auto codec=Board::GetInstance().GetAudioCodec();
     if(!codec) { ack("microphone",false,0); wake.Resume(); return; }
     constexpr size_t frames=24000*5;
@@ -78,6 +81,7 @@ void record() {
 }
 void play() {
     wake.Pause();
+    ESP_LOGI("LiHuahua", "SPEAKING_WAKE_DISABLED=PASS");
     auto url=lihuahuaBodyEndpoint("/v1/body/audio"); esp_http_client_config_t cfg{};
     cfg.url=url.c_str(); cfg.timeout_ms=8000;
     auto c=esp_http_client_init(&cfg); if(!c) { wake.Resume(); return; }
@@ -111,13 +115,17 @@ void lihuahuaBodyRequestRecord() { record_requested=true; }
 bool lihuahuaBodyWakeStart() {
     auto codec = Board::GetInstance().GetAudioCodec();
     if (!codec) return false;
-    return wake.Start(codec, [](std::vector<int16_t>&& pcm, const char* candidate) {
-        lihuahuaBodySubmitWake(std::move(pcm), candidate);
+    return wake.Start(codec, [](std::vector<int16_t>&& pcm, const char* candidate, float score) {
+        lihuahuaBodySubmitWake(std::move(pcm), candidate, score);
     });
 }
 void lihuahuaBodyWakeStop() { wake.Stop(); }
-void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate) {
+void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate, float score) {
     if (pcm.empty()) return;
+    if (!std::isfinite(score) || score < 0.0f || score > 1.0f) {
+        ESP_LOGW("LiHuahua", "wake score invalid=%f", score);
+        return;
+    }
     auto url = lihuahuaBodyEndpoint("/v1/body/wake");
     esp_http_client_config_t cfg{}; cfg.url = url.c_str(); cfg.timeout_ms = 10000;
     auto c = esp_http_client_init(&cfg); if (!c) return;
@@ -126,11 +134,15 @@ void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate) {
     esp_http_client_set_header(c, "Content-Type", "audio/pcm");
     esp_http_client_set_header(c, "X-LiHuahua-Audio-Rate", "16000");
     esp_http_client_set_header(c, "X-LiHuahua-Wake-Candidate", candidate ? candidate : "huahua");
+    char score_header[24];
+    std::snprintf(score_header, sizeof(score_header), "%.6f", static_cast<double>(score));
+    esp_http_client_set_header(c, "X-LiHuahua-Wake-Score", score_header);
     esp_http_client_set_post_field(c, reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(int16_t));
     const auto result = esp_http_client_perform(c);
     const int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
-    ESP_LOGI("LiHuahua", "wake candidate=%s bytes=%u result=%d status=%d", candidate ? candidate : "huahua", unsigned(pcm.size() * sizeof(int16_t)), result, status);
+    ESP_LOGI("LiHuahua", "wake candidate=%s score=%.4f bytes=%u result=%d status=%d",
+             candidate ? candidate : "huahua", static_cast<double>(score), unsigned(pcm.size() * sizeof(int16_t)), result, status);
 }
 void lihuahuaBodyIOPoll() {
     std::string out;

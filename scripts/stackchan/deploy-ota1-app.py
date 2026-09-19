@@ -18,9 +18,9 @@ import serial
 from esptool.reset import HardReset
 
 try:
-    from ota_metadata import next_selector_update, selector_sector, decode_selector
+    from ota_metadata import OTA_IMG_NEW, OTA_IMG_VALID, next_selector_update, selector_sector, decode_selector
 except ModuleNotFoundError:  # pragma: no cover - package-style imports
-    from scripts.stackchan.ota_metadata import next_selector_update, selector_sector, decode_selector
+    from scripts.stackchan.ota_metadata import OTA_IMG_NEW, OTA_IMG_VALID, next_selector_update, selector_sector, decode_selector
 
 
 OTA_DATA_OFFSET = 0xD000
@@ -51,8 +51,9 @@ def write_selector_and_verify(
     seq: int,
     selector_path: Path,
     readback_path: Path,
+    state: int = OTA_IMG_NEW,
 ) -> None:
-    selector_path.write_bytes(selector_sector(metadata, copy, seq))
+    selector_path.write_bytes(selector_sector(metadata, copy, seq, state=state))
     offset = OTA_DATA_OFFSET + copy * SECTOR_SIZE
     esptool_main(
         port,
@@ -129,6 +130,7 @@ def main() -> int:
             ota0_seq,
             ota0_selector,
             temp / "otadata-after-ota0-selector.bin",
+            state=OTA_IMG_VALID,
         )
         ota0_log = capture_boot(args.port, evidence / "ota0-safety-boot.log")
         if "Loaded app from partition at offset 0x20000" not in ota0_log:

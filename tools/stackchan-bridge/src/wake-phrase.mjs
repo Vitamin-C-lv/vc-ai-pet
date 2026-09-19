@@ -9,8 +9,8 @@ export function normalizeWakeText(value) {
 
 export function confirmWakeCandidate(candidate, transcript) {
   const normalized = normalizeWakeText(transcript)
-  if (candidate === 'huahua_zaima') return normalized.includes('花花在吗')
-  if (candidate === 'huahua') return normalized.includes('花花')
+  if (candidate === 'huahua_zaima') return normalized.startsWith('花花在吗')
+  if (candidate === 'huahua') return normalized.startsWith('花花')
   return false
 }
 
@@ -39,12 +39,16 @@ export function stripWakePhrase(transcript, candidate = 'huahua') {
 
 export function classifyWakeTranscript(transcript, candidate = 'huahua') {
   const normalized = normalizeWakeText(transcript)
-  const confirmed = confirmWakeCandidate(candidate, transcript)
-  if (!confirmed) return { confirmed: false, normalized, query: '' }
+  if (!confirmWakeCandidate(candidate, transcript)) {
+    return { confirmed: false, normalized, query: '', wakeKind: null }
+  }
+  const wakeKind = normalized.startsWith('花花在吗') ? 'huahua_zaima' : 'huahua'
+  const query = stripWakePhrase(transcript, candidate)
   return {
     confirmed: true,
     normalized,
-    query: stripWakePhrase(transcript, candidate),
-    wakeOnly: stripWakePhrase(transcript, candidate).length === 0,
+    wakeKind,
+    query,
+    wakeOnly: query.length === 0,
   }
 }

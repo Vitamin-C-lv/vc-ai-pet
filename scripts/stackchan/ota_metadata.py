@@ -62,14 +62,16 @@ def _check_metadata(metadata: bytes, copy: int | None = None) -> None:
         raise ValueError("OTADATA_COPY_INVALID")
 
 
-def selector_sector(metadata: bytes, copy: int, seq: int) -> bytes:
+def selector_sector(metadata: bytes, copy: int, seq: int, state: int = OTA_IMG_NEW) -> bytes:
     _check_metadata(metadata, copy)
     if not 1 <= seq <= MAX_SEQUENCE:
         raise ValueError("OTADATA_SEQUENCE_INVALID")
+    if state not in (OTA_IMG_NEW, OTA_IMG_PENDING_VERIFY, OTA_IMG_VALID, OTA_IMG_INVALID, OTA_IMG_ABORTED):
+        raise ValueError("OTA_STATE_INVALID")
     start = copy * SECTOR_SIZE
     sector = bytearray(metadata[start : start + SECTOR_SIZE])
     struct.pack_into("<I", sector, 0, seq)
-    struct.pack_into("<I", sector, 24, OTA_IMG_NEW)
+    struct.pack_into("<I", sector, 24, state)
     struct.pack_into("<I", sector, 28, crc(seq))
     return bytes(sector)
 

@@ -8,6 +8,6 @@ void lihuahuaBodyRequestCapture();
 void lihuahuaBodyRequestRecord();
 std::string lihuahuaBodyEndpoint(const char* path);
 void lihuahuaBodyDiscover();
-void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate);
+void lihuahuaBodySubmitWake(std::vector<int16_t>&& pcm, const char* candidate, float score);
 bool lihuahuaBodyWakeStart();
 void lihuahuaBodyWakeStop();

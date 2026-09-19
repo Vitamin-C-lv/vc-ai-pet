@@ -3,24 +3,61 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 #include <esp_heap_caps.h>
+#include <esp_image_format.h>
 #include <esp_log.h>
+#include <esp_partition.h>
 #include <esp_mn_speech_commands.h>
+#include <miniz.h>
 
 #include <assets.h>
 
 namespace {
 constexpr char kTag[] = "LiHuahuaWake";
-constexpr int kSampleRate = 16000;
-constexpr int kFrameMs = 10;
-constexpr int kFrameSamples = kSampleRate * kFrameMs / 1000;
+constexpr int kAfeSampleRate = 16000;
+constexpr int kInputFrameMs = 10;
 constexpr int kPreRollMs = 2000;
 constexpr int kEndSilenceMs = 800;
-constexpr int kMinimumCaptureMs = 350;
 constexpr int kMaximumCaptureMs = 12000;
-constexpr float kMinimumVoiceRms = 550.0f;
-constexpr float kVoiceMultiplier = 2.4f;
+constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
+
+// The compressed Chinese MultiNet pack is embedded in the OTA1 application so
+// the recovery slot and the shared assets partition remain untouched. The
+// staging script supplies this binary from the already-present ESP-SR
+// component; no model is fetched at runtime.
+extern const uint8_t lihuahua_wake_model_start[] asm("_binary_lihuahua_mn5q8_cn_srmodels_zlib_start");
+extern const uint8_t lihuahua_wake_model_end[] asm("_binary_lihuahua_mn5q8_cn_srmodels_zlib_end");
+
+size_t freePsram() {
+    return heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+}
+
+size_t freeInternalHeap() {
+    return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+}
+
+void logOta1Space() {
+    const esp_partition_t* partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+    if (partition == nullptr) {
+        ESP_LOGI(kTag, "OTA1_APP_BYTES=0");
+        ESP_LOGI(kTag, "OTA1_FREE_BYTES=0");
+        return;
+    }
+
+    esp_partition_pos_t position{
+        .offset = partition->address,
+        .size = partition->size,
+    };
+    esp_image_metadata_t metadata{};
+    const esp_err_t result = esp_image_get_metadata(&position, &metadata);
+    const size_t image_bytes = result == ESP_OK ? metadata.image_len : 0;
+    const size_t free_bytes = image_bytes <= partition->size ? partition->size - image_bytes : 0;
+    ESP_LOGI(kTag, "OTA1_APP_BYTES=%u", static_cast<unsigned>(image_bytes));
+    ESP_LOGI(kTag, "OTA1_FREE_BYTES=%u", static_cast<unsigned>(free_bytes));
+}
 }
 
 LiHuahuaWake::~LiHuahuaWake() {
@@ -28,30 +65,99 @@ LiHuahuaWake::~LiHuahuaWake() {
 }
 
 bool LiHuahuaWake::initializeModel() {
-    // The factory image packages ESP-SR models in the existing assets
-    // partition.  Load that bounded blob directly so the standalone body app
-    // does not depend on the cloud/Xiaozhi application mounting a model FS.
-    void* packed_models = nullptr;
-    size_t packed_models_size = 0;
-    if (Assets::GetInstance().GetAssetData("srmodels.bin", packed_models, packed_models_size)) {
-        (void)packed_models_size;
-        models_ = srmodel_load(packed_models);
+    logOta1Space();
+    ESP_LOGI(kTag, "PSRAM_FREE_BEFORE_MODEL=%u", static_cast<unsigned>(freePsram()));
+    ESP_LOGI(kTag, "INTERNAL_HEAP_BEFORE_MODEL=%u", static_cast<unsigned>(freeInternalHeap()));
+
+    // Prefer the compact model bundled in the OTA1 app. This keeps local
+    // wake independent of whichever model set happens to be in the shared
+    // Factory assets partition and preserves that partition for recovery.
+    const size_t embedded_size = static_cast<size_t>(lihuahua_wake_model_end - lihuahua_wake_model_start);
+    if (embedded_size > sizeof(uint32_t)) {
+        uint32_t inflated_size = 0;
+        std::memcpy(&inflated_size, lihuahua_wake_model_start, sizeof(inflated_size));
+        if (inflated_size > 0 && inflated_size <= kMaximumEmbeddedModelSize) {
+            embedded_model_storage_ = heap_caps_malloc(inflated_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            embedded_model_storage_size_ = inflated_size;
+            if (embedded_model_storage_ != nullptr) {
+                const size_t compressed_size = embedded_size - sizeof(uint32_t);
+                const size_t result = tinfl_decompress_mem_to_mem(
+                    embedded_model_storage_, inflated_size,
+                    lihuahua_wake_model_start + sizeof(uint32_t), compressed_size,
+                    TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+                if (result == inflated_size) {
+                    ESP_LOGI(kTag, "PSRAM_FREE_AFTER_DECOMPRESS=%u", static_cast<unsigned>(freePsram()));
+                    models_ = srmodel_load(embedded_model_storage_);
+                    ESP_LOGI(kTag, "ESP-SR local model source=ota1-embedded compressed=%u inflated=%u",
+                             static_cast<unsigned>(compressed_size), static_cast<unsigned>(inflated_size));
+                } else {
+                    ESP_LOGE(kTag, "ESP-SR embedded model inflate failed result=%u expected=%u",
+                             static_cast<unsigned>(result), static_cast<unsigned>(inflated_size));
+                }
+            } else {
+                ESP_LOGE(kTag, "ESP-SR embedded model allocation failed bytes=%u",
+                         static_cast<unsigned>(inflated_size));
+            }
+        } else {
+            ESP_LOGE(kTag, "ESP-SR embedded model header invalid inflated=%u",
+                     static_cast<unsigned>(inflated_size));
+        }
+    }
+
+    // If decompression or loading failed, release the temporary blob before
+    // trying the read-only Factory asset fallback. A successfully loaded
+    // model keeps this blob until Stop(), because srmodel_load() retains
+    // pointers into it.
+    if (models_ == nullptr && embedded_model_storage_ != nullptr) {
+        heap_caps_free(embedded_model_storage_);
+        embedded_model_storage_ = nullptr;
+        embedded_model_storage_size_ = 0;
+    }
+
+    // Keep a read-only fallback for a future Factory asset pack that already
+    // contains a compatible MultiNet model.
+    if (models_ == nullptr) {
+        void* packed_models = nullptr;
+        size_t packed_models_size = 0;
+        if (Assets::GetInstance().GetAssetData("srmodels.bin", packed_models, packed_models_size)) {
+            (void)packed_models_size;
+            models_ = srmodel_load(packed_models);
+        }
     }
     if (models_ == nullptr) models_ = esp_srmodel_init("model");
     if (models_ == nullptr || models_->num <= 0) {
         ESP_LOGE(kTag, "ESP-SR model list unavailable");
         return false;
     }
+
     multinet_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, "cn");
     if (multinet_name_ == nullptr) multinet_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, nullptr);
+    if (multinet_name_ == nullptr && models_->model_name != nullptr) {
+        for (int i = 0; i < models_->num; ++i) {
+            const char* name = models_->model_name[i];
+            ESP_LOGI(kTag, "ESP-SR packed model[%d]=%s", i, name ? name : "(null)");
+            if (name != nullptr && std::strncmp(name, ESP_MN_PREFIX, std::strlen(ESP_MN_PREFIX)) == 0) {
+                multinet_name_ = models_->model_name[i];
+                break;
+            }
+        }
+    }
     if (multinet_name_ == nullptr) {
         ESP_LOGE(kTag, "Chinese MultiNet model unavailable");
         return false;
     }
+
     multinet_ = esp_mn_handle_from_name(multinet_name_);
-    if (multinet_ == nullptr) return false;
+    if (multinet_ == nullptr) {
+        ESP_LOGE(kTag, "MultiNet handle unavailable name=%s", multinet_name_);
+        return false;
+    }
     multinet_model_data_ = multinet_->create(multinet_name_, 3000);
-    if (multinet_model_data_ == nullptr) return false;
+    if (multinet_model_data_ == nullptr) {
+        ESP_LOGE(kTag, "MultiNet create failed name=%s", multinet_name_);
+        return false;
+    }
+
 #ifdef CONFIG_CUSTOM_WAKE_WORD_THRESHOLD
     const float threshold = static_cast<float>(CONFIG_CUSTOM_WAKE_WORD_THRESHOLD) / 100.0f;
 #else
@@ -59,61 +165,198 @@ bool LiHuahuaWake::initializeModel() {
 #endif
     multinet_->set_det_threshold(multinet_model_data_, threshold);
     esp_mn_commands_clear();
-    // The ESP-SR layer deliberately detects only the strict first phrase.
+    // The ESP-SR layer deliberately detects only the first candidate phrase.
     // “花花在吗” is disambiguated by the PC Vosk stage from this bounded PCM.
     esp_mn_commands_add(1, "hua hua");
     esp_mn_commands_update();
     multinet_->print_active_speech_commands(multinet_model_data_);
+    ESP_LOGI(kTag, "WAKE_MODEL_NAME=%s", multinet_name_);
+    ESP_LOGI(kTag, "MODEL_BLOB_LIFETIME=HELD_UNTIL_STOP bytes=%u",
+             static_cast<unsigned>(embedded_model_storage_size_));
+    ESP_LOGI(kTag, "PSRAM_FREE_AFTER_MULTINET_CREATE=%u", static_cast<unsigned>(freePsram()));
+    ESP_LOGI(kTag, "INTERNAL_HEAP_AFTER_MULTINET_CREATE=%u", static_cast<unsigned>(freeInternalHeap()));
+    ESP_LOGI(kTag, "MULTINET_INITIALIZED=YES");
     return true;
+}
+
+bool LiHuahuaWake::initializeAfe() {
+    if (codec_ == nullptr || models_ == nullptr) return false;
+
+    codec_input_rate_ = codec_->input_sample_rate();
+    codec_input_channels_ = codec_->input_channels();
+    const int reference_channels = codec_->input_reference() ? 1 : 0;
+    if (codec_input_rate_ <= 0 || codec_input_channels_ <= reference_channels) {
+        ESP_LOGE(kTag, "CODEC_INPUT_INVALID rate=%d channels=%d reference=%d",
+                 codec_input_rate_, codec_input_channels_, reference_channels);
+        return false;
+    }
+
+    std::string input_format;
+    for (int i = 0; i < codec_input_channels_ - reference_channels; ++i) input_format.push_back('M');
+    for (int i = 0; i < reference_channels; ++i) input_format.push_back('R');
+    ESP_LOGI(kTag, "CODEC_INPUT_SAMPLE_RATE=%d CODEC_INPUT_CHANNELS=%d INPUT_REFERENCE=%d AFE_INPUT_FORMAT=%s",
+             codec_input_rate_, codec_input_channels_, reference_channels, input_format.c_str());
+
+    if (codec_input_rate_ != kAfeSampleRate) {
+        esp_ae_rate_cvt_cfg_t resampler_config = {
+            .src_rate = static_cast<uint32_t>(codec_input_rate_),
+            .dest_rate = kAfeSampleRate,
+            .channel = static_cast<uint8_t>(codec_input_channels_),
+            .bits_per_sample = 16,
+            .complexity = 2,
+            .perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED,
+        };
+        const auto result = esp_ae_rate_cvt_open(&resampler_config, &input_resampler_);
+        if (input_resampler_ == nullptr) {
+            ESP_LOGE(kTag, "AFE input resampler failed src=%d dst=%d result=%d",
+                     codec_input_rate_, kAfeSampleRate, static_cast<int>(result));
+            return false;
+        }
+    }
+
+    afe_config_t* afe_config = afe_config_init(input_format.c_str(), models_, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
+    if (afe_config == nullptr) {
+        ESP_LOGE(kTag, "AFE config init failed");
+        return false;
+    }
+    afe_config->aec_init = false;
+    afe_config->vad_init = true;
+    afe_config->vad_mode = VAD_MODE_0;
+    afe_config->vad_min_speech_ms = 64;
+    afe_config->vad_min_noise_ms = 100;
+    afe_config->vad_delay_ms = 128;
+    afe_config->agc_init = false;
+    afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+    afe_config_check(afe_config);
+
+    afe_iface_ = esp_afe_handle_from_config(afe_config);
+    if (afe_iface_ == nullptr) {
+        ESP_LOGE(kTag, "AFE interface unavailable");
+        return false;
+    }
+    afe_data_ = afe_iface_->create_from_config(afe_config);
+    if (afe_data_ == nullptr) {
+        ESP_LOGE(kTag, "AFE create failed");
+        afe_iface_ = nullptr;
+        return false;
+    }
+    afe_feed_channels_ = afe_iface_->get_feed_channel_num(afe_data_);
+    if (afe_feed_channels_ <= 0) afe_feed_channels_ = codec_input_channels_;
+    if (afe_feed_channels_ != codec_input_channels_) {
+        ESP_LOGE(kTag, "AFE channel layout mismatch codec=%d afe=%d", codec_input_channels_, afe_feed_channels_);
+        afe_iface_->destroy(afe_data_);
+        afe_data_ = nullptr;
+        afe_iface_ = nullptr;
+        return false;
+    }
+    afe_feed_buffer_.clear();
+    kws_buffer_.clear();
+    ESP_LOGI(kTag, "AFE_INITIALIZED=YES feed_rate=%d feed_channels=%d feed_chunk=%d fetch_chunk=%d",
+             afe_iface_->get_samp_rate(afe_data_), afe_feed_channels_,
+             afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
+    ESP_LOGI(kTag, "AFE_VAD_ENABLED=YES");
+    afe_iface_->print_pipeline(afe_data_);
+    return true;
+}
+
+void LiHuahuaWake::cleanupRuntime() {
+    if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
+        multinet_->destroy(multinet_model_data_);
+    }
+    multinet_model_data_ = nullptr;
+
+    if (afe_data_ != nullptr && afe_iface_ != nullptr) {
+        afe_iface_->destroy(afe_data_);
+    }
+    afe_data_ = nullptr;
+    afe_iface_ = nullptr;
+
+    if (input_resampler_ != nullptr) {
+        esp_ae_rate_cvt_close(input_resampler_);
+        input_resampler_ = nullptr;
+    }
+
+    if (models_ != nullptr) {
+        esp_srmodel_deinit(models_);
+    }
+    models_ = nullptr;
+
+    // srmodel_load() retains pointers into this blob. It is intentionally
+    // freed only after MultiNet destruction and model deinitialization.
+    if (embedded_model_storage_ != nullptr) {
+        heap_caps_free(embedded_model_storage_);
+        embedded_model_storage_ = nullptr;
+    }
+    embedded_model_storage_size_ = 0;
+    multinet_ = nullptr;
+    multinet_name_ = nullptr;
+    afe_feed_buffer_.clear();
+    kws_buffer_.clear();
 }
 
 bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (running_.load() || codec == nullptr || !callback) return false;
     codec_ = codec;
     callback_ = std::move(callback);
-    ring_.assign(kSampleRate * kPreRollMs / 1000, 0);
+    ring_.assign(kAfeSampleRate * kPreRollMs / 1000, 0);
     ring_write_ = 0;
     capture_.clear();
     mode_ = Mode::Idle;
     silence_ms_ = 0;
     capture_ms_ = 0;
-    noise_floor_ = 300.0f;
-    if (!initializeModel()) {
-        if (models_ != nullptr) esp_srmodel_deinit(models_);
-        models_ = nullptr;
+    candidate_score_ = 0.0f;
+    debug_rms_ = 0.0f;
+
+    if (!initializeModel() || !initializeAfe()) {
+        cleanupRuntime();
+        callback_ = nullptr;
+        codec_ = nullptr;
         return false;
     }
+
     paused_.store(false);
     running_.store(true);
     if (xTaskCreatePinnedToCore([](void* arg) {
-            static_cast<LiHuahuaWake*>(arg)->taskLoop();
+            static_cast<LiHuahuaWake*>(arg)->feedTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake", 8192, this, 7, &task_, 0) != pdPASS) {
+        }, "lihuahua_wake_feed", 8192, this, 7, &task_, 0) != pdPASS) {
         running_.store(false);
-        if (multinet_model_data_ != nullptr) multinet_->destroy(multinet_model_data_);
-        multinet_model_data_ = nullptr;
-        if (models_ != nullptr) esp_srmodel_deinit(models_);
-        models_ = nullptr;
+        cleanupRuntime();
+        callback_ = nullptr;
+        codec_ = nullptr;
         return false;
     }
-    ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms", multinet_name_, kPreRollMs, kEndSilenceMs);
+    if (xTaskCreatePinnedToCore([](void* arg) {
+            static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
+            vTaskDelete(nullptr);
+        }, "lihuahua_wake_afe", 8192, this, 7, &afe_task_, 1) != pdPASS) {
+        running_.store(false);
+        while (task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
+        cleanupRuntime();
+        callback_ = nullptr;
+        codec_ = nullptr;
+        return false;
+    }
+    ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
+    ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
+             multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
 }
 
 void LiHuahuaWake::Stop() {
-    if (!running_.exchange(false)) return;
+    running_.store(false);
     paused_.store(false);
-    while (task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    if (codec_ != nullptr) codec_->EnableInput(false);
-    if (multinet_model_data_ != nullptr && multinet_ != nullptr) multinet_->destroy(multinet_model_data_);
-    multinet_model_data_ = nullptr;
-    if (models_ != nullptr) esp_srmodel_deinit(models_);
-    models_ = nullptr;
-    multinet_ = nullptr;
-    multinet_name_ = nullptr;
+    while (task_ != nullptr || afe_task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
+    {
+        std::lock_guard<std::mutex> lock(input_mutex_);
+        if (codec_ != nullptr) codec_->EnableInput(false);
+        if (afe_data_ != nullptr && afe_iface_ != nullptr) afe_iface_->reset_buffer(afe_data_);
+    }
+    cleanupRuntime();
     callback_ = nullptr;
     codec_ = nullptr;
+    mode_ = Mode::Idle;
+    capture_.clear();
 }
 
 void LiHuahuaWake::Pause() {
@@ -121,6 +364,10 @@ void LiHuahuaWake::Pause() {
     while (reading_.load()) vTaskDelay(pdMS_TO_TICKS(2));
     std::lock_guard<std::mutex> lock(input_mutex_);
     if (codec_ != nullptr) codec_->EnableInput(false);
+    if (afe_data_ != nullptr && afe_iface_ != nullptr) afe_iface_->reset_buffer(afe_data_);
+    afe_feed_buffer_.clear();
+    kws_buffer_.clear();
+    if (multinet_model_data_ != nullptr && multinet_ != nullptr) multinet_->clean(multinet_model_data_);
 }
 
 void LiHuahuaWake::Resume() {
@@ -128,10 +375,11 @@ void LiHuahuaWake::Resume() {
 }
 
 std::vector<int16_t> LiHuahuaWake::readFrame() {
-    const int inputRate = codec_->input_sample_rate();
+    const int input_rate = codec_->input_sample_rate();
     const int channels = std::max(1, codec_->input_channels());
-    const std::size_t inputSamples = static_cast<std::size_t>(inputRate / 100) * channels;
-    std::vector<int16_t> input(inputSamples);
+    const std::size_t input_samples = static_cast<std::size_t>(input_rate * kInputFrameMs / 1000) * channels;
+    if (input_samples == 0) return {};
+    std::vector<int16_t> input(input_samples);
     {
         std::lock_guard<std::mutex> lock(input_mutex_);
         reading_.store(true);
@@ -140,29 +388,110 @@ std::vector<int16_t> LiHuahuaWake::readFrame() {
         reading_.store(false);
         if (!ok) return {};
     }
-    if (channels == 1 && inputRate == kSampleRate) return input;
-    std::vector<int16_t> mono(inputSamples / channels);
-    for (std::size_t i = 0; i < mono.size(); ++i) mono[i] = input[i * channels];
-    if (inputRate == kSampleRate) return mono;
-    std::vector<int16_t> output(kFrameSamples);
-    for (int i = 0; i < kFrameSamples; ++i) {
-        const float source = static_cast<float>(i) * static_cast<float>(mono.size() - 1) / static_cast<float>(kFrameSamples - 1);
-        const auto left = static_cast<std::size_t>(source);
-        const auto right = std::min(left + 1, mono.size() - 1);
-        const float fraction = source - static_cast<float>(left);
-        output[i] = static_cast<int16_t>(mono[left] + (mono[right] - mono[left]) * fraction);
-    }
+    if (input_rate == kAfeSampleRate) return input;
+    if (input_resampler_ == nullptr) return {};
+
+    const uint32_t input_samples_per_channel = static_cast<uint32_t>(input.size() / channels);
+    uint32_t output_samples = 0;
+    if (esp_ae_rate_cvt_get_max_out_sample_num(input_resampler_, input_samples_per_channel, &output_samples) != ESP_AE_ERR_OK ||
+        output_samples == 0) return {};
+    std::vector<int16_t> output(static_cast<size_t>(output_samples) * channels);
+    uint32_t actual_output = output_samples;
+    if (esp_ae_rate_cvt_process(input_resampler_, input.data(), input_samples_per_channel,
+                                output.data(), &actual_output) != ESP_AE_ERR_OK || actual_output == 0) return {};
+    output.resize(static_cast<size_t>(actual_output) * channels);
     return output;
 }
 
-float LiHuahuaWake::frameRms(const std::vector<int16_t>& frame) {
-    if (frame.empty()) return 0.0f;
-    double sum = 0.0;
-    for (const auto sample : frame) sum += static_cast<double>(sample) * static_cast<double>(sample);
-    return static_cast<float>(std::sqrt(sum / static_cast<double>(frame.size())));
+void LiHuahuaWake::feedAfe(const std::vector<int16_t>& input) {
+    if (input.empty() || afe_data_ == nullptr || afe_iface_ == nullptr) return;
+    std::lock_guard<std::mutex> lock(input_mutex_);
+    if (!running_.load() || paused_.load()) return;
+    afe_feed_buffer_.insert(afe_feed_buffer_.end(), input.begin(), input.end());
+    const size_t feed_samples = static_cast<size_t>(afe_iface_->get_feed_chunksize(afe_data_)) * afe_feed_channels_;
+    if (feed_samples == 0) return;
+    while (afe_feed_buffer_.size() >= feed_samples) {
+        afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
+        afe_feed_buffer_.erase(afe_feed_buffer_.begin(), afe_feed_buffer_.begin() + feed_samples);
+    }
+}
+
+void LiHuahuaWake::feedTaskLoop() {
+    while (running_.load()) {
+        if (paused_.load()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        const auto frame = readFrame();
+        if (frame.empty()) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        feedAfe(frame);
+    }
+    task_ = nullptr;
+}
+
+void LiHuahuaWake::fetchTaskLoop() {
+    while (running_.load()) {
+        if (paused_.load()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        const auto* result = afe_iface_ != nullptr && afe_data_ != nullptr
+                                 ? afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100))
+                                 : nullptr;
+        if (!running_.load()) break;
+        if (result == nullptr || result->ret_value == ESP_FAIL) continue;
+        processAfeResult(result);
+    }
+    afe_task_ = nullptr;
+}
+
+void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
+    if (result == nullptr || result->data == nullptr || result->data_size <= 0) return;
+    const size_t samples = static_cast<size_t>(result->data_size) / sizeof(int16_t);
+    std::vector<int16_t> frame(result->data, result->data + samples);
+    pushRing(frame);
+    debug_rms_ = frameRms(frame);  // telemetry only; endpointing uses AFE VAD below.
+    const bool speech = result->vad_state == VAD_SPEECH;
+
+    if (mode_ == Mode::Capture) {
+        appendCapture(frame, speech);
+        return;
+    }
+
+    // V1 is intentionally VAD-gated: no speech means no continuous MultiNet
+    // command detection. This is not a WakeNet implementation.
+    if (!speech) {
+        kws_buffer_.clear();
+        if (multinet_model_data_ != nullptr && multinet_ != nullptr) multinet_->clean(multinet_model_data_);
+        return;
+    }
+
+    if (multinet_model_data_ == nullptr || multinet_ == nullptr) return;
+    const int chunk_size = multinet_->get_samp_chunksize(multinet_model_data_);
+    if (chunk_size <= 0) return;
+    kws_buffer_.insert(kws_buffer_.end(), frame.begin(), frame.end());
+    while (static_cast<int>(kws_buffer_.size()) >= chunk_size && mode_ == Mode::Idle) {
+        const auto state = multinet_->detect(multinet_model_data_, kws_buffer_.data());
+        if (state == ESP_MN_STATE_DETECTED) {
+            auto* result_data = multinet_->get_results(multinet_model_data_);
+            if (result_data != nullptr && result_data->num > 0 && result_data->command_id[0] == 1) {
+                candidate_score_ = std::clamp(result_data->prob[0], 0.0f, 1.0f);
+                ESP_LOGI(kTag, "local wake candidate=huahua score=%0.4f vad=speech", candidate_score_);
+                beginCapture();
+            }
+            multinet_->clean(multinet_model_data_);
+        } else if (state == ESP_MN_STATE_TIMEOUT) {
+            multinet_->clean(multinet_model_data_);
+        }
+        kws_buffer_.erase(kws_buffer_.begin(), kws_buffer_.begin() + chunk_size);
+    }
 }
 
 void LiHuahuaWake::pushRing(const std::vector<int16_t>& frame) {
+    if (ring_.empty()) return;
     for (const auto sample : frame) {
         ring_[ring_write_] = sample;
         ring_write_ = (ring_write_ + 1) % ring_.size();
@@ -171,6 +500,7 @@ void LiHuahuaWake::pushRing(const std::vector<int16_t>& frame) {
 
 std::vector<int16_t> LiHuahuaWake::snapshotRing() const {
     std::vector<int16_t> snapshot(ring_.size());
+    if (ring_.empty()) return snapshot;
     for (std::size_t i = 0; i < ring_.size(); ++i) snapshot[i] = ring_[(ring_write_ + i) % ring_.size()];
     return snapshot;
 }
@@ -178,17 +508,17 @@ std::vector<int16_t> LiHuahuaWake::snapshotRing() const {
 void LiHuahuaWake::beginCapture() {
     mode_ = Mode::Capture;
     capture_ = snapshotRing();
-    capture_ms_ = 0;
+    capture_ms_ = kPreRollMs;
     silence_ms_ = 0;
 }
 
-void LiHuahuaWake::appendCapture(const std::vector<int16_t>& frame, float rms) {
+void LiHuahuaWake::appendCapture(const std::vector<int16_t>& frame, bool speech) {
     capture_.insert(capture_.end(), frame.begin(), frame.end());
-    capture_ms_ += kFrameMs;
-    const bool voiced = rms >= std::max(kMinimumVoiceRms, noise_floor_ * kVoiceMultiplier);
-    if (voiced) silence_ms_ = 0;
-    else silence_ms_ += kFrameMs;
-    if (capture_ms_ >= kMaximumCaptureMs || (capture_ms_ >= kMinimumCaptureMs && silence_ms_ >= kEndSilenceMs)) finishCapture();
+    const uint32_t frame_ms = static_cast<uint32_t>(frame.size() * 1000 / kAfeSampleRate);
+    capture_ms_ += frame_ms;
+    if (speech) silence_ms_ = 0;
+    else silence_ms_ += frame_ms;
+    if (capture_ms_ >= kMaximumCaptureMs || (capture_ms_ >= kPreRollMs && silence_ms_ >= kEndSilenceMs)) finishCapture();
 }
 
 void LiHuahuaWake::finishCapture() {
@@ -198,49 +528,17 @@ void LiHuahuaWake::finishCapture() {
     }
     auto pcm = std::move(capture_);
     capture_.clear();
+    const float score = candidate_score_;
     mode_ = Mode::Idle;
     silence_ms_ = 0;
     capture_ms_ = 0;
-    if (callback_) callback_(std::move(pcm), "huahua");
+    candidate_score_ = 0.0f;
+    if (callback_) callback_(std::move(pcm), "huahua", score);
 }
 
-void LiHuahuaWake::taskLoop() {
-    while (running_.load()) {
-        if (paused_.load()) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-        auto frame = readFrame();
-        if (frame.size() != kFrameSamples) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        const float rms = frameRms(frame);
-        pushRing(frame);
-        if (mode_ == Mode::Idle) {
-            if (rms < kMinimumVoiceRms * 1.5f) noise_floor_ = noise_floor_ * 0.995f + rms * 0.005f;
-            if (multinet_model_data_ != nullptr) {
-                const int chunkSize = multinet_->get_samp_chunksize(multinet_model_data_);
-                static std::vector<int16_t> kwsBuffer;
-                kwsBuffer.insert(kwsBuffer.end(), frame.begin(), frame.end());
-                while (static_cast<int>(kwsBuffer.size()) >= chunkSize && mode_ == Mode::Idle) {
-                    const auto state = multinet_->detect(multinet_model_data_, kwsBuffer.data());
-                    if (state == ESP_MN_STATE_DETECTED) {
-                        auto* result = multinet_->get_results(multinet_model_data_);
-                        if (result != nullptr && result->num > 0 && result->command_id[0] == 1) {
-                            ESP_LOGI(kTag, "local wake candidate detected probability=%f", result->prob[0]);
-                            beginCapture();
-                        }
-                        multinet_->clean(multinet_model_data_);
-                    } else if (state == ESP_MN_STATE_TIMEOUT) {
-                        multinet_->clean(multinet_model_data_);
-                    }
-                    kwsBuffer.erase(kwsBuffer.begin(), kwsBuffer.begin() + chunkSize);
-                }
-            }
-        } else {
-            appendCapture(frame, rms);
-        }
-    }
-    task_ = nullptr;
+float LiHuahuaWake::frameRms(const std::vector<int16_t>& frame) {
+    if (frame.empty()) return 0.0f;
+    double sum = 0.0;
+    for (const auto sample : frame) sum += static_cast<double>(sample) * static_cast<double>(sample);
+    return static_cast<float>(std::sqrt(sum / static_cast<double>(frame.size())));
 }

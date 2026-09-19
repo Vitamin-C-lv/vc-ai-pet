@@ -1,6 +1,6 @@
 import { createSocket } from 'node:dgram'
 import { createServer } from 'node:http'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
@@ -14,6 +14,36 @@ import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
 const root = dirname(fileURLToPath(import.meta.url))
+
+function boundedThreshold(name, fallback) {
+  const value = process.env[name] === undefined || process.env[name] === '' ? fallback : Number(process.env[name])
+  if (!Number.isFinite(value) || value < 0 || value > 1) throw Error(`${name} must be between 0 and 1`)
+  return value
+}
+
+// These are calibration defaults, not owner-calibrated final thresholds. The
+// strict ordering is intentional: plain “花花” requires a stronger combined
+// score than “花花在吗”. Real-device samples will replace the defaults later.
+const HUAHUA_STAGE1_MIN_SCORE = boundedThreshold('HUAHUA_STAGE1_MIN_SCORE', 0.80)
+const HUAHUA_STAGE2_MIN_CONFIDENCE = boundedThreshold('HUAHUA_STAGE2_MIN_CONFIDENCE', 0.80)
+const HUAHUA_ZAIMA_STAGE1_MIN_SCORE = boundedThreshold('HUAHUA_ZAIMA_STAGE1_MIN_SCORE', 0.60)
+const HUAHUA_ZAIMA_STAGE2_MIN_CONFIDENCE = boundedThreshold('HUAHUA_ZAIMA_STAGE2_MIN_CONFIDENCE', 0.60)
+if (!(HUAHUA_STAGE1_MIN_SCORE > HUAHUA_ZAIMA_STAGE1_MIN_SCORE &&
+      HUAHUA_STAGE2_MIN_CONFIDENCE > HUAHUA_ZAIMA_STAGE2_MIN_CONFIDENCE)) {
+  throw Error('HUAHUA_POLICY_MUST_BE_STRICTER_THAN_HUAHUA_ZAIMA')
+}
+const wakePolicy = Object.freeze({
+  huahua: Object.freeze({
+    stage1MinScore: HUAHUA_STAGE1_MIN_SCORE,
+    stage2MinConfidence: HUAHUA_STAGE2_MIN_CONFIDENCE,
+    policy: 'STRICT',
+  }),
+  huahua_zaima: Object.freeze({
+    stage1MinScore: HUAHUA_ZAIMA_STAGE1_MIN_SCORE,
+    stage2MinConfidence: HUAHUA_ZAIMA_STAGE2_MIN_CONFIDENCE,
+    policy: 'NORMAL',
+  }),
+})
 const data = process.env.STACKCHAN_DATA_DIR
 if (!data) throw Error('STACKCHAN_DATA_DIR required')
 await mkdir(data, { recursive: true })
@@ -197,15 +227,18 @@ function speechPythonPath() {
     : join(data, 'speech-venv', 'bin', 'python')
 }
 
-async function transcribeLocal(pcmPath, sampleRate) {
+async function transcribeLocal(pcmPath, sampleRate, { wakeMode = false } = {}) {
   const speechPython = speechPythonPath()
   const speechModel = process.env.STACKCHAN_SPEECH_MODEL || join(data, 'vosk-model-small-cn-0.22')
-  const result = await run(speechPython, [join(root, '../transcribe-local.py'), '--model', speechModel, '--pcm', pcmPath, '--sample-rate', String(sampleRate)], {
+  const args = [join(root, '../transcribe-local.py'), '--model', speechModel, '--pcm', pcmPath, '--sample-rate', String(sampleRate)]
+  if (wakeMode) args.push('--wake-mode')
+  const result = await run(speechPython, args, {
     windowsHide: true,
     timeout: 90000,
     env: { ...process.env, PYTHONUTF8: '1' },
   })
-  return result.stdout.trim()
+  if (!wakeMode) return result.stdout.trim()
+  return JSON.parse(result.stdout.trim() || '{}')
 }
 
 async function processMicrophone(pcmPath) {
@@ -219,43 +252,71 @@ async function processMicrophone(pcmPath) {
   status.microphone.voice = await askHuahuaByVoice(transcript)
 }
 
-async function processWake(pcmPath, candidate, sampleRate) {
+async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
   status.wake ??= {}
-  status.wake.session = wakeSession.state
-  status.wake.candidate = candidate
-  status.wake.status = 'transcribing'
-  const transcript = await transcribeLocal(pcmPath, sampleRate)
-  status.wake.transcript = transcript
+  try {
+    status.wake.session = wakeSession.state
+    status.wake.candidate = candidate
+    status.wake.stage1Score = stage1Score
+    status.wake.status = 'transcribing'
+    const recognition = await transcribeLocal(pcmPath, sampleRate, { wakeMode: true })
+    const transcript = typeof recognition?.text === 'string' ? recognition.text : ''
+    const confidence = Number(recognition?.confidence ?? 0)
+    status.wake.transcript = transcript
+    status.wake.vosk = {
+      words: Array.isArray(recognition?.words) ? recognition.words : [],
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+    }
 
-  if (wakeSession.state === 'LISTENING') {
-    const accepted = wakeSession.acceptFollowUp(stripWakePhrase(transcript, candidate))
+    if (wakeSession.state === 'LISTENING') {
+      const accepted = wakeSession.acceptFollowUp(stripWakePhrase(transcript, candidate))
+      if (!accepted.accepted) {
+        status.wake.status = accepted.reason
+        return
+      }
+      status.wake.status = accepted.kind
+      status.wake.query = accepted.query
+      status.wake.voice = await askHuahuaByVoice(accepted.query)
+      return
+    }
+
+    const classified = classifyWakeTranscript(transcript, candidate)
+    status.wake.wakeKind = classified.wakeKind
+    if (!classified.confirmed || !wakePolicy[classified.wakeKind]) {
+      status.wake.status = 'candidate-rejected'
+      return
+    }
+    const policy = wakePolicy[classified.wakeKind]
+    status.wake.policy = {
+      name: policy.policy,
+      stage1MinScore: policy.stage1MinScore,
+      stage2MinConfidence: policy.stage2MinConfidence,
+      calibration: 'PROVISIONAL_UNCALIBRATED',
+    }
+    if (stage1Score < policy.stage1MinScore) {
+      status.wake.status = 'stage1-score-rejected'
+      return
+    }
+    if (!Number.isFinite(confidence) || confidence < policy.stage2MinConfidence) {
+      status.wake.status = 'stage2-confidence-rejected'
+      return
+    }
+    if (!wakeSession.beginCandidate()) {
+      status.wake.status = 'session-busy'
+      return
+    }
+    const accepted = wakeSession.acceptWake(classified.query)
     if (!accepted.accepted) {
       status.wake.status = accepted.reason
       return
     }
     status.wake.status = accepted.kind
     status.wake.query = accepted.query
-    status.wake.voice = await askHuahuaByVoice(accepted.query)
-    return
+    if (accepted.kind === 'query') status.wake.voice = await askHuahuaByVoice(accepted.query)
+  } finally {
+    await unlink(pcmPath).catch(() => {})
+    status.wake.audioFile = 'deleted'
   }
-
-  const classified = classifyWakeTranscript(transcript, candidate)
-  if (!classified.confirmed) {
-    status.wake.status = 'candidate-rejected'
-    return
-  }
-  if (!wakeSession.beginCandidate()) {
-    status.wake.status = 'session-busy'
-    return
-  }
-  const accepted = wakeSession.acceptWake(classified.query)
-  if (!accepted.accepted) {
-    status.wake.status = accepted.reason
-    return
-  }
-  status.wake.status = accepted.kind
-  status.wake.query = accepted.query
-  if (accepted.kind === 'query') status.wake.voice = await askHuahuaByVoice(accepted.query)
 }
 
 const eventCursorPath = join(data, 'turn-events.cursor.json')
@@ -418,8 +479,10 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/v1/body/wake') {
       const sampleRate = Number(req.headers['x-lihuahua-audio-rate'] ?? 16000)
       const candidate = String(req.headers['x-lihuahua-wake-candidate'] ?? 'huahua')
+      const stage1Score = Number(req.headers['x-lihuahua-wake-score'] ?? NaN)
       if (sampleRate !== 16000) return json(res, 400, { error: 'wake-audio-rate-must-be-16000' })
-      if (!['huahua', 'huahua_zaima'].includes(candidate)) return json(res, 400, { error: 'wake-candidate-invalid' })
+      if (candidate !== 'huahua') return json(res, 400, { error: 'wake-candidate-invalid' })
+      if (!Number.isFinite(stage1Score) || stage1Score < 0 || stage1Score > 1) return json(res, 400, { error: 'wake-score-invalid' })
       const pcm = await body(req, 512 * 1024)
       if (pcm.length === 0 || pcm.length % 2 !== 0) return json(res, 400, { error: 'wake-pcm-invalid' })
       const pcmPath = join(data, 'wake.pcm')
@@ -429,10 +492,11 @@ const server = createServer(async (req, res) => {
         bytes: pcm.length,
         sampleRate,
         candidate,
+        stage1Score,
         status: 'running',
         session: wakeSession.state,
       }
-      void processWake(pcmPath, candidate, sampleRate)
+      void processWake(pcmPath, candidate, sampleRate, stage1Score)
         .then(() => console.log('WAKE', JSON.stringify(status.wake)))
         .catch((error) => {
           status.wake = { ...(status.wake ?? {}), status: 'error', error: error.message }
