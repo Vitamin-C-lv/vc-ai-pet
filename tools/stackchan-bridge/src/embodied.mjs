@@ -14,6 +14,9 @@ import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
 const root = dirname(fileURLToPath(import.meta.url))
+const powershell = process.platform === 'linux'
+  ? '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+  : 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 
 function boundedThreshold(name, fallback) {
   const value = process.env[name] === undefined || process.env[name] === '' ? fallback : Number(process.env[name])
@@ -106,7 +109,7 @@ async function renderSpeech(text) {
   const textPath = join(data, 'speech.txt')
   const pcmPath = join(data, 'speech.pcm')
   await writeFile(textPath, text, 'utf8')
-  await run('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [
+  await run(powershell, [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, '../speak-local.ps1'),
     '-TextFile', textPath, '-OutputFile', pcmPath,
   ], { windowsHide: true, timeout: 90000 })
@@ -187,6 +190,13 @@ async function askHuahuaAboutCamera(attachmentId) {
     await wait(750)
   }
   throw Error('vision-turn-timeout')
+}
+
+async function toWindowsPath(pathname) {
+  const result = await run('wslpath', ['-w', pathname], { timeout: 5000 })
+  const converted = result.stdout.trim()
+  if (!converted) throw Error(`windows-path-conversion-failed:${pathname}`)
+  return converted
 }
 
 async function askHuahuaByVoice(message) {
@@ -434,9 +444,12 @@ const server = createServer(async (req, res) => {
       const cameraPath = join(data, 'camera.jpg')
       const thumbnailPath = join(data, 'camera-thumbnail.jpg')
       await writeFile(cameraPath, image)
-      await run('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, '../thumbnail-local.ps1'),
-        '-InputFile', cameraPath, '-OutputFile', thumbnailPath,
+      const thumbnailScript = await toWindowsPath(join(root, '../thumbnail-local.ps1'))
+      const windowsCameraPath = await toWindowsPath(cameraPath)
+      const windowsThumbnailPath = await toWindowsPath(thumbnailPath)
+      await run(powershell, [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', thumbnailScript,
+        '-InputFile', windowsCameraPath, '-OutputFile', windowsThumbnailPath,
       ], { windowsHide: true, timeout: 30000 })
       const imageDto = { dataUrl: 'data:image/jpeg;base64,' + image.toString('base64') }
       const thumbnail = await readFile(thumbnailPath)
