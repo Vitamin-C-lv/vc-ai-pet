@@ -24,6 +24,7 @@ import {
 } from '../experience/experience-dream-context.js'
 import { PetTurnOrchestrator } from './pet-turn-orchestrator.js'
 import { PetTurnManager } from './pet-turn-manager.js'
+import { PetTurnEventFeed } from './pet-turn-feed.js'
 import { createTurnId } from './pet-turn-events.js'
 import { DreamGate } from '../dream/dream-gate.js'
 import { DreamEngine } from '../dream/dream-engine.js'
@@ -39,6 +40,7 @@ import { visualTermsFor } from '../vision/visual-keywords.js'
 import { importLegacyObservations } from '../vision/legacy-observation-importer.js'
 import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
 import { buildVisualDreamContext } from '../dream/visual-dream-context.js'
+import { isEmbodiedTransientAttachment, isStackchanCameraMessage, STACKCHAN_CAMERA_SOURCE, EMBODIED_TRANSIENT_VISUAL_CLASS } from '../vision/visual-source.js'
 
 const DREAM_MIN_NEW_MEMORIES = 8
 const DREAM_OLDEST_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
@@ -336,7 +338,8 @@ export class PetRuntime {
     this.explicitMemoryQueue.explicitMemoryEntry = (id) => this.explicitMemoryEntries.get(id) ?? null
     this.explicitMemoryQueue.snapshot = () => [...this.explicitMemoryEntries.values()].map((entry) => ({ ...entry }))
     this.explicitMemoryController = new ExplicitMemoryController()
-    this.turnManager = new PetTurnManager()
+    this.turnEventFeed = new PetTurnEventFeed()
+    this.turnManager = new PetTurnManager({ onEvent: (event) => this.turnEventFeed.publish(event) })
     this.turnOrchestrator = null
     this.conversationPersistenceReady = false
     this.dreamEngine = null
@@ -373,6 +376,7 @@ export class PetRuntime {
     await this.sandbox.initialize()
     await this.conversationStore.initialize()
     await this.visualExperience.initialize()
+    await this.refreshTransientVisualSources()
     // The experience store is additive and never blocks waking up: if it cannot
     // be opened the pet still chats, it just does not remember recent life.
     if (this.experienceBuffer) {
@@ -658,6 +662,9 @@ export class PetRuntime {
     const owner = compactObservationText(ownerText, 200)
     const observation = compactObservationText(observationText)
     const attachment = compactObservationText(attachmentId, 80) || null
+    if (attachment && isEmbodiedTransientAttachment(await this.conversationStore.attachment(attachment))) {
+      return { status: 'skipped', reason: 'embodied-transient' }
+    }
     const dedupeKey = attachment ?? `${turnId ?? ''}`
     const now = Date.now()
     // The MemoryGate vetoes are enforced here rather than only at the call site.
@@ -735,6 +742,9 @@ export class PetRuntime {
   async reInspectVisualMemory({ attachmentId = null } = {}) {
     const attachment = compactObservationText(attachmentId, 80)
     if (!attachment) return { ok: false, reason: 'attachment-missing' }
+    if (isEmbodiedTransientAttachment(await this.conversationStore?.attachment?.(attachment))) {
+      return { ok: false, reason: 'embodied-transient' }
+    }
     if (typeof this.brain?.visualStep !== 'function' || typeof this.conversationStore?.readAttachmentDataUrl !== 'function') {
       return { ok: false, reason: 'reinspection-unavailable' }
     }
@@ -1063,14 +1073,14 @@ export class PetRuntime {
     }
   }
 
-  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null } = {}) {
+  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null } = {}) {
     this.chatInFlight += 1
     try {
       // Self-healing incremental sync before resolution: any image message
       // appended outside the runtime path must still be visible to Long-Term
       // recall. Idempotent and checkpointed, no models involved.
       await this.syncVisualExperiences()
-      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment, followUp })
+      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment, followUp, source })
       // Incremental visual-experience sync after the turn's user message has
       // been appended to the archive; idempotent and checkpointed, no models.
       await this.syncVisualExperiences()
@@ -1185,6 +1195,7 @@ export class PetRuntime {
    */
   async syncVisualExperiences() {
     if (!this.conversationPersistenceReady || !this.visualExperience) return null
+    await this.refreshTransientVisualSources()
     return this.visualExperience.syncFromArchive({
       readBatch: (afterSequence, limit) => this.conversationStore.rawHistoryAfterSequence({ afterSequence, limit }),
       readMaxSequence: () => this.conversationStore.rawHistoryMaxSequence(),
@@ -1193,7 +1204,24 @@ export class PetRuntime {
     })
   }
 
-  startChatTurn({ userText, image = null, attachment = null, attachmentId = null } = {}) {
+  async refreshTransientVisualSources() {
+    if (!this.conversationStore || !this.visualExperience) return 0
+    const messages = await this.conversationStore.listForRecentVisualRecall()
+    const ids = []
+    for (const message of messages) {
+      if (!isStackchanCameraMessage(message) || !message?.attachment?.id) continue
+      ids.push(message.attachment.id)
+      if (typeof this.conversationStore.markAttachmentSemantic === 'function') {
+        await this.conversationStore.markAttachmentSemantic(message.attachment.id, {
+          source: STACKCHAN_CAMERA_SOURCE,
+          visualClass: EMBODIED_TRANSIENT_VISUAL_CLASS,
+        })
+      }
+    }
+    return this.visualExperience.registerTransientAttachmentIds(ids)
+  }
+
+  startChatTurn({ userText, image = null, attachment = null, attachmentId = null, source = null } = {}) {
     return this.turnManager.start(async ({ turnId, emit }) => {
       let normalized = normalizeVisionImage(image)
       if (!normalized && attachmentId) {
@@ -1205,7 +1233,7 @@ export class PetRuntime {
       }
       if (normalized) {
         const currentAttachment = attachment ?? await this.conversationStore.saveAttachment({ image: normalized })
-        return this.runVisualTurn({ turnId, emit, userText, attachment: currentAttachment })
+        return this.runVisualTurn({ turnId, emit, userText, attachment: currentAttachment, source })
       }
       // D-022: explicit long-term visual references take priority over the recent
       // resolver's generic-boilerplate overlapScore, so they reach the long-term
@@ -1228,10 +1256,12 @@ export class PetRuntime {
       for (const text of replies) emit('assistant_message', { text })
       emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
       return result
-    })
+    }, { publish: source !== 'stackchan-bridge' })
   }
 
   pollChatTurn(turnId, after = 0) { return this.turnManager.poll(turnId, after) }
+
+  pollTurnEvents(after = 0) { return this.turnEventFeed.after(after) }
 
   runDreamNow() {
     const options = {
@@ -1512,6 +1542,7 @@ export class PetRuntime {
     currentVisionImage = null,
     conversationKey = null,
     attachmentId = null,
+    sourceType = null,
     observations = [],
   } = {}) {
     if (!this.experienceBuffer || !this.experienceBufferReady) return null
@@ -1559,7 +1590,7 @@ export class PetRuntime {
         ...(visualAttachment ? { attachmentId: visualAttachment } : {}),
         emotion,
         explicitMemoryRequest,
-        sourceType: explicitMemoryRequest ? 'explicit_memory' : null,
+        sourceType: sourceType ?? (explicitMemoryRequest ? 'explicit_memory' : null),
       }
       this.#experienceWriteQueue = this.#experienceWriteQueue
         .then(() => { this.experienceBuffer.record(payload) })
@@ -1600,13 +1631,17 @@ export class PetRuntime {
     // fallback for recall-only turns (where no new picture was uploaded).
     const effectiveAttachmentId = attachmentId ?? visionFacts?.attachmentId ?? null
     if (!effectiveAttachmentId && observations.length === 0) return null
+    const transient = effectiveAttachmentId
+      ? isEmbodiedTransientAttachment(await this.conversationStore.attachment(effectiveAttachmentId))
+      : false
     this.#recordExperience({
       turnId,
       conversationKey: sessionKey,
       ownerText,
       hadVision: true,
       currentVisionImage: true,
-      attachmentId: effectiveAttachmentId,
+      attachmentId: transient ? null : effectiveAttachmentId,
+      sourceType: transient ? 'embodied_visual_observation' : null,
       observations,
     })
     const dedicated = typeof this.experienceBuffer?.recordVisualExperience === 'function'
@@ -1614,13 +1649,17 @@ export class PetRuntime {
           turnId,
           conversationKey: sessionKey,
           ownerText,
-          attachmentId: effectiveAttachmentId,
+          attachmentId: transient ? null : effectiveAttachmentId,
+          sourceType: transient ? 'embodied_visual_observation' : null,
           observations,
         })
       : null
     if (dedicated && typeof dedicated.then === 'function') await dedicated.catch(() => {})
     if (memoryVeto) {
       return { status: 'skipped', reason: memoryVeto, observations: observations.length }
+    }
+    if (transient) {
+      return { status: 'skipped', reason: 'embodied-transient', observations: observations.length }
     }
     const memory = await this.recordVisualExperienceMemory({
       ownerText,

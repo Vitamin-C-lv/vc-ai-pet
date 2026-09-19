@@ -5,6 +5,10 @@ import { join, resolve } from 'node:path'
 import { detectExplicitMemoryRequest } from '../brain/memory-candidate.js'
 import { cjkTerms, GENERIC_RECALL_TERMS } from '../vision/visual-keywords.js'
 import {
+  EMBODIED_TRANSIENT_VISUAL_CLASS,
+  embodiedTransientExperienceMetadata,
+} from '../vision/visual-source.js'
+import {
   EXPERIENCE_BUFFER_DB_FILENAME,
   EXPERIENCE_BUFFER_SCHEMA_VERSION,
   EXPERIENCE_BUFFER_SCHEMA_VERSION_KEY,
@@ -270,6 +274,7 @@ export function classifyExperience(input = null) {
       emotion = null,
       modelCandidate = null,
       explicitMemoryRequest = false,
+      sourceType = null,
       occurrenceCount = 1,
     } = input ?? {}
     if (input === null || input === undefined || ownerText === null || ownerText === undefined) {
@@ -310,6 +315,29 @@ export function classifyExperience(input = null) {
         reason: 'explicit-memory-request',
       })
     }
+    if (sourceType === 'embodied_visual_observation') {
+      const semantics = embodiedTransientExperienceMetadata(candidateImportance)
+      const transient = withVisualFields({
+        ...semantics,
+        emotionScore: intensity,
+        memoryCandidate: null,
+        admitted: true,
+        reason: 'embodied-transient-visual-experience',
+        visualClass: EMBODIED_TRANSIENT_VISUAL_CLASS,
+      })
+      return {
+        ...transient,
+        // A short-lived observation may remain visible to Dream/Reflection as
+        // text, but it must never carry a handle that can reopen the raw image.
+        attachmentId: null,
+        visionId: null,
+        visualObservation: transient.visualObservation.map((item) => ({
+          ...item,
+          attachmentId: null,
+          visualId: null,
+        })),
+      }
+    }
     if (identitySignal) {
       return withVisualFields({
         sourceType: 'owner_chat',
@@ -342,7 +370,7 @@ export function classifyExperience(input = null) {
     }
 
     if (inputMissing) return conservativeClassification()
-    const sourceType = hadVision || vision || visual.visionId || visual.attachmentId || visual.visualObservation.length || visual.visualFocus
+    const inferredSourceType = hadVision || vision || visual.visionId || visual.attachmentId || visual.visualObservation.length || visual.visualFocus
       ? 'pet_vision'
       : 'owner_chat'
     // The importance score stays low, but the row is admitted.
@@ -353,14 +381,14 @@ export function classifyExperience(input = null) {
     // never be noticed. Low importance means "Reflection may ignore this", not
     // "throw the evidence away" — the consolidator's importance gate is what keeps
     // one-off events out of PetMemory.
-    const importanceScore = Math.max(candidateImportance, sourceType === 'pet_vision' ? 0.6 : 0.2)
+    const importanceScore = Math.max(candidateImportance, inferredSourceType === 'pet_vision' ? 0.6 : 0.2)
     return withVisualFields({
-      sourceType,
+      sourceType: inferredSourceType,
       importanceScore,
       emotionScore: intensity,
       memoryCandidate: candidate,
       admitted: true,
-      reason: sourceType === 'pet_vision' ? 'visual-experience' : 'low-importance-experience',
+      reason: inferredSourceType === 'pet_vision' ? 'visual-experience' : 'low-importance-experience',
     })
   } catch {
     return conservativeClassification()
@@ -559,6 +587,7 @@ export class ExperienceBuffer {
         emotion = null,
         modelCandidate = null,
         explicitMemoryRequest = false,
+        sourceType = null,
         occurrenceCount = null,
       } = input ?? {}
       const owner = safeText(ownerText, { allowNull: false })
@@ -586,6 +615,7 @@ export class ExperienceBuffer {
         emotion,
         modelCandidate,
         explicitMemoryRequest,
+        sourceType,
         occurrenceCount: occurrenceCount ?? seen,
       })
       const classification = actorKey === 'system' && classified.sourceType === 'owner_chat'

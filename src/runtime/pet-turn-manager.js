@@ -16,17 +16,19 @@ function failureDiagnosticFields(diagnostic) {
 }
 
 export class PetTurnManager {
-  constructor({ maxTurns = 32, ttlMs = 15 * 60 * 1000, now = () => Date.now() } = {}) {
+  constructor({ maxTurns = 32, ttlMs = 15 * 60 * 1000, now = () => Date.now(), onEvent = null } = {}) {
     if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 32) throw new TypeError('PET_TURN_MANAGER_MAX_INVALID')
     if (!Number.isInteger(ttlMs) || ttlMs < 1) throw new TypeError('PET_TURN_MANAGER_TTL_INVALID')
     if (typeof now !== 'function') throw new TypeError('PET_TURN_MANAGER_CLOCK_INVALID')
+    if (onEvent !== null && typeof onEvent !== 'function') throw new TypeError('PET_TURN_MANAGER_EVENT_SINK_INVALID')
     this.maxTurns = maxTurns
     this.ttlMs = ttlMs
     this.now = now
+    this.onEvent = onEvent
     this.turns = new Map()
   }
 
-  start(run) {
+  start(run, { publish = true } = {}) {
     if (typeof run !== 'function') throw new TypeError('PET_TURN_MANAGER_RUN_INVALID')
     this.cleanup()
     while (this.turns.size >= this.maxTurns) {
@@ -41,7 +43,11 @@ export class PetTurnManager {
       this.turns.delete(evictable.turnId)
     }
     const turnId = createTurnId()
-    const events = new PetTurnEvents({ turnId, now: this.now })
+    const events = new PetTurnEvents({
+      turnId,
+      now: this.now,
+      onEvent: publish ? this.onEvent : null,
+    })
     const turn = { turnId, events, status: 'running', result: null, error: null, createdAt: this.now(), terminalAt: null }
     this.turns.set(turnId, turn)
     void Promise.resolve().then(() => run({ turnId, emit: (type, payload) => events.emit(type, payload) }))

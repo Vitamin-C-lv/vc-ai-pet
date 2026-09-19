@@ -1,5 +1,6 @@
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 import { GENERIC_RECALL_TERMS } from '../vision/visual-keywords.js'
+import { isEmbodiedTransientAttachment } from '../vision/visual-source.js'
 
 const DEFAULT_LIMIT = 24
 const MAX_LIMIT = 40
@@ -159,21 +160,29 @@ export async function readVisualGallery(runtime, { limit = DEFAULT_LIMIT, offset
   const conversationStore = runtime?.conversationStore
   const size = pageLimit(limit)
   const start = pageOffset(offset)
-  const experiences = await store.listExperiences({ limit: size + 1, offset: start })
-  const page = experiences.slice(0, size)
+  const candidates = await store.listExperiences({ limit: 500, offset: 0 })
+  const visible = []
+  for (const experience of candidates) {
+    const attachment = typeof conversationStore?.attachment === 'function'
+      ? await conversationStore.attachment(experience.attachmentId)
+      : null
+    if (isEmbodiedTransientAttachment(attachment)) continue
+    visible.push(experience)
+  }
+  const page = visible.slice(start, start + size)
   const ids = page.map((item) => item.experienceId)
   const flags = typeof store.eventFlagsFor === 'function' ? await store.eventFlagsFor(ids) : new Map()
   const items = await Promise.all(page.map(async (experience) => {
     const selected = await attachmentForExperience(store, conversationStore, experience)
     return listItem({ ...experience, attachmentId: selected.attachmentId }, selected.attachment, flags.get(experience.experienceId) ?? new Set())
   }))
-  const count = typeof store.countExperiences === 'function' ? await store.countExperiences() : items.length
+  const count = visible.length
   return {
     count: Number(count),
     limit: size,
     offset: start,
     items,
-    nextOffset: experiences.length > size ? start + size : null,
+    nextOffset: visible.length > start + size ? start + size : null,
   }
 }
 
@@ -186,6 +195,7 @@ export async function readVisualGalleryDetail(runtime, experienceId) {
 
   const conversationStore = runtime?.conversationStore
   const selectedAttachment = await attachmentForExperience(store, conversationStore, experience)
+  if (isEmbodiedTransientAttachment(selectedAttachment.attachment)) return null
   const storedOccurrences = typeof store.occurrenceFor === 'function' ? await store.occurrenceFor(canonicalId, { limit: 500 }) : []
   const occurrences = storedOccurrences.map((occurrence) => ({
     occurredAt: occurrence.occurredAt,

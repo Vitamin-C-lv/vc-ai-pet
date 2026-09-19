@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { normalizeConversationReasoning } from './reasoning-metadata.js'
+import { EMBODIED_TRANSIENT_VISUAL_CLASS, STACKCHAN_CAMERA_SOURCE } from '../vision/visual-source.js'
 
 export const CONVERSATION_HISTORY_LIMIT = 50
 export const CONVERSATION_MAX_MESSAGES = 500
@@ -49,6 +50,14 @@ function cleanText(value, maxLength = 1200) {
 function cleanId(value) {
   const id = String(value ?? '').trim()
   return /^[a-z0-9_-]{1,80}$/iu.test(id) ? id : null
+}
+
+function cleanAttachmentSource(value) {
+  return value === STACKCHAN_CAMERA_SOURCE ? STACKCHAN_CAMERA_SOURCE : null
+}
+
+function cleanVisualClass(value) {
+  return value === EMBODIED_TRANSIENT_VISUAL_CLASS ? EMBODIED_TRANSIENT_VISUAL_CLASS : null
 }
 
 function normalizeMessageKind(value) {
@@ -248,6 +257,8 @@ function copyAttachmentMetadata(value) {
   const thumbnailOriginalMimeType = IMAGE_TYPES.has(value.thumbnailOriginalMimeType)
     ? value.thumbnailOriginalMimeType
     : thumbnailMimeType
+  const source = cleanAttachmentSource(value.source)
+  const visualClass = cleanVisualClass(value.visualClass)
   return {
     id,
     mimeType,
@@ -263,6 +274,8 @@ function copyAttachmentMetadata(value) {
     assetPath,
     thumbnailPath,
     createdAt: finiteTimestamp(value.createdAt, 0),
+    ...(source ? { source } : {}),
+    ...(visualClass ? { visualClass } : {}),
   }
 }
 
@@ -296,6 +309,7 @@ function normalizeState(value) {
         timestamp: finiteTimestamp(message.timestamp, 0),
         attachment: attachment ? clone(attachment) : null,
         ...(turnId ? { turnId } : {}),
+        ...(cleanAttachmentSource(message.source) ? { source: cleanAttachmentSource(message.source) } : {}),
         ...(kind !== 'dialogue' ? { kind } : {}),
         ...(sourceAttachmentId ? { sourceAttachmentId } : {}),
         ...(activityType ? { activityType } : {}),
@@ -499,6 +513,7 @@ export class ConversationStore {
       timestamp: message.timestamp,
       attachment: message.attachment ? this.publicAttachment(message.attachment) : null,
       ...(message.turnId ? { turnId: message.turnId } : {}),
+      ...(message.source ? { source: message.source } : {}),
       ...(message.kind ? { kind: message.kind } : {}),
       ...(message.sourceAttachmentId ? { sourceAttachmentId: message.sourceAttachmentId } : {}),
       ...(message.activityType ? { activityType: message.activityType } : {}),
@@ -543,7 +558,7 @@ export class ConversationStore {
     return projected
   }
 
-  async saveAttachment({ image, thumbnail = null, width = null, height = null, thumbnailWidth = null, thumbnailHeight = null, timestamp = this.now(), requireThumbnail = false } = {}) {
+  async saveAttachment({ image, thumbnail = null, width = null, height = null, thumbnailWidth = null, thumbnailHeight = null, timestamp = this.now(), requireThumbnail = false, source = null, visualClass = null } = {}) {
     return this.#enqueue(async () => {
       await this.initialize()
       const asset = parseDataUrl(image)
@@ -595,6 +610,8 @@ export class ConversationStore {
         assetPath: relativeAssetPath(this.root, assetFile),
         thumbnailPath: relativeAssetPath(this.root, thumbnailFile),
         createdAt,
+        ...(cleanAttachmentSource(source) ? { source: cleanAttachmentSource(source) } : {}),
+        ...(cleanVisualClass(visualClass) ? { visualClass: cleanVisualClass(visualClass) } : {}),
       }
       this.state.attachments = [
         ...this.state.attachments.filter((item) => item.id !== id),
@@ -611,6 +628,29 @@ export class ConversationStore {
     if (!clean) return null
     const attachment = this.state.attachments.find((item) => item.id === clean)
     return attachment ? clone(attachment) : null
+  }
+
+  async markAttachmentSemantic(id, { source = null, visualClass = null } = {}) {
+    return this.#enqueue(async () => {
+      await this.initialize()
+      const clean = cleanId(id)
+      if (!clean) return false
+      const current = this.state.attachments.find((item) => item.id === clean)
+      if (!current) return false
+      const next = {
+        ...current,
+        ...(cleanAttachmentSource(source) ? { source: cleanAttachmentSource(source) } : {}),
+        ...(cleanVisualClass(visualClass) ? { visualClass: cleanVisualClass(visualClass) } : {}),
+      }
+      const changed = JSON.stringify(current) !== JSON.stringify(next)
+      if (!changed) return false
+      this.state.attachments = this.state.attachments.map((item) => item.id === clean ? next : item)
+      this.state.messages = this.state.messages.map((message) => message.attachment?.id === clean
+        ? { ...message, attachment: { ...message.attachment, ...next } }
+        : message)
+      await this.#writeState()
+      return true
+    })
   }
 
   async readAttachmentDataUrl(id) {
@@ -640,10 +680,12 @@ export class ConversationStore {
       thumbnailSize: value.thumbnailSize,
       assetUrl: encode(value.assetPath),
       thumbnailUrl: encode(value.thumbnailPath),
+      ...(value.source ? { source: value.source } : {}),
+      ...(value.visualClass ? { visualClass: value.visualClass } : {}),
     }
   }
 
-  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null, turnId = null, kind = 'dialogue', sourceAttachmentId = null, activityType = null, relation = null, provenance = null, activitySeq = null, activityAt = null } = {}) {
+  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null, turnId = null, source = null, kind = 'dialogue', sourceAttachmentId = null, activityType = null, relation = null, provenance = null, activitySeq = null, activityAt = null } = {}) {
     return this.#enqueue(async () => {
       await this.initialize()
       if (role !== 'user' && role !== 'assistant') throw storeError('PET_CONVERSATION_ROLE_INVALID')
@@ -677,6 +719,7 @@ export class ConversationStore {
         timestamp: finiteTimestamp(timestamp, this.now()),
         attachment: messageAttachment,
         ...(normalizedTurnId ? { turnId: normalizedTurnId } : {}),
+        ...(cleanAttachmentSource(source) ? { source: cleanAttachmentSource(source) } : {}),
         ...(normalizedKind !== 'dialogue' ? { kind: normalizedKind } : {}),
         ...(normalizedSourceAttachmentId ? { sourceAttachmentId: normalizedSourceAttachmentId } : {}),
         ...(normalizedActivityType ? { activityType: normalizedActivityType } : {}),

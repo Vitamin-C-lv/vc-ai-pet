@@ -21,7 +21,7 @@ export class PetTurnOrchestrator {
     this.now = now
   }
 
-  async runVisual({ turnId, emit, userText, attachment, followUp = null }) {
+  async runVisual({ turnId, emit, userText, attachment, followUp = null, source = null }) {
     const startedAt = this.now()
     const store = this.runtime.conversationStore
     if (attachment) this.recallContext.clear()
@@ -78,7 +78,7 @@ export class PetTurnOrchestrator {
       : attachment || intent === 'comparison'
         ? pool[0]?.visualId
         : resolvedVisual ?? pool[0]?.visualId
-    await store.appendMessage({ role: 'user', text: userText, attachment, turnId })
+    await store.appendMessage({ role: 'user', text: userText, attachment, turnId, source })
     // The current upload must become an occurrence before VisualWorkingSession
     // records its inspection/observation event. This is still archive-only and
     // zero-model; the outer runVisualTurn performs the idempotent follow-up sync.

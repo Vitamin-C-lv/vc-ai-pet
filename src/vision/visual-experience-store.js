@@ -13,6 +13,7 @@ import {
   isPerceptualNearDuplicate,
   parseImageDataUrl,
 } from './visual-fingerprint.js'
+import { isEmbodiedTransientAttachment, isStackchanCameraMessage } from './visual-source.js'
 
 export const VISUAL_EXPERIENCE_DB_FILENAME = 'visual-experience.db'
 export const VISUAL_EVENT_KINDS = Object.freeze(['inspection', 'revisit', 'comparison', 'observation'])
@@ -274,6 +275,25 @@ export class VisualExperienceStore {
     this.db = null
     this.initialized = false
     this.initializing = null
+    this.transientAttachmentIds = new Set()
+  }
+
+  registerTransientAttachmentIds(ids = []) {
+    const values = []
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const value = String(id ?? '').trim()
+      if (!value) continue
+      this.transientAttachmentIds.add(value)
+      values.push(value)
+    }
+    if (this.db && values.length > 0) {
+      const insert = this.db.prepare(`
+        INSERT OR IGNORE INTO visual_transient_attachments(attachment_id, marked_at)
+        VALUES (?, ?)
+      `)
+      for (const value of values) insert.run(value, timestamp(this.now(), Date.now()))
+    }
+    return this.transientAttachmentIds.size
   }
 
   async initialize() {
@@ -340,6 +360,10 @@ export class VisualExperienceStore {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
           );
+          CREATE TABLE IF NOT EXISTS visual_transient_attachments (
+            attachment_id TEXT PRIMARY KEY,
+            marked_at INTEGER NOT NULL
+          );
           CREATE INDEX IF NOT EXISTS visual_experiences_attachment_id_idx ON visual_experiences(attachment_id);
           CREATE INDEX IF NOT EXISTS visual_experiences_source_message_id_idx ON visual_experiences(source_message_id);
           CREATE INDEX IF NOT EXISTS visual_experiences_occurred_at_idx ON visual_experiences(occurred_at);
@@ -354,6 +378,11 @@ export class VisualExperienceStore {
         `)
         await chmod(this.dbPath, 0o600)
         this.db = db
+        for (const row of db.prepare('SELECT attachment_id FROM visual_transient_attachments').all()) {
+          const attachmentId = String(row?.attachment_id ?? '').trim()
+          if (attachmentId) this.transientAttachmentIds.add(attachmentId)
+        }
+        this.registerTransientAttachmentIds([...this.transientAttachmentIds])
         this.initialized = true
         return this
       } catch (error) {
@@ -403,6 +432,25 @@ export class VisualExperienceStore {
     const canonical = this.#canonicalId(canonicalExperienceId)
     if (!canonical) return null
     return this.db.prepare('SELECT * FROM visual_experiences WHERE experience_id = ?').get(canonical) ?? null
+  }
+
+  #isTransientAttachment(attachmentId) {
+    return this.transientAttachmentIds.has(String(attachmentId ?? '').trim())
+  }
+
+  #isTransientExperience(experienceId) {
+    const canonical = this.#canonicalId(experienceId)
+    if (!canonical) return false
+    const root = this.#experienceRow(canonical)
+    if (this.#isTransientAttachment(root?.attachment_id)) return true
+    const ids = this.#experienceIds(canonical)
+    if (ids.length === 0 || this.transientAttachmentIds.size === 0) return false
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT attachment_id FROM visual_occurrences
+      WHERE experience_id IN (${placeholders})
+    `).all(...ids)
+    return rows.some((row) => this.#isTransientAttachment(row?.attachment_id))
   }
 
   #experienceWithSummary(canonicalExperienceId) {
@@ -568,6 +616,15 @@ export class VisualExperienceStore {
     }
     const sourceMessageId = String(message.id ?? '').trim()
     if (!sourceMessageId) return { created: false, createdExperience: false, createdOccurrence: false, experienceId: null, duplicateKind: null }
+
+    if (isEmbodiedTransientAttachment(message.attachment) || isStackchanCameraMessage(message)) {
+      this.registerTransientAttachmentIds([String(message.attachment.id).trim()])
+      if (archiveSequence !== null) {
+        const sequence = nonNegativeInteger(archiveSequence)
+        if (sequence !== null && sequence > this.#cursor()) this.#writeCursor(sequence)
+      }
+      return { created: false, createdExperience: false, createdOccurrence: false, skippedTransient: true, experienceId: null, duplicateKind: 'EMBODIED_TRANSIENT' }
+    }
 
     const existingOccurrence = this.db.prepare('SELECT * FROM visual_occurrences WHERE source_message_id = ?').get(sourceMessageId)
     if (existingOccurrence) {
@@ -883,6 +940,7 @@ export class VisualExperienceStore {
 
   async findExperienceById(experienceId) {
     await this.initialize()
+    if (this.#isTransientExperience(experienceId)) return null
     return this.#experienceWithSummary(experienceId)
   }
 
@@ -891,12 +949,14 @@ export class VisualExperienceStore {
     const key = String(sourceMessageId ?? '').trim()
     const root = this.db.prepare('SELECT experience_id FROM visual_experiences WHERE source_message_id = ?').get(key)
     const occurrence = root ?? this.db.prepare('SELECT experience_id FROM visual_occurrences WHERE source_message_id = ?').get(key)
+    if (occurrence && this.#isTransientExperience(occurrence.experience_id)) return null
     return occurrence ? this.#experienceWithSummary(occurrence.experience_id) : null
   }
 
   async findExperienceByAttachmentId(attachmentId) {
     await this.initialize()
     const key = String(attachmentId ?? '').trim()
+    if (this.transientAttachmentIds.has(key)) return null
     const occurrence = this.db.prepare('SELECT experience_id FROM visual_occurrences WHERE attachment_id = ? ORDER BY occurred_at DESC, occurrence_id ASC LIMIT 1').get(key)
     const root = occurrence ?? this.db.prepare('SELECT experience_id FROM visual_experiences WHERE attachment_id = ? ORDER BY occurred_at DESC, experience_id ASC LIMIT 1').get(key)
     return root ? this.#experienceWithSummary(root.experience_id) : null
@@ -904,13 +964,16 @@ export class VisualExperienceStore {
 
   async findOccurrenceByAttachmentId(attachmentId) {
     await this.initialize()
-    const row = this.db.prepare('SELECT * FROM visual_occurrences WHERE attachment_id = ? ORDER BY occurred_at DESC, occurrence_id ASC LIMIT 1').get(String(attachmentId ?? '').trim())
+    const key = String(attachmentId ?? '').trim()
+    if (this.transientAttachmentIds.has(key)) return null
+    const row = this.db.prepare('SELECT * FROM visual_occurrences WHERE attachment_id = ? ORDER BY occurred_at DESC, occurrence_id ASC LIMIT 1').get(key)
     if (!row) return null
     return { ...rowToOccurrence(row), experienceId: this.#canonicalId(row.experience_id) }
   }
 
   async occurrenceFor(experienceId, { limit = 100 } = {}) {
     await this.initialize()
+    if (this.#isTransientExperience(experienceId)) return []
     const ids = this.#experienceIds(experienceId)
     if (ids.length === 0) return []
     const count = boundedLimit(limit, 100, 500)
@@ -926,13 +989,17 @@ export class VisualExperienceStore {
 
   async reopenAttachmentIdsFor(experienceId) {
     const occurrences = await this.occurrenceFor(experienceId, { limit: 500 })
-    const ids = occurrences.sort((left, right) => right.occurredAt - left.occurredAt || left.occurrenceId.localeCompare(right.occurrenceId)).map((item) => item.attachmentId)
+    const ids = occurrences
+      .filter((item) => !this.transientAttachmentIds.has(String(item.attachmentId ?? '').trim()))
+      .sort((left, right) => right.occurredAt - left.occurredAt || left.occurrenceId.localeCompare(right.occurrenceId))
+      .map((item) => item.attachmentId)
     const experience = await this.findExperienceById(experienceId)
-    return [...new Set([...ids, experience?.attachmentId].filter(Boolean))]
+    return [...new Set([...ids, this.transientAttachmentIds.has(String(experience?.attachmentId ?? '').trim()) ? null : experience?.attachmentId].filter(Boolean))]
   }
 
   async recentObservationsFor(experienceId, { limit = 3 } = {}) {
     await this.initialize()
+    if (this.#isTransientExperience(experienceId)) return []
     const count = boundedLimit(limit, 3, 100)
     if (count === 0) return []
     const ids = this.#experienceIds(experienceId)
@@ -1042,15 +1109,16 @@ export class VisualExperienceStore {
       ORDER BY last_occurred_at DESC, e.experience_id ASC
       LIMIT ? OFFSET ?
     `).all(...(beforeValue !== null && Number.isFinite(beforeValue) ? [beforeValue] : []), count, pageOffset)
-    return rows.map(rowToExperience)
+    return rows.filter((row) => !this.#isTransientExperience(row.experience_id)).map(rowToExperience)
   }
 
   async countExperiences() {
     await this.initialize()
-    return Number(this.db.prepare(`
-      SELECT COUNT(*) AS count FROM visual_experiences e
+    const rows = this.db.prepare(`
+      SELECT e.experience_id FROM visual_experiences e
       WHERE NOT EXISTS (SELECT 1 FROM visual_experience_aliases a WHERE a.alias_experience_id = e.experience_id)
-    `).get().count)
+    `).all()
+    return rows.filter((row) => !this.#isTransientExperience(row.experience_id)).length
   }
 
   async countRawRoots() {
@@ -1150,6 +1218,8 @@ export class VisualExperienceStore {
       entry.row.last_occurred_at = occurrences.at(-1)?.occurred_at ?? root.occurred_at
     }
     return [...grouped.values()]
+      .filter(({ row }) => ![row.attachment_id, ...(row.attachment_ids ?? [])]
+        .some((id) => this.transientAttachmentIds.has(String(id ?? '').trim())))
       .map(({ row, matches }) => {
         const scored = scoreCandidate(row, [...matches.values()], queryWeights, queryText)
         return {

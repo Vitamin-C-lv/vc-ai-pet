@@ -9,9 +9,6 @@ other otadata sector, and captures the first boot until rollback validation.
 from __future__ import annotations
 
 import argparse
-import binascii
-import os
-import struct
 import tempfile
 import time
 from pathlib import Path
@@ -20,49 +17,62 @@ import esptool
 import serial
 from esptool.reset import HardReset
 
+try:
+    from ota_metadata import next_selector_update, selector_sector, decode_selector
+except ModuleNotFoundError:  # pragma: no cover - package-style imports
+    from scripts.stackchan.ota_metadata import next_selector_update, selector_sector, decode_selector
+
 
 OTA_DATA_OFFSET = 0xD000
 OTA_0_OFFSET = 0x20000
 OTA_1_OFFSET = 0x510000
 OTA_SLOT_SIZE = 0x4F0000
 SECTOR_SIZE = 0x1000
-
-
-def crc(seq: int) -> int:
-    return binascii.crc32(struct.pack("<I", seq), 0xFFFFFFFF) & 0xFFFFFFFF
-
-
-def selector_sector(metadata: bytes, copy: int, seq: int) -> bytes:
-    start = copy * SECTOR_SIZE
-    sector = bytearray(metadata[start : start + SECTOR_SIZE])
-    struct.pack_into("<I", sector, 0, seq)
-    struct.pack_into("<I", sector, 24, 0)  # ESP_OTA_IMG_NEW
-    struct.pack_into("<I", sector, 28, crc(seq))
-    return bytes(sector)
-
-
-def valid_sequence(metadata: bytes, copy: int) -> int | None:
-    start = copy * SECTOR_SIZE
-    sector = metadata[start : start + SECTOR_SIZE]
-    seq = struct.unpack_from("<I", sector, 0)[0]
-    state = struct.unpack_from("<I", sector, 24)[0]
-    stored_crc = struct.unpack_from("<I", sector, 28)[0]
-    if seq == 0xFFFFFFFF or stored_crc != crc(seq) or state in (3, 4):
-        return None
-    return seq
-
-
-def next_sequence_for_slot(metadata: bytes, slot: int) -> int:
-    sequences = [valid_sequence(metadata, copy) for copy in range(2)]
-    current = max((seq for seq in sequences if seq is not None), default=0)
-    candidate = current + 1
-    while (candidate - 1) % 2 != slot:
-        candidate += 1
-    return candidate
+OTADATA_SIZE = 0x2000
 
 
 def esptool_main(port: str, *args: str) -> None:
     esptool.main(["--chip", "esp32s3", "--port", port, "--baud", "115200", *args])
+
+
+def read_otadata(port: str, output: Path) -> bytes:
+    output.unlink(missing_ok=True)
+    esptool_main(port, "read_flash", hex(OTA_DATA_OFFSET), hex(OTADATA_SIZE), str(output))
+    metadata = output.read_bytes()
+    if len(metadata) != OTADATA_SIZE:
+        raise SystemExit("OTADATA_READ_LENGTH_INVALID")
+    return metadata
+
+
+def write_selector_and_verify(
+    port: str,
+    metadata: bytes,
+    copy: int,
+    seq: int,
+    selector_path: Path,
+    readback_path: Path,
+) -> None:
+    selector_path.write_bytes(selector_sector(metadata, copy, seq))
+    offset = OTA_DATA_OFFSET + copy * SECTOR_SIZE
+    esptool_main(
+        port,
+        "--after",
+        "no_reset",
+        "write_flash",
+        hex(offset),
+        str(selector_path),
+    )
+    readback = read_otadata(port, readback_path)
+    selector = decode_selector(readback, copy)
+    if not selector.valid or selector.sequence != seq or selector.slot != (seq - 1) % 2:
+        raise SystemExit(f"OTADATA_READBACK_INVALID:copy={copy}:seq={seq}")
+
+
+def write_ota1_image_and_verify(port: str, image: Path) -> None:
+    if OTA_1_OFFSET == OTA_0_OFFSET:
+        raise SystemExit("OTA_SLOT_OFFSETS_COLLIDE")
+    esptool_main(port, "--after", "no_reset", "write_flash", hex(OTA_1_OFFSET), str(image))
+    esptool_main(port, "verify_flash", hex(OTA_1_OFFSET), str(image))
 
 
 def capture_boot(port: str, output: Path, seconds: int = 43) -> str:
@@ -108,29 +118,39 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="lihuahua-ota1-") as temporary:
         temp = Path(temporary)
-        metadata_path = temp / "otadata.bin"
-        esptool_main(args.port, "read_flash", hex(OTA_DATA_OFFSET), "0x2000", str(metadata_path))
-        metadata = metadata_path.read_bytes()
-        if len(metadata) != 0x2000:
-            raise SystemExit("OTADATA_READ_LENGTH_INVALID")
-
-        # Next monotonic sequence for two OTA slots: odd selects ota_0.
+        # Read fresh metadata for this mutation and select the inactive copy.
+        metadata = read_otadata(args.port, temp / "otadata-before-ota0.bin")
         ota0_selector = temp / "select-ota0.bin"
-        ota0_seq = next_sequence_for_slot(metadata, slot=0)
-        ota0_selector.write_bytes(selector_sector(metadata, copy=0, seq=ota0_seq))
-        esptool_main(args.port, "--after", "no_reset", "write_flash", "0xD000", str(ota0_selector))
+        ota0_copy, ota0_seq = next_selector_update(metadata, slot=0)
+        write_selector_and_verify(
+            args.port,
+            metadata,
+            ota0_copy,
+            ota0_seq,
+            ota0_selector,
+            temp / "otadata-after-ota0-selector.bin",
+        )
         ota0_log = capture_boot(args.port, evidence / "ota0-safety-boot.log")
         if "Loaded app from partition at offset 0x20000" not in ota0_log:
             raise SystemExit("OTA0_SAFETY_BOOT_NOT_PROVEN")
 
-        esptool_main(args.port, "--after", "no_reset", "write_flash", hex(OTA_1_OFFSET), str(image))
-        esptool_main(args.port, "verify_flash", hex(OTA_1_OFFSET), str(image))
+        # A failed write/verify raises here, so no ota_1 selector is changed.
+        write_ota1_image_and_verify(args.port, image)
 
-        # Even sequence selects ota_1; copy0 and the ota_0 app remain untouched.
+        # Read fresh metadata after the image transaction.  Boot state changes
+        # may have modified either copy, so stale metadata must never plan this
+        # second selector write.
+        metadata = read_otadata(args.port, temp / "otadata-before-ota1.bin")
         ota1_selector = temp / "select-ota1.bin"
-        ota1_seq = next_sequence_for_slot(metadata, slot=1)
-        ota1_selector.write_bytes(selector_sector(metadata, copy=1, seq=ota1_seq))
-        esptool_main(args.port, "--after", "no_reset", "write_flash", "0xE000", str(ota1_selector))
+        ota1_copy, ota1_seq = next_selector_update(metadata, slot=1)
+        write_selector_and_verify(
+            args.port,
+            metadata,
+            ota1_copy,
+            ota1_seq,
+            ota1_selector,
+            temp / "otadata-after-ota1-selector.bin",
+        )
         ota1_log = capture_boot(args.port, evidence / "ota1-first-boot.log")
         required = (
             "Loaded app from partition at offset 0x510000",

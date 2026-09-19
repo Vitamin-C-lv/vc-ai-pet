@@ -7,6 +7,7 @@ import { readInnerLifeTimeline } from '../memory/inner-life-timeline.js'
 import { normalizeVisionImage } from '../brain/vision-input.js'
 import { createChatSubmissionIdempotency } from './chat-submission-idempotency.js'
 import { readVisualGallery, readVisualGalleryDetail } from './visual-gallery.js'
+import { EMBODIED_TRANSIENT_VISUAL_CLASS, STACKCHAN_CAMERA_SOURCE } from '../vision/visual-source.js'
 
 const REMOTE_ROOT = resolve(fileURLToPath(new URL('./mobile-ui/', import.meta.url)))
 const DEFAULT_PORT = 17870
@@ -107,6 +108,13 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         const presentation = runtime.presentationSnapshot(visualConfig)
         return sendJson(res, 200, presentation)
       }
+      if (req.method === 'GET' && url.pathname === '/api/pet/turn-events') {
+        const after = url.searchParams.get('after') ?? '0'
+        if (!/^\d{1,12}$/u.test(after) || typeof runtime.pollTurnEvents !== 'function') {
+          return sendJson(res, 400, { error: 'invalid-after' })
+        }
+        return sendJson(res, 200, runtime.pollTurnEvents(Number(after)))
+      }
       if (req.method === 'GET' && url.pathname === '/api/pet/history') {
         const messages = typeof runtime.conversationHistory === 'function'
           ? await runtime.conversationHistory(50)
@@ -136,6 +144,8 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
           thumbnailWidth: body?.thumbnailWidth,
           thumbnailHeight: body?.thumbnailHeight,
           requireThumbnail: true,
+          ...(body?.source === STACKCHAN_CAMERA_SOURCE ? { source: STACKCHAN_CAMERA_SOURCE } : {}),
+          ...(body?.visualClass === EMBODIED_TRANSIENT_VISUAL_CLASS ? { visualClass: EMBODIED_TRANSIENT_VISUAL_CLASS } : {}),
         })
         const publicAttachment = typeof conversationStore.publicAttachment === 'function'
           ? conversationStore.publicAttachment(attachment)
@@ -176,6 +186,7 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         if (Object.hasOwn(body ?? {}, 'images')) return sendJson(res, 400, { error: 'invalid-image' })
         const hasSubmissionId = Object.hasOwn(body ?? {}, 'submissionId')
         const submissionId = hasSubmissionId ? body.submissionId : null
+        const source = body?.source === 'stackchan-bridge' ? 'stackchan-bridge' : null
         if (hasSubmissionId && (typeof submissionId !== 'string' || !/^[a-z0-9_-]{1,80}$/iu.test(submissionId))) {
           return sendJson(res, 400, { error: 'invalid-submission-id' })
         }
@@ -212,7 +223,7 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         if (typeof runtime.startChatTurn !== 'function') return sendJson(res, 503, { error: 'turn-transport-unavailable' })
         let started
         try {
-          const createTurn = () => runtime.startChatTurn({ userText: message, image, attachment, attachmentId })
+          const createTurn = () => runtime.startChatTurn({ userText: message, image, attachment, attachmentId, source })
           started = submissionId
             ? chatSubmissionIdempotency.start({ submissionId, message, attachmentId, createTurn })
             : createTurn()

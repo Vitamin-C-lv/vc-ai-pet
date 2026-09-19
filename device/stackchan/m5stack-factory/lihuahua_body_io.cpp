@@ -19,6 +19,10 @@
 namespace {
 std::atomic<bool> capture_requested{false}, record_requested{false};
 std::string bridge_base;
+void setBodyKey(esp_http_client_handle_t client) {
+    const char* key=STACKCHAN_BODY_KEY;
+    if(key && key[0]) esp_http_client_set_header(client,"X-LiHuahua-Body-Key",key);
+}
 esp_err_t collect(esp_http_client_event_t* e) {
     if(e->event_id==HTTP_EVENT_ON_DATA && e->user_data) {
         auto& out=*static_cast<std::string*>(e->user_data);
@@ -32,6 +36,7 @@ bool request(const char* path,const void* data,size_t size,const char* type,std:
     esp_http_client_config_t cfg{}; cfg.url=url.c_str(); cfg.timeout_ms=8000;
     cfg.event_handler=collect; cfg.user_data=&out;
     auto c=esp_http_client_init(&cfg); if(!c) return false;
+    setBodyKey(c);
     if(data) { esp_http_client_set_method(c,HTTP_METHOD_POST); esp_http_client_set_header(c,"Content-Type",type);
         esp_http_client_set_post_field(c,static_cast<const char*>(data),size); }
     auto err=esp_http_client_perform(c); int status=esp_http_client_get_status_code(c); esp_http_client_cleanup(c);
@@ -70,6 +75,7 @@ void play() {
     auto url=lihuahuaBodyEndpoint("/v1/body/audio"); esp_http_client_config_t cfg{};
     cfg.url=url.c_str(); cfg.timeout_ms=8000;
     auto c=esp_http_client_init(&cfg); if(!c) return;
+    setBodyKey(c);
     auto codec=Board::GetInstance().GetAudioCodec(); size_t total=0; bool ok=false;
     if(codec && esp_http_client_open(c,0)==ESP_OK) {
         int length=esp_http_client_fetch_headers(c);

@@ -4,6 +4,7 @@ import {
   overlapScore,
   visualKeywordTerms,
 } from '../vision/visual-keywords.js'
+import { isStackchanCameraMessage } from '../vision/visual-source.js'
 
 export const RECENT_VISUAL_MAX_ATTACHMENTS = 10
 export const RECENT_VISUAL_WINDOW = '10_IMAGE_MESSAGES'
@@ -47,6 +48,7 @@ export function collectRecentVisualCandidates(messages = [], maxAttachments = RE
   const candidates = []
   source.forEach((message, index) => {
     if (message?.role !== 'user') return
+    if (isStackchanCameraMessage(message)) return
     const attachmentId = attachmentIdFromMessage(message)
     if (!attachmentId) return
     candidates.push({

@@ -24,6 +24,7 @@ const SOURCE_LABELS = Object.freeze({
   explicit_memory: '主人明确要求记住',
   owner_chat: '主人日常',
   pet_vision: '花花看到的',
+  embodied_visual_observation: '实体摄像头的短暂视觉经历',
   repeated_behavior: '反复出现',
   emotion_event: '情绪事件',
   system: '系统事件',
@@ -58,7 +59,7 @@ function visualObservations(entry) {
 export function formatExperienceEntry(entry) {
   const time = Number.isFinite(Number(entry?.createdAt)) ? new Date(Number(entry.createdAt)).toISOString() : 'unknown'
   const sourceType = cleanText(entry?.sourceType ?? 'owner_chat', 32)
-  const isVision = sourceType === 'pet_vision'
+  const isVision = sourceType === 'pet_vision' || sourceType === 'embodied_visual_observation'
   const observations = visualObservations(entry)
   const focus = cleanText(entry?.visualFocus, 120)
   const visualContent = observations.length > 0

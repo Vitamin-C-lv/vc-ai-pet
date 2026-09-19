@@ -24,6 +24,8 @@ APP_FILES = (
     "lihuahua_body_app.h",
     "lihuahua_body_state.cpp",
     "lihuahua_body_state.h",
+    "lihuahua_body_io.cpp",
+    "lihuahua_body_io.h",
 )
 ENTRY_FILE = "lihuahua_body_main.cpp"
 
@@ -42,6 +44,10 @@ def valid_bridge_url(value: str) -> bool:
     )
 
 
+def valid_bridge_key(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value))
+
+
 def run_git(root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), *args],
@@ -58,6 +64,7 @@ def main() -> int:
     parser.add_argument("--feature-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--bridge-url", required=True)
+    parser.add_argument("--bridge-key", default="", help="local pairing key; never commit or print")
     args = parser.parse_args()
 
     source = args.official_source_root.resolve()
@@ -72,6 +79,8 @@ def main() -> int:
         raise SystemExit("OFFICIAL_SOURCE_COMMIT_MISMATCH")
     if not valid_bridge_url(args.bridge_url):
         raise SystemExit("BRIDGE_URL_MUST_BE_CURRENT_RFC1918_WLAN_ENDPOINT")
+    if args.bridge_key and not valid_bridge_key(args.bridge_key):
+        raise SystemExit("BRIDGE_KEY_MUST_BE_HIGH_ENTROPY_BASE64URL")
 
     patch = feature / "device/stackchan/m5stack-factory/patches/app-registration.patch"
     app_source = feature / "device/stackchan/m5stack-factory"
@@ -108,9 +117,11 @@ def main() -> int:
     # The body firmware owns the entry point so the factory AI agent and App
     # Center are not started as a side effect of boot.
     shutil.copy2(app_source / ENTRY_FILE, output / "firmware/main/main.cpp")
-    (app_target / "stackchan_body_config.h").write_text(
+    config_path = app_target / "stackchan_body_config.h"
+    config_path.write_text(
         "#pragma once\n"
-        f'#define STACKCHAN_BODY_BRIDGE_URL "{args.bridge_url}"\n',
+        f'#define STACKCHAN_BODY_BRIDGE_URL "{args.bridge_url}"\n'
+        f'#define STACKCHAN_BODY_KEY "{args.bridge_key}"\n',
         encoding="ascii",
         newline="\n",
     )
@@ -118,6 +129,8 @@ def main() -> int:
     staged_header = (app_target / "stackchan_body_config.h").read_text(encoding="ascii")
     if args.bridge_url not in staged_header:
         raise SystemExit("BRIDGE_URL_CONFIG_NOT_STAGED")
+    if f'#define STACKCHAN_BODY_KEY "{args.bridge_key}"' not in staged_header:
+        raise SystemExit("BRIDGE_KEY_CONFIG_NOT_STAGED")
     if run_git(output, "rev-parse", "HEAD") != EXPECTED_SOURCE_COMMIT:
         raise SystemExit("STAGED_SOURCE_COMMIT_CHANGED")
 
@@ -126,6 +139,7 @@ def main() -> int:
     print("FACTORY_REGISTRATION_PATCHED=YES")
     print("FACTORY_CONFIG_HEADER_STAGED=YES")
     print("BRIDGE_URL_CONFIGURED=YES")
+    print(f"BRIDGE_KEY_CONFIGURED={'YES' if args.bridge_key else 'NO'}")
     print(f"STAGING_OUTPUT_ROOT={output}")
     return 0
 
