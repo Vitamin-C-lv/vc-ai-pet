@@ -234,8 +234,8 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
     // Keep the AFE speech-enhancement worker on CPU1. MultiNet inference is
-    // scheduled on CPU0 at a lower priority so the AFE worker has a complete
-    // core and the real-time feed/fetch tasks remain higher priority.
+    // scheduled on CPU0 so the AFE worker has a complete core while the
+    // real-time feed/fetch and inference workers share a fair priority.
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 2;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -382,7 +382,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->inferenceTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_mn", 8192, this, 1, &inference_task_, 0) != pdPASS) {
+        }, "lihuahua_wake_mn", 8192, this, 3, &inference_task_, 0) != pdPASS) {
         task_alive_mask_.fetch_and(~kInferenceTaskBit);
         running_.store(false);
         if (afe_task_ != nullptr) xTaskNotifyGive(afe_task_);
@@ -409,7 +409,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_FETCH_CORE0_MULTINET_CORE0_CALLBACK_CORE0");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_FETCH_CORE0P3_MULTINET_CORE0P3_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
