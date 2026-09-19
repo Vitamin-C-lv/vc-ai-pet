@@ -18,8 +18,11 @@ ERASED = 0xFFFFFFFF
 OTA_IMG_NEW = 0
 OTA_IMG_PENDING_VERIFY = 1
 OTA_IMG_VALID = 2
-OTA_IMG_ABORTED = 3
-OTA_IMG_INVALID = 4
+# ESP-IDF v5.5.4 enum values.  Both states are intentionally excluded from
+# USABLE_STATES below; their numeric order still matters when decoding
+# otadata written by the bootloader.
+OTA_IMG_INVALID = 3
+OTA_IMG_ABORTED = 4
 USABLE_STATES = frozenset((OTA_IMG_NEW, OTA_IMG_PENDING_VERIFY, OTA_IMG_VALID))
 MAX_SEQUENCE = 0xFFFFFFFE
 

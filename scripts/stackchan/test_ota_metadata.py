@@ -10,6 +10,8 @@ from ota_metadata import (
     ERASED,
     OTA_IMG_ABORTED,
     OTA_IMG_INVALID,
+    OTA_IMG_NEW,
+    OTA_IMG_PENDING_VERIFY,
     OTA_IMG_VALID,
     OTADATA_SIZE,
     SECTOR_SIZE,
@@ -36,6 +38,10 @@ def metadata_fixture(*entries: tuple[int, int] | None) -> bytes:
 
 
 class OtaMetadataTests(unittest.TestCase):
+    def test_esp_idf_ota_image_state_values(self) -> None:
+        self.assertEqual((OTA_IMG_NEW, OTA_IMG_PENDING_VERIFY), (0, 1))
+        self.assertEqual((OTA_IMG_VALID, OTA_IMG_INVALID, OTA_IMG_ABORTED), (2, 3, 4))
+
     def test_phase3c_aborted_copy_is_not_active(self) -> None:
         metadata = metadata_fixture((1, OTA_IMG_VALID), (2, OTA_IMG_ABORTED))
         active = active_selector(metadata)

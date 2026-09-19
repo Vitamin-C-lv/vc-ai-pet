@@ -24,8 +24,10 @@
 - `node --test test/stackchan-embodied-transient-vision.mjs`：9 个集中用例通过，覆盖普通上传、当前图像可见、当前轮视觉输入、Recent Visual 过滤、Visual root/occurrence 跳过、Gallery 源过滤、重启后 transient 标记、低权重经历语义和 raw-image handle 禁止。
 - `node test/v0.4-visual-experience-store.mjs`：`VISUAL_EXPERIENCE_STORE=PASS`。
 - `node test/v0.4-long-term-visual-recall.mjs`：`LONG_TERM_VISUAL_RECALL=PASS`。
-- `python3 scripts/stackchan/test_ota_metadata.py`：5 个 OTA 纯逻辑用例通过；本轮未写设备。
+- `python3 scripts/stackchan/test_ota_metadata.py`：6 个 OTA 纯逻辑用例通过；本轮未写设备。ESP-IDF v5.5.4 的 `INVALID=3` / `ABORTED=4` 枚举已校正；两者仍都不可选，selector algorithm 未改变。
 - 需要 `meow-memory` 的完整 PetRuntime/Dream 测试在当前 checkout 缺少该可选依赖，因此没有把这类未运行结果冒充为通过；改动文件均已通过 `node --check` / `py_compile`。
+
+本轮还明确记录：pairing-key firmware source 已在既有 StackChan source 中准备，但 Phase 4.1 没有对实体设备重新刷写；没有写 ota_0、ota_1、NVS 或 OTA metadata。
 
 ## 验收字段
 
@@ -45,7 +47,8 @@ NORMAL_UPLOAD_GALLERY_REGRESSION=PASS
 NORMAL_UPLOAD_VISUAL_RECALL_REGRESSION=PASS
 HISTORICAL_STACKCHAN_IMAGES_FOUND=2
 HISTORICAL_STACKCHAN_VISUAL_ENTRIES_CLEANED=2
-STACKCHAN_FIRMWARE_MODIFIED=NO
+STACKCHAN_FIRMWARE_SOURCE_MODIFIED=YES
+DEVICE_FIRMWARE_REFLASHED_THIS_ROUND=NO
 DEVICE_FLASH_WRITES=0
 MEMORY_PIPELINE_ARCHITECTURE_CHANGED=NO
 TEST_RESULT=PASS
