@@ -57,7 +57,10 @@ private:
     std::atomic<bool> inference_reset_requested_{false};
     std::atomic<bool> candidate_pending_{false};
     std::atomic<float> candidate_score_pending_{0.0f};
+    std::atomic<uint32_t> wake_epoch_{0};
+    std::atomic<uint32_t> task_alive_mask_{0};
     std::mutex input_mutex_;
+    std::mutex state_mutex_;
     std::mutex inference_mutex_;
     std::mutex callback_mutex_;
 
@@ -77,6 +80,11 @@ private:
     int codec_input_channels_ = 0;
     int afe_feed_channels_ = 0;
     int multinet_chunk_size_ = 0;
+
+    static constexpr uint32_t kFeedTaskBit = 1u << 0;
+    static constexpr uint32_t kFetchTaskBit = 1u << 1;
+    static constexpr uint32_t kInferenceTaskBit = 1u << 2;
+    static constexpr uint32_t kCallbackTaskBit = 1u << 3;
 
     bool initializeModel();
     bool initializeAfe();

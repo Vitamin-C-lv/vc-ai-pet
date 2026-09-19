@@ -233,9 +233,9 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_min_noise_ms = 100;
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
-    // Keep the AFE speech-enhancement worker on CPU1.  MultiNet inference is
-    // deliberately scheduled on CPU0 below so the AFE feed ringbuffer keeps
-    // draining while the ESP-SR command model runs.
+    // Keep the AFE speech-enhancement worker on CPU1. MultiNet inference is
+    // scheduled on CPU0 at a lower priority so the AFE worker has a complete
+    // core and the real-time feed/fetch tasks remain higher priority.
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 2;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -316,6 +316,7 @@ void LiHuahuaWake::cleanupRuntime() {
     inference_reset_requested_.store(false);
     candidate_pending_.store(false);
     candidate_score_pending_.store(0.0f);
+    task_alive_mask_.store(0);
 }
 
 bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
@@ -351,46 +352,55 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
 
     paused_.store(false);
     running_.store(true);
+    task_alive_mask_.store(0);
+    task_alive_mask_.fetch_or(kFeedTaskBit);
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->feedTaskLoop();
             vTaskDelete(nullptr);
         }, "lihuahua_wake_feed", 8192, this, 3, &task_, 0) != pdPASS) {
+        task_alive_mask_.fetch_and(~kFeedTaskBit);
         running_.store(false);
         cleanupRuntime();
         callback_ = nullptr;
         codec_ = nullptr;
         return false;
     }
+    task_alive_mask_.fetch_or(kFetchTaskBit);
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
         }, "lihuahua_wake_afe", 8192, this, 3, &afe_task_, 0) != pdPASS) {
+        task_alive_mask_.fetch_and(~kFetchTaskBit);
         running_.store(false);
-        while (task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
+        while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
         cleanupRuntime();
         callback_ = nullptr;
         codec_ = nullptr;
         return false;
     }
+    task_alive_mask_.fetch_or(kInferenceTaskBit);
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->inferenceTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_mn", 8192, this, 1, &inference_task_, 1) != pdPASS) {
+        }, "lihuahua_wake_mn", 8192, this, 1, &inference_task_, 0) != pdPASS) {
+        task_alive_mask_.fetch_and(~kInferenceTaskBit);
         running_.store(false);
         if (afe_task_ != nullptr) xTaskNotifyGive(afe_task_);
-        while (task_ != nullptr || afe_task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
+        while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
         cleanupRuntime();
         callback_ = nullptr;
         codec_ = nullptr;
         return false;
     }
+    task_alive_mask_.fetch_or(kCallbackTaskBit);
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->callbackTaskLoop();
             vTaskDelete(nullptr);
         }, "lihuahua_wake_cb", 6144, this, 1, &callback_task_, 0) != pdPASS) {
+        task_alive_mask_.fetch_and(~kCallbackTaskBit);
         running_.store(false);
         if (inference_task_ != nullptr) xTaskNotifyGive(inference_task_);
-        while (task_ != nullptr || afe_task_ != nullptr || inference_task_ != nullptr) {
+        while (task_alive_mask_.load() != 0) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
         cleanupRuntime();
@@ -399,7 +409,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_FETCH_CORE0_MULTINET_CORE1_CALLBACK_CORE0");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_FETCH_CORE0_MULTINET_CORE0_CALLBACK_CORE0");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
@@ -410,7 +420,7 @@ void LiHuahuaWake::Stop() {
     paused_.store(false);
     if (inference_task_ != nullptr) xTaskNotifyGive(inference_task_);
     if (callback_task_ != nullptr) xTaskNotifyGive(callback_task_);
-    while (task_ != nullptr || afe_task_ != nullptr || inference_task_ != nullptr || callback_task_ != nullptr) {
+    while (task_alive_mask_.load() != 0) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     {
@@ -434,6 +444,17 @@ void LiHuahuaWake::Pause() {
         if (afe_data_ != nullptr && afe_iface_ != nullptr) afe_iface_->reset_buffer(afe_data_);
         afe_feed_buffer_.clear();
     }
+    wake_epoch_.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        candidate_pending_.store(false);
+        candidate_score_pending_.store(0.0f);
+        candidate_score_ = 0.0f;
+        mode_.store(Mode::Idle);
+        silence_ms_ = 0;
+        capture_ms_ = 0;
+        capture_.clear();
+    }
     requestInferenceReset();
 }
 
@@ -449,7 +470,12 @@ std::vector<int16_t> LiHuahuaWake::readFrame() {
     std::vector<int16_t> input(input_samples);
     {
         std::lock_guard<std::mutex> lock(input_mutex_);
+        if (!running_.load() || paused_.load()) return {};
         reading_.store(true);
+        if (!running_.load() || paused_.load()) {
+            reading_.store(false);
+            return {};
+        }
         if (!codec_->input_enabled()) codec_->EnableInput(true);
         const bool ok = codec_->InputData(input);
         reading_.store(false);
@@ -497,6 +523,7 @@ void LiHuahuaWake::feedTaskLoop() {
         feedAfe(frame);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+    task_alive_mask_.fetch_and(~kFeedTaskBit);
     task_ = nullptr;
 }
 
@@ -513,6 +540,7 @@ void LiHuahuaWake::fetchTaskLoop() {
         if (result == nullptr || result->ret_value == ESP_FAIL) continue;
         processAfeResult(result);
     }
+    task_alive_mask_.fetch_and(~kFetchTaskBit);
     afe_task_ = nullptr;
 }
 
@@ -583,10 +611,12 @@ void LiHuahuaWake::inferenceTaskLoop() {
         // AFE worker and idle task runnable even when the quantized model is
         // temporarily slower than real time.
         if (static_cast<int>(kws_buffer_.size()) >= multinet_chunk_size_) {
+            const uint32_t epoch = wake_epoch_.load();
             const auto state = multinet_->detect(multinet_model_data_, kws_buffer_.data());
             if (state == ESP_MN_STATE_DETECTED) {
                 auto* result_data = multinet_->get_results(multinet_model_data_);
-                if (result_data != nullptr && result_data->num > 0 && result_data->command_id[0] == 1) {
+                if (running_.load() && !paused_.load() && wake_epoch_.load() == epoch &&
+                    result_data != nullptr && result_data->num > 0 && result_data->command_id[0] == 1) {
                     const float score = std::clamp(result_data->prob[0], 0.0f, 1.0f);
                     candidate_score_pending_.store(score);
                     candidate_pending_.store(true);
@@ -605,6 +635,7 @@ void LiHuahuaWake::inferenceTaskLoop() {
         inference_frames_.clear();
         kws_buffer_.clear();
     }
+    task_alive_mask_.fetch_and(~kInferenceTaskBit);
     inference_task_ = nullptr;
 }
 
@@ -640,11 +671,15 @@ void LiHuahuaWake::callbackTaskLoop() {
         std::lock_guard<std::mutex> lock(callback_mutex_);
         callback_queue_.clear();
     }
+    task_alive_mask_.fetch_and(~kCallbackTaskBit);
     callback_task_ = nullptr;
 }
 
 void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
     if (result == nullptr || result->data == nullptr || result->data_size <= 0) return;
+    if (!running_.load() || paused_.load()) return;
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (!running_.load() || paused_.load()) return;
     const size_t samples = static_cast<size_t>(result->data_size) / sizeof(int16_t);
     std::vector<int16_t> frame(result->data, result->data + samples);
     pushRing(frame);
