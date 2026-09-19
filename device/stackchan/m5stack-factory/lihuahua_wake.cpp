@@ -228,9 +228,9 @@ bool LiHuahuaWake::initializeAfe() {
     }
     afe_config->aec_init = false;
     afe_config->vad_init = true;
-    afe_config->vad_mode = VAD_MODE_0;
-    afe_config->vad_min_speech_ms = 64;
-    afe_config->vad_min_noise_ms = 100;
+    afe_config->vad_mode = VAD_MODE_2;
+    afe_config->vad_min_speech_ms = 128;
+    afe_config->vad_min_noise_ms = 200;
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
     // Keep the AFE speech-enhancement worker on CPU1. MultiNet inference is
@@ -267,6 +267,7 @@ bool LiHuahuaWake::initializeAfe() {
              afe_iface_->get_samp_rate(afe_data_), afe_feed_channels_,
              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(kTag, "AFE_VAD_ENABLED=YES");
+    ESP_LOGI(kTag, "AFE_VAD_CONFIG=MODE_2 MIN_SPEECH_MS=128 MIN_NOISE_MS=200 DELAY_MS=128");
     afe_iface_->print_pipeline(afe_data_);
     return true;
 }
