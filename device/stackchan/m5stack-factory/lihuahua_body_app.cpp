@@ -20,6 +20,9 @@
 #ifndef STACKCHAN_BODY_BRIDGE_URL
 #define STACKCHAN_BODY_BRIDGE_URL ""
 #endif
+#ifndef STACKCHAN_BODY_KEY
+#define STACKCHAN_BODY_KEY ""
+#endif
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 
@@ -50,6 +53,13 @@ esp_err_t onHttpEvent(esp_http_client_event_t* event)
     return ESP_OK;
 }
 
+void setBodyKey(esp_http_client_handle_t client)
+{
+    if (STACKCHAN_BODY_KEY[0] != '\0') {
+        esp_http_client_set_header(client, "X-LiHuahua-Body-Key", STACKCHAN_BODY_KEY);
+    }
+}
+
 bool fetchBodyState(lihuahua_body::BodyState* output)
 {
     if (STACKCHAN_BODY_BRIDGE_URL[0] == '\0') return false;
@@ -65,6 +75,7 @@ bool fetchBodyState(lihuahua_body::BodyState* output)
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) return false;
     esp_http_client_set_method(client, HTTP_METHOD_GET);
+    setBodyKey(client);
     const esp_err_t result = esp_http_client_perform(client);
     const int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
