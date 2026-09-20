@@ -28,9 +28,9 @@ constexpr int kMaximumCaptureMs = 12000;
 // remains a bounded SDK buffer; it is not an application-side inference queue
 // and it does not drop/reset the command stream.
 constexpr int kAfeRingBufferFrames = 128;
-constexpr UBaseType_t kFeedTaskPriority = 3;
-constexpr UBaseType_t kAfeTaskPriority = 4;
-constexpr UBaseType_t kFetchTaskPriority = 3;
+constexpr UBaseType_t kFeedTaskPriority = 2;
+constexpr UBaseType_t kAfeTaskPriority = 3;
+constexpr UBaseType_t kFetchTaskPriority = 4;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
 
@@ -269,11 +269,13 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_min_speech_ms = 128;
     afe_config->vad_min_noise_ms = 200;
     afe_config->vad_delay_ms = 128;
+    afe_config->vad_mute_playback = true;
     afe_config->agc_init = false;
-    // Keep the AFE speech-enhancement worker on CPU1 at the same priority as
-    // the synchronous MultiNet fetch worker. Equal-priority time slicing lets
-    // both sides of the SDK pipeline make progress while a detect call runs.
-    afe_config->afe_perferred_core = 1;
+    // Keep the AFE speech-enhancement worker on CPU0 while the synchronous
+    // MultiNet fetch/detect task runs on CPU1. This leaves the two halves of
+    // the SDK pipeline with a core each instead of making detect wait behind
+    // AFE processing on the same core.
+    afe_config->afe_perferred_core = 0;
     afe_config->afe_perferred_priority = kAfeTaskPriority;
     afe_config->afe_ringbuf_size = kAfeRingBufferFrames;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -450,7 +452,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P3_AFE_CORE1P4_FETCH_DETECT_CORE1P3_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P2_AFE_CORE0P3_FETCH_DETECT_CORE1P4_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
