@@ -161,7 +161,7 @@ void LiHuahuaBodyApp::onOpen()
     lv_label_set_text(state_label_, "OFFLINE");
 
     reachability_label_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(reachability_label_, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(reachability_label_, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(reachability_label_, lv_color_hex(0x7F8A9C), 0);
     lv_obj_align(reachability_label_, LV_ALIGN_BOTTOM_MID, 0, -5);
     lv_label_set_text(reachability_label_, "BRIDGE: OFFLINE");
