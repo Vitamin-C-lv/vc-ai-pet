@@ -28,9 +28,12 @@ private:
     lv_obj_t* root_ = nullptr;
     lv_obj_t* left_eye_ = nullptr;
     lv_obj_t* right_eye_ = nullptr;
+    lv_obj_t* left_brow_ = nullptr;
+    lv_obj_t* right_brow_ = nullptr;
     lv_obj_t* mouth_ = nullptr;
     lv_obj_t* name_label_ = nullptr;
     lv_obj_t* state_label_ = nullptr;
     lv_obj_t* reachability_label_ = nullptr;
+    lv_obj_t* accent_label_ = nullptr;
     uint32_t last_blink_ = 0;
 };

@@ -39,6 +39,8 @@ bool knownFaceName(const char* name, Face* face)
     else if (std::strcmp(name, "thinking") == 0) *face = Face::Thinking;
     else if (std::strcmp(name, "curious") == 0) *face = Face::Curious;
     else if (std::strcmp(name, "confused") == 0) *face = Face::Confused;
+    else if (std::strcmp(name, "listening") == 0 || std::strcmp(name, "listen") == 0) *face = Face::Listening;
+    else if (std::strcmp(name, "speaking") == 0 || std::strcmp(name, "speak") == 0 || std::strcmp(name, "talking") == 0) *face = Face::Speaking;
     else if (std::strcmp(name, "sleep") == 0 || std::strcmp(name, "sleeping") == 0) *face = Face::Sleep;
     else if (std::strcmp(name, "dreaming") == 0 || std::strcmp(name, "dream") == 0) *face = Face::Dreaming;
     else return false;
@@ -74,6 +76,8 @@ bool parseBodyState(const char* json, std::size_t length, BodyState* output)
         readBool(presentation, "dream", &parsed.dream, false);
         readBool(presentation, "sleeping", &parsed.sleeping, false);
         readBool(presentation, "thinking", &parsed.thinking, false);
+        readBool(presentation, "listening", &parsed.listening, false);
+        readBool(presentation, "speaking", &parsed.speaking, false);
     }
 
     cJSON_Delete(root);
@@ -85,12 +89,17 @@ bool parseBodyState(const char* json, std::size_t length, BodyState* output)
 Face faceFor(const BodyState& state)
 {
     if (!state.online) return Face::Offline;
+    if (state.speaking) return Face::Speaking;
+    if (state.listening) return Face::Listening;
     if (state.dream) return Face::Dreaming;
     if (state.sleeping) return Face::Sleep;
 
-    Face face = Face::Idle;
-    knownFaceName(state.expression, &face);  // Unknown states intentionally fall back to idle.
-    return face;
+    Face expression_face = Face::Idle;
+    if (knownFaceName(state.expression, &expression_face) && expression_face != Face::Idle) return expression_face;
+
+    Face visual_face = Face::Idle;
+    if (knownFaceName(state.visual_state, &visual_face)) return visual_face;
+    return expression_face;  // Unknown states intentionally fall back to idle.
 }
 
 const char* faceName(Face face)
@@ -103,6 +112,8 @@ const char* faceName(Face face)
         case Face::Thinking: return "THINKING";
         case Face::Curious: return "CURIOUS";
         case Face::Confused: return "CONFUSED";
+        case Face::Listening: return "LISTENING";
+        case Face::Speaking: return "SPEAKING";
         case Face::Sleep: return "SLEEP";
         case Face::Dreaming: return "DREAMING";
     }
@@ -111,66 +122,83 @@ const char* faceName(Face face)
 
 FaceGeometry faceGeometry(Face face, bool eyes_closed)
 {
-    FaceGeometry geometry{16, 20, 16, 20, 24, 6, 65, 104, 0xA64D58};
+    FaceGeometry geometry{12, 16, 12, 16, 20, 4, 150, 151, 0xF6B6C0};
     switch (face) {
         case Face::Relaxed:
-            geometry.left_eye_height = geometry.right_eye_height = 8;
-            geometry.mouth_width = 20;
-            geometry.mouth_height = 5;
-            geometry.mouth_x = 67;
-            geometry.mouth_y = 103;
+            geometry.left_eye_height = geometry.right_eye_height = 7;
+            geometry.mouth_width = 16;
+            geometry.mouth_height = 3;
+            geometry.mouth_x = 152;
+            geometry.mouth_y = 151;
             break;
         case Face::Happy:
-            geometry.mouth_width = 34;
-            geometry.mouth_height = 12;
-            geometry.mouth_x = 60;
-            geometry.mouth_y = 100;
+            geometry.left_eye_height = geometry.right_eye_height = 14;
+            geometry.mouth_width = 24;
+            geometry.mouth_height = 5;
+            geometry.mouth_x = 148;
+            geometry.mouth_y = 149;
             break;
         case Face::Thinking:
-            geometry.right_eye_height = 16;
-            geometry.mouth_width = 16;
-            geometry.mouth_height = 5;
-            geometry.mouth_x = 69;
-            geometry.mouth_y = 102;
+            geometry.left_eye_height = 13;
+            geometry.right_eye_height = 9;
+            geometry.mouth_width = 12;
+            geometry.mouth_height = 3;
+            geometry.mouth_x = 154;
+            geometry.mouth_y = 151;
             break;
         case Face::Curious:
-            geometry.left_eye_width = geometry.right_eye_width = 22;
-            geometry.left_eye_height = geometry.right_eye_height = 22;
-            geometry.mouth_width = 12;
-            geometry.mouth_height = 7;
-            geometry.mouth_x = 71;
-            geometry.mouth_y = 101;
+            geometry.left_eye_width = geometry.right_eye_width = 15;
+            geometry.left_eye_height = geometry.right_eye_height = 18;
+            geometry.mouth_width = 10;
+            geometry.mouth_height = 6;
+            geometry.mouth_x = 155;
+            geometry.mouth_y = 150;
             break;
         case Face::Confused:
-            geometry.left_eye_height = 23;
-            geometry.right_eye_height = 17;
-            geometry.mouth_width = 20;
-            geometry.mouth_height = 5;
-            geometry.mouth_x = 67;
-            geometry.mouth_y = 105;
+            geometry.left_eye_height = 17;
+            geometry.right_eye_height = 10;
+            geometry.mouth_width = 15;
+            geometry.mouth_height = 3;
+            geometry.mouth_x = 152;
+            geometry.mouth_y = 151;
+            break;
+        case Face::Listening:
+            geometry.left_eye_width = geometry.right_eye_width = 14;
+            geometry.left_eye_height = geometry.right_eye_height = 19;
+            geometry.mouth_width = 8;
+            geometry.mouth_height = 3;
+            geometry.mouth_x = 156;
+            geometry.mouth_y = 151;
+            break;
+        case Face::Speaking:
+            geometry.left_eye_height = geometry.right_eye_height = 14;
+            geometry.mouth_width = 16;
+            geometry.mouth_height = 8;
+            geometry.mouth_x = 152;
+            geometry.mouth_y = 148;
             break;
         case Face::Sleep:
         case Face::Dreaming:
-            geometry.left_eye_height = geometry.right_eye_height = 4;
-            geometry.mouth_width = 14;
-            geometry.mouth_height = 4;
-            geometry.mouth_x = 70;
-            geometry.mouth_y = 105;
+            geometry.left_eye_height = geometry.right_eye_height = 2;
+            geometry.mouth_width = 8;
+            geometry.mouth_height = 2;
+            geometry.mouth_x = 156;
+            geometry.mouth_y = 153;
             break;
         case Face::Offline:
-            geometry.left_eye_height = geometry.right_eye_height = 4;
-            geometry.mouth_width = 18;
-            geometry.mouth_height = 4;
-            geometry.mouth_x = 68;
-            geometry.mouth_y = 105;
-            geometry.mouth_color = 0x777B86;
+            geometry.left_eye_height = geometry.right_eye_height = 2;
+            geometry.mouth_width = 12;
+            geometry.mouth_height = 2;
+            geometry.mouth_x = 154;
+            geometry.mouth_y = 153;
+            geometry.mouth_color = 0x6F7785;
             break;
         case Face::Idle:
             break;
     }
 
     if (eyes_closed) {
-        geometry.left_eye_height = geometry.right_eye_height = 4;
+        geometry.left_eye_height = geometry.right_eye_height = 2;
     }
     return geometry;
 }

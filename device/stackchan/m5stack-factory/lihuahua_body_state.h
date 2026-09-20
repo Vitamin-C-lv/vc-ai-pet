@@ -11,6 +11,8 @@ struct BodyState {
     bool dream = false;
     bool sleeping = false;
     bool thinking = false;
+    bool listening = false;
+    bool speaking = false;
     char name[32] = "\xE6\x9D\x8E\xE8\x8A\xB1\xE8\x8A\xB1";
     char visual_state[32] = "idle";
     char expression[24] = "idle";
@@ -25,6 +27,8 @@ enum class Face {
     Thinking,
     Curious,
     Confused,
+    Listening,
+    Speaking,
     Sleep,
     Dreaming,
 };

@@ -34,8 +34,8 @@ void assertBlinkRestores(lihuahua_body::Face face)
     assert(open_after.left_eye_height == open_before.left_eye_height);
     assert(open_after.right_eye_width == open_before.right_eye_width);
     assert(open_after.right_eye_height == open_before.right_eye_height);
-    assert(closed.left_eye_height == 4);
-    assert(closed.right_eye_height == 4);
+    assert(closed.left_eye_height == 2);
+    assert(closed.right_eye_height == 2);
     assert(closed.mouth_width == open_before.mouth_width);
     assert(closed.mouth_height == open_before.mouth_height);
     assert(closed.mouth_x == open_before.mouth_x);
@@ -53,13 +53,30 @@ int main()
         "{\"schemaVersion\":1,\"online\":true,\"reachable\":true,"
         "\"pet\":{\"name\":\"Li Huahua\"},\"presentation\":{"
         "\"visualState\":\"relaxed\",\"expression\":\"relaxed\","
-        "\"animation\":\"stretch\",\"dream\":false,\"sleeping\":false}}";
+        "\"animation\":\"stretch\",\"dream\":false,\"sleeping\":false,"
+        "\"listening\":false,\"speaking\":false}}";
 
     BodyState state;
     assert(parseBodyState(valid, sizeof(valid) - 1, &state));
     assert(state.online && state.reachable);
     assert(std::strcmp(state.name, "Li Huahua") == 0);
     assert(faceFor(state) == Face::Relaxed);
+
+    constexpr char speaking[] =
+        "{\"schemaVersion\":1,\"online\":true,\"reachable\":true,"
+        "\"pet\":{},\"presentation\":{\"visualState\":\"idle\","
+        "\"expression\":\"idle\",\"speaking\":true}}";
+    assert(parseBodyState(speaking, sizeof(speaking) - 1, &state));
+    assert(state.speaking);
+    assert(faceFor(state) == Face::Speaking);
+
+    constexpr char listening[] =
+        "{\"schemaVersion\":1,\"online\":true,\"reachable\":true,"
+        "\"pet\":{},\"presentation\":{\"visualState\":\"idle\","
+        "\"expression\":\"idle\",\"listening\":true}}";
+    assert(parseBodyState(listening, sizeof(listening) - 1, &state));
+    assert(state.listening);
+    assert(faceFor(state) == Face::Listening);
 
     constexpr char dream[] =
         "{\"schemaVersion\":1,\"online\":true,\"reachable\":false,"
@@ -84,15 +101,17 @@ int main()
     assert(!parseBodyState(valid, sizeof(valid) - 1, nullptr));
     assert(!parseBodyState(valid, 4097, &state));
 
-    assertGeometry(faceGeometry(Face::Idle), 16, 20, 16, 20, 24, 6, 65, 104, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Relaxed), 16, 8, 16, 8, 20, 5, 67, 103, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Happy), 16, 20, 16, 20, 34, 12, 60, 100, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Thinking), 16, 20, 16, 16, 16, 5, 69, 102, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Curious), 22, 22, 22, 22, 12, 7, 71, 101, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Confused), 16, 23, 16, 17, 20, 5, 67, 105, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Sleep), 16, 4, 16, 4, 14, 4, 70, 105, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Dreaming), 16, 4, 16, 4, 14, 4, 70, 105, 0xA64D58);
-    assertGeometry(faceGeometry(Face::Offline), 16, 4, 16, 4, 18, 4, 68, 105, 0x777B86);
+    assertGeometry(faceGeometry(Face::Idle), 12, 16, 12, 16, 20, 4, 150, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Relaxed), 12, 7, 12, 7, 16, 3, 152, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Happy), 12, 14, 12, 14, 24, 5, 148, 149, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Thinking), 12, 13, 12, 9, 12, 3, 154, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Curious), 15, 18, 15, 18, 10, 6, 155, 150, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Confused), 12, 17, 12, 10, 15, 3, 152, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Listening), 14, 19, 14, 19, 8, 3, 156, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Speaking), 12, 14, 12, 14, 16, 8, 152, 148, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Sleep), 12, 2, 12, 2, 8, 2, 156, 153, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Dreaming), 12, 2, 12, 2, 8, 2, 156, 153, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Offline), 12, 2, 12, 2, 12, 2, 154, 153, 0x6F7785);
 
     assertBlinkRestores(Face::Idle);
     assertBlinkRestores(Face::Relaxed);
@@ -100,6 +119,8 @@ int main()
     assertBlinkRestores(Face::Thinking);
     assertBlinkRestores(Face::Curious);
     assertBlinkRestores(Face::Confused);
+    assertBlinkRestores(Face::Listening);
+    assertBlinkRestores(Face::Speaking);
     assertBlinkRestores(Face::Sleep);
     assertBlinkRestores(Face::Dreaming);
     assertBlinkRestores(Face::Offline);
