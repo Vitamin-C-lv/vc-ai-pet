@@ -425,7 +425,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 1) != pdPASS) {
+        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 0) != pdPASS) {
         task_alive_mask_.fetch_and(~kFetchTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
@@ -450,7 +450,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE1P4_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE0P4_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
