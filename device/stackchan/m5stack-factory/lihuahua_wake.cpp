@@ -621,7 +621,9 @@ void LiHuahuaWake::processMultinetSamples(const int16_t* data, std::size_t sampl
         // per-chunk inference delay or dropping any audio.
         if (++mn_chunks_since_idle_yield_ >= 32) {
             mn_chunks_since_idle_yield_ = 0;
-            vTaskDelay(pdMS_TO_TICKS(1));
+            // pdMS_TO_TICKS(1) rounds to zero with the firmware tick rate;
+            // delay by one actual tick so the idle task gets a real slot.
+            vTaskDelay(1);
         } else {
             taskYIELD();
         }
