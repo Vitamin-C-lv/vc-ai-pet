@@ -158,6 +158,21 @@ bool LiHuahuaWake::initializeModel() {
         ESP_LOGE(kTag, "MultiNet create failed name=%s", multinet_name_);
         return false;
     }
+    // MultiNet 5 exposes the same loader hook as newer models on this ESP-SR
+    // build.  Keep the existing model and command graph, but request the
+    // PSRAM-backed weight layout when the runtime supports it; otherwise stay
+    // on the SDK default without making startup depend on that optional hook.
+    if (multinet_->switch_loader_mode != nullptr) {
+        auto* psram_model = multinet_->switch_loader_mode(multinet_model_data_, ESP_MN_LOAD_FROM_PSRAM);
+        if (psram_model != nullptr) {
+            multinet_model_data_ = psram_model;
+            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=PSRAM");
+        } else {
+            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=DEFAULT reason=unsupported");
+        }
+    } else {
+        ESP_LOGI(kTag, "MULTINET_LOADER_MODE=DEFAULT reason=unavailable");
+    }
     multinet_chunk_size_ = multinet_->get_samp_chunksize(multinet_model_data_);
     if (multinet_chunk_size_ <= 0) {
         ESP_LOGE(kTag, "MultiNet chunk size invalid=%d", multinet_chunk_size_);
