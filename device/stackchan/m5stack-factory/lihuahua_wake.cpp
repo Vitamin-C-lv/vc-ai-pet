@@ -28,7 +28,7 @@ constexpr int kMaximumCaptureMs = 12000;
 // remains a bounded SDK buffer; it is not an application-side inference queue
 // and it does not drop/reset the command stream.
 constexpr int kAfeRingBufferFrames = 128;
-constexpr UBaseType_t kFeedTaskPriority = 4;
+constexpr UBaseType_t kFeedTaskPriority = 3;
 constexpr UBaseType_t kAfeTaskPriority = 4;
 constexpr UBaseType_t kFetchTaskPriority = 3;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
@@ -450,7 +450,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE1P3_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P3_AFE_CORE1P4_FETCH_DETECT_CORE1P3_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
