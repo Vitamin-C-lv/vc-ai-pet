@@ -22,12 +22,14 @@ constexpr int kInputFrameMs = 10;
 constexpr int kPreRollMs = 2000;
 constexpr int kEndSilenceMs = 800;
 constexpr int kMaximumCaptureMs = 12000;
-// The ESP-SR AFE ring is the SDK's own feed/fetch buffer.  A larger frame
-// window absorbs the bounded MultiNet5 detect latency without introducing an
-// application-side inference queue or dropping/resetting the command stream.
-constexpr int kAfeRingBufferFrames = 32;
+// The ESP-SR AFE ring is the SDK's own feed/fetch buffer.  MultiNet5 runs
+// synchronously in the AFE fetch task, so its bounded detect latency must be
+// absorbed by the SDK ring while a short utterance is being processed.  This
+// remains a bounded SDK buffer; it is not an application-side inference queue
+// and it does not drop/reset the command stream.
+constexpr int kAfeRingBufferFrames = 128;
 constexpr UBaseType_t kFeedTaskPriority = 4;
-constexpr UBaseType_t kAfeTaskPriority = 4;
+constexpr UBaseType_t kAfeTaskPriority = 5;
 constexpr UBaseType_t kFetchTaskPriority = 1;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
