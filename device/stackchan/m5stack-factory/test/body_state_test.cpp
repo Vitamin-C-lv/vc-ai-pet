@@ -34,8 +34,8 @@ void assertBlinkRestores(lihuahua_body::Face face)
     assert(open_after.left_eye_height == open_before.left_eye_height);
     assert(open_after.right_eye_width == open_before.right_eye_width);
     assert(open_after.right_eye_height == open_before.right_eye_height);
-    assert(closed.left_eye_height == 2);
-    assert(closed.right_eye_height == 2);
+    assert(closed.left_eye_height == 3);
+    assert(closed.right_eye_height == 3);
     assert(closed.mouth_width == open_before.mouth_width);
     assert(closed.mouth_height == open_before.mouth_height);
     assert(closed.mouth_x == open_before.mouth_x);
@@ -101,17 +101,17 @@ int main()
     assert(!parseBodyState(valid, sizeof(valid) - 1, nullptr));
     assert(!parseBodyState(valid, 4097, &state));
 
-    assertGeometry(faceGeometry(Face::Idle), 12, 16, 12, 16, 20, 4, 150, 151, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Relaxed), 12, 7, 12, 7, 16, 3, 152, 151, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Happy), 12, 14, 12, 14, 24, 5, 148, 149, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Thinking), 12, 13, 12, 9, 12, 3, 154, 151, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Curious), 15, 18, 15, 18, 10, 6, 155, 150, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Confused), 12, 17, 12, 10, 15, 3, 152, 151, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Listening), 14, 19, 14, 19, 8, 3, 156, 151, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Speaking), 12, 14, 12, 14, 16, 8, 152, 148, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Sleep), 12, 2, 12, 2, 8, 2, 156, 153, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Dreaming), 12, 2, 12, 2, 8, 2, 156, 153, 0xF6B6C0);
-    assertGeometry(faceGeometry(Face::Offline), 12, 2, 12, 2, 12, 2, 154, 153, 0x6F7785);
+    assertGeometry(faceGeometry(Face::Idle), 16, 22, 16, 22, 18, 7, 151, 150, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Relaxed), 16, 10, 16, 10, 20, 6, 150, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Happy), 17, 20, 17, 20, 28, 10, 146, 147, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Thinking), 16, 18, 16, 13, 16, 6, 152, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Curious), 19, 24, 19, 24, 14, 8, 153, 149, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Confused), 18, 22, 16, 14, 18, 6, 151, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Listening), 18, 25, 18, 25, 12, 6, 154, 151, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Speaking), 17, 20, 17, 20, 22, 12, 149, 146, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Sleep), 24, 3, 24, 3, 0, 0, 160, 153, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Dreaming), 24, 3, 24, 3, 0, 0, 160, 153, 0xF6B6C0);
+    assertGeometry(faceGeometry(Face::Offline), 15, 4, 15, 4, 16, 5, 152, 151, 0x6F7785);
 
     assertBlinkRestores(Face::Idle);
     assertBlinkRestores(Face::Relaxed);

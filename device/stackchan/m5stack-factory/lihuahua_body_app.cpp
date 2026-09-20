@@ -123,34 +123,34 @@ void LiHuahuaBodyApp::onOpen()
     lv_obj_align(name_label_, LV_ALIGN_TOP_MID, 0, 6);
 
     left_eye_ = lv_obj_create(root_);
-    lv_obj_set_size(left_eye_, 12, 16);
-    lv_obj_set_pos(left_eye_, 120, 92);
+    lv_obj_set_size(left_eye_, 16, 22);
+    lv_obj_set_pos(left_eye_, 118, 88);
     stylePill(left_eye_, lv_color_hex(0xE8EEF7));
 
     right_eye_ = lv_obj_create(root_);
-    lv_obj_set_size(right_eye_, 12, 16);
-    lv_obj_set_pos(right_eye_, 188, 92);
+    lv_obj_set_size(right_eye_, 16, 22);
+    lv_obj_set_pos(right_eye_, 186, 88);
     stylePill(right_eye_, lv_color_hex(0xE8EEF7));
 
     left_brow_ = lv_obj_create(root_);
-    lv_obj_set_size(left_brow_, 20, 2);
-    lv_obj_set_pos(left_brow_, 116, 76);
+    lv_obj_set_size(left_brow_, 24, 3);
+    lv_obj_set_pos(left_brow_, 114, 70);
     stylePill(left_brow_, lv_color_hex(0xAEB8C8));
 
     right_brow_ = lv_obj_create(root_);
-    lv_obj_set_size(right_brow_, 20, 2);
-    lv_obj_set_pos(right_brow_, 184, 76);
+    lv_obj_set_size(right_brow_, 24, 3);
+    lv_obj_set_pos(right_brow_, 182, 70);
     stylePill(right_brow_, lv_color_hex(0xAEB8C8));
 
     mouth_ = lv_obj_create(root_);
-    lv_obj_set_size(mouth_, 20, 4);
-    lv_obj_set_pos(mouth_, 150, 151);
+    lv_obj_set_size(mouth_, 18, 7);
+    lv_obj_set_pos(mouth_, 151, 150);
     stylePill(mouth_, lv_color_hex(0xF6B6C0));
 
     accent_label_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(accent_label_, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(accent_label_, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(accent_label_, lv_color_hex(0xAEB8C8), 0);
-    lv_obj_align(accent_label_, LV_ALIGN_CENTER, 94, -48);
+    lv_obj_set_pos(accent_label_, 0, 0);
     lv_label_set_text(accent_label_, "");
     lv_obj_add_flag(accent_label_, LV_OBJ_FLAG_HIDDEN);
 
@@ -164,7 +164,7 @@ void LiHuahuaBodyApp::onOpen()
     lv_obj_set_style_text_font(reachability_label_, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(reachability_label_, lv_color_hex(0x7F8A9C), 0);
     lv_obj_align(reachability_label_, LV_ALIGN_BOTTOM_MID, 0, -5);
-    lv_label_set_text(reachability_label_, "BRIDGE: OFFLINE");
+    lv_label_set_text(reachability_label_, "bridge offline");
 
     lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestCapture(); }, LV_EVENT_SHORT_CLICKED, nullptr);
     lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestRecord(); }, LV_EVENT_LONG_PRESSED, nullptr);
@@ -239,56 +239,70 @@ void LiHuahuaBodyApp::renderState()
 
     LvglLockGuard lock;
     if (name_label_ == nullptr) return;
-    const char* face_text = lihuahua_body::faceName(face);
-    const char* reachability_text = !state.online ? "BRIDGE: OFFLINE"
-                                  : state.reachable ? "BRIDGE: ONLINE"
-                                                    : "BRIDGE: STALE";
     if (std::strcmp(lv_label_get_text(name_label_), state.name) != 0) lv_label_set_text(name_label_, state.name);
-    if (std::strcmp(lv_label_get_text(state_label_), face_text) != 0) lv_label_set_text(state_label_, face_text);
+    const bool show_offline_text = face == lihuahua_body::Face::Offline;
+    const char* state_text = show_offline_text ? "OFFLINE" : "";
+    if (std::strcmp(lv_label_get_text(state_label_), state_text) != 0) lv_label_set_text(state_label_, state_text);
+    if (show_offline_text) lv_obj_clear_flag(state_label_, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(state_label_, LV_OBJ_FLAG_HIDDEN);
+
+    const char* reachability_text = !state.online ? "bridge offline"
+                                  : state.reachable ? ""
+                                                    : "bridge stale";
     if (std::strcmp(lv_label_get_text(reachability_label_), reachability_text) != 0) {
         lv_label_set_text(reachability_label_, reachability_text);
     }
+    if (reachability_text[0] == '\0') lv_obj_add_flag(reachability_label_, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(reachability_label_, LV_OBJ_FLAG_HIDDEN);
 
     const char* accent = "";
     switch (face) {
         case lihuahua_body::Face::Offline: accent = "x"; break;
         case lihuahua_body::Face::Thinking: accent = "..."; break;
         case lihuahua_body::Face::Listening: accent = "))"; break;
-        case lihuahua_body::Face::Sleep: accent = "Z"; break;
-        case lihuahua_body::Face::Dreaming: accent = "Zz"; break;
+        case lihuahua_body::Face::Sleep: accent = "z"; break;
+        case lihuahua_body::Face::Dreaming: accent = "zz"; break;
         case lihuahua_body::Face::Confused: accent = "?"; break;
         default: break;
     }
     if (std::strcmp(lv_label_get_text(accent_label_), accent) != 0) lv_label_set_text(accent_label_, accent);
-    if (accent[0] == '\0') lv_obj_add_flag(accent_label_, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_clear_flag(accent_label_, LV_OBJ_FLAG_HIDDEN);
 
     auto geometry = lihuahua_body::faceGeometry(face, blink);
     if (face == lihuahua_body::Face::Speaking && ((now / 220U) % 2U) == 0U) {
-        geometry.mouth_height = 3;
-        geometry.mouth_y = 151;
+        geometry.mouth_height = 7;
+        geometry.mouth_y = 149;
     }
-    int left_eye_x = 120;
-    int right_eye_x = 188;
-    int eye_y = 92;
+    const uint32_t breath_phase = (now / 500U) % 4U;
+    const int breath_offset = sleeping
+                                  ? (breath_phase == 0U ? 0 : breath_phase == 1U ? 1 : breath_phase == 2U ? 2 : 1)
+                                  : 0;
+    int left_eye_x = 118;
+    int right_eye_x = 186;
+    int eye_y = 88;
     switch (face) {
         case lihuahua_body::Face::Curious:
-            left_eye_x = 117;
-            right_eye_x = 191;
-            eye_y = 90;
+            left_eye_x = 116;
+            right_eye_x = 190;
+            eye_y = 86;
             break;
         case lihuahua_body::Face::Confused:
-            right_eye_x = 190;
-            eye_y = 93;
+            right_eye_x = 188;
+            eye_y = 89;
             break;
         case lihuahua_body::Face::Listening:
-            eye_y = 90;
+            eye_y = 85;
+            break;
+        case lihuahua_body::Face::Sleep:
+        case lihuahua_body::Face::Dreaming:
+            left_eye_x = 114;
+            right_eye_x = 182;
+            eye_y = 100;
             break;
         default:
             break;
     }
-    lv_obj_set_pos(left_eye_, left_eye_x, eye_y);
-    lv_obj_set_pos(right_eye_, right_eye_x, eye_y);
+    lv_obj_set_pos(left_eye_, left_eye_x, eye_y + breath_offset);
+    lv_obj_set_pos(right_eye_, right_eye_x, eye_y + breath_offset);
     lv_obj_set_size(left_eye_, geometry.left_eye_width, geometry.left_eye_height);
     lv_obj_set_size(right_eye_, geometry.right_eye_width, geometry.right_eye_height);
     const bool brows_visible = face != lihuahua_body::Face::Offline &&
@@ -297,19 +311,19 @@ void LiHuahuaBodyApp::renderState()
     if (brows_visible) {
         lv_obj_clear_flag(left_brow_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(right_brow_, LV_OBJ_FLAG_HIDDEN);
-        int left_brow_y = 76;
-        int right_brow_y = 76;
+        int left_brow_y = 70;
+        int right_brow_y = 70;
         switch (face) {
             case lihuahua_body::Face::Happy:
             case lihuahua_body::Face::Curious:
-                left_brow_y = right_brow_y = 73;
+                left_brow_y = right_brow_y = 67;
                 break;
             case lihuahua_body::Face::Thinking:
-                right_brow_y = 79;
+                right_brow_y = 74;
                 break;
             case lihuahua_body::Face::Confused:
-                left_brow_y = 72;
-                right_brow_y = 80;
+                left_brow_y = 66;
+                right_brow_y = 75;
                 break;
             default:
                 break;
@@ -321,8 +335,45 @@ void LiHuahuaBodyApp::renderState()
         lv_obj_add_flag(right_brow_, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_set_size(mouth_, geometry.mouth_width, geometry.mouth_height);
-    lv_obj_set_pos(mouth_, geometry.mouth_x, geometry.mouth_y);
+    lv_obj_set_pos(mouth_, geometry.mouth_x, geometry.mouth_y + breath_offset);
     lv_obj_set_style_bg_color(mouth_, lv_color_hex(geometry.mouth_color), 0);
+    if (geometry.mouth_width <= 0 || geometry.mouth_height <= 0) lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+
+    int accent_x = 0;
+    int accent_y = 0;
+    switch (face) {
+        case lihuahua_body::Face::Offline:
+            accent_x = right_eye_x + geometry.right_eye_width + 6;
+            accent_y = eye_y - 2;
+            break;
+        case lihuahua_body::Face::Thinking:
+            accent_x = 204;
+            accent_y = 126;
+            break;
+        case lihuahua_body::Face::Listening:
+            accent_x = right_eye_x + geometry.right_eye_width + 8;
+            accent_y = eye_y - 2;
+            break;
+        case lihuahua_body::Face::Sleep:
+            accent_x = right_eye_x + geometry.right_eye_width + 7;
+            accent_y = eye_y - 15 + breath_offset;
+            break;
+        case lihuahua_body::Face::Dreaming:
+            accent_x = right_eye_x + geometry.right_eye_width + 5;
+            accent_y = eye_y - 21 + breath_offset;
+            break;
+        case lihuahua_body::Face::Confused:
+            accent_x = right_eye_x + geometry.right_eye_width + 6;
+            accent_y = eye_y - 13;
+            break;
+        default:
+            break;
+    }
+    lv_obj_set_pos(accent_label_, accent_x, accent_y);
+    const bool accent_visible = accent[0] != '\0' && (!sleeping || breath_phase != 3U);
+    if (accent_visible) lv_obj_clear_flag(accent_label_, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(accent_label_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void LiHuahuaBodyApp::onRunning()

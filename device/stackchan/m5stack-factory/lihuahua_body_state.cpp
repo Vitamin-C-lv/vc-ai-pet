@@ -122,75 +122,81 @@ const char* faceName(Face face)
 
 FaceGeometry faceGeometry(Face face, bool eyes_closed)
 {
-    FaceGeometry geometry{12, 16, 12, 16, 20, 4, 150, 151, 0xF6B6C0};
+    FaceGeometry geometry{16, 22, 16, 22, 18, 7, 151, 150, 0xF6B6C0};
     switch (face) {
         case Face::Relaxed:
-            geometry.left_eye_height = geometry.right_eye_height = 7;
-            geometry.mouth_width = 16;
-            geometry.mouth_height = 3;
-            geometry.mouth_x = 152;
+            geometry.left_eye_height = geometry.right_eye_height = 10;
+            geometry.mouth_width = 20;
+            geometry.mouth_height = 6;
+            geometry.mouth_x = 150;
             geometry.mouth_y = 151;
             break;
         case Face::Happy:
-            geometry.left_eye_height = geometry.right_eye_height = 14;
-            geometry.mouth_width = 24;
-            geometry.mouth_height = 5;
-            geometry.mouth_x = 148;
-            geometry.mouth_y = 149;
+            geometry.left_eye_width = geometry.right_eye_width = 17;
+            geometry.left_eye_height = geometry.right_eye_height = 20;
+            geometry.mouth_width = 28;
+            geometry.mouth_height = 10;
+            geometry.mouth_x = 146;
+            geometry.mouth_y = 147;
             break;
         case Face::Thinking:
-            geometry.left_eye_height = 13;
-            geometry.right_eye_height = 9;
-            geometry.mouth_width = 12;
-            geometry.mouth_height = 3;
-            geometry.mouth_x = 154;
+            geometry.left_eye_height = 18;
+            geometry.right_eye_height = 13;
+            geometry.mouth_width = 16;
+            geometry.mouth_height = 6;
+            geometry.mouth_x = 152;
             geometry.mouth_y = 151;
             break;
         case Face::Curious:
-            geometry.left_eye_width = geometry.right_eye_width = 15;
-            geometry.left_eye_height = geometry.right_eye_height = 18;
-            geometry.mouth_width = 10;
-            geometry.mouth_height = 6;
-            geometry.mouth_x = 155;
-            geometry.mouth_y = 150;
+            geometry.left_eye_width = geometry.right_eye_width = 19;
+            geometry.left_eye_height = geometry.right_eye_height = 24;
+            geometry.mouth_width = 14;
+            geometry.mouth_height = 8;
+            geometry.mouth_x = 153;
+            geometry.mouth_y = 149;
             break;
         case Face::Confused:
-            geometry.left_eye_height = 17;
-            geometry.right_eye_height = 10;
-            geometry.mouth_width = 15;
-            geometry.mouth_height = 3;
-            geometry.mouth_x = 152;
+            geometry.left_eye_width = 18;
+            geometry.right_eye_width = 16;
+            geometry.left_eye_height = 22;
+            geometry.right_eye_height = 14;
+            geometry.mouth_width = 18;
+            geometry.mouth_height = 6;
+            geometry.mouth_x = 151;
             geometry.mouth_y = 151;
             break;
         case Face::Listening:
-            geometry.left_eye_width = geometry.right_eye_width = 14;
-            geometry.left_eye_height = geometry.right_eye_height = 19;
-            geometry.mouth_width = 8;
-            geometry.mouth_height = 3;
-            geometry.mouth_x = 156;
+            geometry.left_eye_width = geometry.right_eye_width = 18;
+            geometry.left_eye_height = geometry.right_eye_height = 25;
+            geometry.mouth_width = 12;
+            geometry.mouth_height = 6;
+            geometry.mouth_x = 154;
             geometry.mouth_y = 151;
             break;
         case Face::Speaking:
-            geometry.left_eye_height = geometry.right_eye_height = 14;
-            geometry.mouth_width = 16;
-            geometry.mouth_height = 8;
-            geometry.mouth_x = 152;
-            geometry.mouth_y = 148;
+            geometry.left_eye_width = geometry.right_eye_width = 17;
+            geometry.left_eye_height = geometry.right_eye_height = 20;
+            geometry.mouth_width = 22;
+            geometry.mouth_height = 12;
+            geometry.mouth_x = 149;
+            geometry.mouth_y = 146;
             break;
         case Face::Sleep:
         case Face::Dreaming:
-            geometry.left_eye_height = geometry.right_eye_height = 2;
-            geometry.mouth_width = 8;
-            geometry.mouth_height = 2;
-            geometry.mouth_x = 156;
+            geometry.left_eye_width = geometry.right_eye_width = 24;
+            geometry.left_eye_height = geometry.right_eye_height = 3;
+            geometry.mouth_width = 0;
+            geometry.mouth_height = 0;
+            geometry.mouth_x = 160;
             geometry.mouth_y = 153;
             break;
         case Face::Offline:
-            geometry.left_eye_height = geometry.right_eye_height = 2;
-            geometry.mouth_width = 12;
-            geometry.mouth_height = 2;
-            geometry.mouth_x = 154;
-            geometry.mouth_y = 153;
+            geometry.left_eye_width = geometry.right_eye_width = 15;
+            geometry.left_eye_height = geometry.right_eye_height = 4;
+            geometry.mouth_width = 16;
+            geometry.mouth_height = 5;
+            geometry.mouth_x = 152;
+            geometry.mouth_y = 151;
             geometry.mouth_color = 0x6F7785;
             break;
         case Face::Idle:
@@ -198,7 +204,7 @@ FaceGeometry faceGeometry(Face face, bool eyes_closed)
     }
 
     if (eyes_closed) {
-        geometry.left_eye_height = geometry.right_eye_height = 2;
+        geometry.left_eye_height = geometry.right_eye_height = 3;
     }
     return geometry;
 }
