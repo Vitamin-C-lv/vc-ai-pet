@@ -22,6 +22,13 @@ constexpr int kInputFrameMs = 10;
 constexpr int kPreRollMs = 2000;
 constexpr int kEndSilenceMs = 800;
 constexpr int kMaximumCaptureMs = 12000;
+// The ESP-SR AFE ring is the SDK's own feed/fetch buffer.  A larger frame
+// window absorbs the bounded MultiNet5 detect latency without introducing an
+// application-side inference queue or dropping/resetting the command stream.
+constexpr int kAfeRingBufferFrames = 32;
+constexpr UBaseType_t kFeedTaskPriority = 4;
+constexpr UBaseType_t kFetchTaskPriority = 1;
+constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
 
 // The compressed Chinese MultiNet pack is embedded in the OTA1 application so
@@ -265,6 +272,7 @@ bool LiHuahuaWake::initializeAfe() {
     // real-time feed/fetch and inference workers share a fair priority.
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 2;
+    afe_config->afe_ringbuf_size = kAfeRingBufferFrames;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config_check(afe_config);
 
@@ -295,6 +303,7 @@ bool LiHuahuaWake::initializeAfe() {
              afe_iface_->get_samp_rate(afe_data_), afe_feed_channels_,
              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(kTag, "AFE_FETCH_SAMPLES=%d", afe_fetch_samples_);
+    ESP_LOGI(kTag, "AFE_RINGBUF_FRAMES=%d", kAfeRingBufferFrames);
     ESP_LOGI(kTag, "MN_CHUNK_SAMPLES=%d", multinet_chunk_size_);
     ESP_LOGI(kTag, "AFE_VAD_ENABLED=YES");
     ESP_LOGI(kTag, "AFE_VAD_CONFIG=MODE_2 MIN_SPEECH_MS=128 MIN_NOISE_MS=200 DELAY_MS=128");
@@ -400,7 +409,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->feedTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_feed", 8192, this, 3, &task_, 0) != pdPASS) {
+        }, "lihuahua_wake_feed", 8192, this, kFeedTaskPriority, &task_, 0) != pdPASS) {
         task_alive_mask_.fetch_and(~kFeedTaskBit);
         running_.store(false);
         cleanupRuntime();
@@ -412,7 +421,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, 3, &afe_task_, 0) != pdPASS) {
+        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 0) != pdPASS) {
         task_alive_mask_.fetch_and(~kFetchTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
@@ -425,7 +434,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->callbackTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_cb", 6144, this, 1, &callback_task_, 0) != pdPASS) {
+        }, "lihuahua_wake_cb", 6144, this, kCallbackTaskPriority, &callback_task_, 0) != pdPASS) {
         task_alive_mask_.fetch_and(~kCallbackTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) {
@@ -437,7 +446,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_FETCH_DETECT_CORE0P3_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_FETCH_DETECT_CORE0P1_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
