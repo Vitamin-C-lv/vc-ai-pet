@@ -27,6 +27,7 @@ constexpr int kMaximumCaptureMs = 12000;
 // application-side inference queue or dropping/resetting the command stream.
 constexpr int kAfeRingBufferFrames = 32;
 constexpr UBaseType_t kFeedTaskPriority = 4;
+constexpr UBaseType_t kAfeTaskPriority = 4;
 constexpr UBaseType_t kFetchTaskPriority = 1;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
@@ -267,11 +268,11 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_min_noise_ms = 200;
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
-    // Keep the AFE speech-enhancement worker on CPU1. MultiNet inference is
-    // scheduled on CPU0 so the AFE worker has a complete core while the
-    // real-time feed/fetch and inference workers share a fair priority.
+    // Keep the AFE speech-enhancement worker on CPU1 at the same real-time
+    // priority as feed. The synchronous MultiNet fetch worker also stays on
+    // CPU1, below AFE, so it cannot starve speech enhancement.
     afe_config->afe_perferred_core = 1;
-    afe_config->afe_perferred_priority = 2;
+    afe_config->afe_perferred_priority = kAfeTaskPriority;
     afe_config->afe_ringbuf_size = kAfeRingBufferFrames;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config_check(afe_config);
@@ -421,7 +422,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 0) != pdPASS) {
+        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 1) != pdPASS) {
         task_alive_mask_.fetch_and(~kFetchTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
@@ -446,7 +447,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_FETCH_DETECT_CORE0P1_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE1P1_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
