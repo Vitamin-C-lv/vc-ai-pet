@@ -85,6 +85,7 @@ private:
     uint32_t mn_timeout_count_ = 0;
     uint32_t mn_detect_max_us_ = 0;
     uint64_t mn_detect_total_us_ = 0;
+    uint32_t mn_chunks_since_idle_yield_ = 0;
     uint32_t afe_ringbuffer_full_count_ = 0;
     int64_t mn_last_telemetry_us_ = 0;
 

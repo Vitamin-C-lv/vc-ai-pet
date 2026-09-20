@@ -364,6 +364,7 @@ void LiHuahuaWake::cleanupRuntime() {
     mn_timeout_count_ = 0;
     mn_detect_max_us_ = 0;
     mn_detect_total_us_ = 0;
+    mn_chunks_since_idle_yield_ = 0;
     afe_ringbuffer_full_count_ = 0;
     mn_last_telemetry_us_ = 0;
     task_alive_mask_.store(0);
@@ -614,10 +615,16 @@ void LiHuahuaWake::processMultinetSamples(const int16_t* data, std::size_t sampl
         mn_detect_max_us_ = std::max(mn_detect_max_us_, elapsed_us);
 
         kws_buffer_.erase(kws_buffer_.begin(), kws_buffer_.begin() + multinet_chunk_size_);
-        // Yield after each completed chunk so the AFE worker and the idle task
-        // can run on this core. This is a scheduler yield, not an inference
-        // delay, and the next chunk remains in the same continuous stream.
-        taskYIELD();
+        // Yield after each completed chunk so the AFE worker can run. Every
+        // bounded group also gives the idle task one tick; this avoids a task
+        // watchdog report during a long continuous stream without adding a
+        // per-chunk inference delay or dropping any audio.
+        if (++mn_chunks_since_idle_yield_ >= 32) {
+            mn_chunks_since_idle_yield_ = 0;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        } else {
+            taskYIELD();
+        }
         if (state == ESP_MN_STATE_DETECTED) {
             ++mn_detected_count_;
             auto* result_data = multinet_->get_results(multinet_model_data_);
