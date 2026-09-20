@@ -29,8 +29,8 @@ constexpr int kMaximumCaptureMs = 12000;
 // and it does not drop/reset the command stream.
 constexpr int kAfeRingBufferFrames = 128;
 constexpr UBaseType_t kFeedTaskPriority = 4;
-constexpr UBaseType_t kAfeTaskPriority = 5;
-constexpr UBaseType_t kFetchTaskPriority = 1;
+constexpr UBaseType_t kAfeTaskPriority = 4;
+constexpr UBaseType_t kFetchTaskPriority = 4;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
 
@@ -270,9 +270,9 @@ bool LiHuahuaWake::initializeAfe() {
     afe_config->vad_min_noise_ms = 200;
     afe_config->vad_delay_ms = 128;
     afe_config->agc_init = false;
-    // Keep the AFE speech-enhancement worker on CPU1 at the same real-time
-    // priority as feed. The synchronous MultiNet fetch worker also stays on
-    // CPU1, below AFE, so it cannot starve speech enhancement.
+    // Keep the AFE speech-enhancement worker on CPU1 at the same priority as
+    // the synchronous MultiNet fetch worker. Equal-priority time slicing lets
+    // both sides of the SDK pipeline make progress while a detect call runs.
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = kAfeTaskPriority;
     afe_config->afe_ringbuf_size = kAfeRingBufferFrames;
@@ -424,7 +424,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 0) != pdPASS) {
+        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 1) != pdPASS) {
         task_alive_mask_.fetch_and(~kFetchTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
@@ -449,7 +449,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE0P1_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P4_AFE_CORE1P4_FETCH_DETECT_CORE1P4_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
@@ -614,6 +614,10 @@ void LiHuahuaWake::processMultinetSamples(const int16_t* data, std::size_t sampl
         mn_detect_max_us_ = std::max(mn_detect_max_us_, elapsed_us);
 
         kws_buffer_.erase(kws_buffer_.begin(), kws_buffer_.begin() + multinet_chunk_size_);
+        // Yield after each completed chunk so the AFE worker and the idle task
+        // can run on this core. This is a scheduler yield, not an inference
+        // delay, and the next chunk remains in the same continuous stream.
+        taskYIELD();
         if (state == ESP_MN_STATE_DETECTED) {
             ++mn_detected_count_;
             auto* result_data = multinet_->get_results(multinet_model_data_);
