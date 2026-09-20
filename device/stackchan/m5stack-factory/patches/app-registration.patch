@@ -29,3 +29,43 @@ index 3f11ed6..04c139d 100644
          GetMooncake().installApp(std::make_unique<AppDance>());
 +        GetMooncake().installApp(std::make_unique<LiHuahuaBodyApp>());
          GetMooncake().installApp(std::make_unique<AppSetup>());
+--- a/firmware/main/hal/board/stackchan.cc
++++ b/firmware/main/hal/board/stackchan.cc
+@@ -161,14 +161,34 @@
+
+     bool IsExternalPowerConnected()
+     {
+-        const uint8_t power_status      = ReadReg(0x01);
++        uint8_t power_status = 0;
++        if (TryReadRegs(0x01, &power_status, 1, 100) != ESP_OK) {
++            ESP_LOGW(TAG, "AXP2101 power status read failed; keeping last power state");
++            return last_external_power_connected_;
++        }
+         const uint8_t current_direction = (power_status & 0b01100000) >> 5;
+         const bool is_charging_done     = (power_status & 0b00000111) == 0b00000100;
+
+         // Treat any non-discharging state as externally powered so a plugged-in cable
+         // still counts even after the battery is full.
+-        return current_direction != 2 || is_charging_done;
+-    }
++        last_external_power_connected_ = current_direction != 2 || is_charging_done;
++        return last_external_power_connected_;
++    }
++
++    bool IsDischarging()
++    {
++        uint8_t power_status = 0;
++        if (TryReadRegs(0x01, &power_status, 1, 100) != ESP_OK) {
++            ESP_LOGW(TAG, "AXP2101 discharge status read failed; keeping last state");
++            return last_discharging_;
++        }
++        last_discharging_ = ((power_status & 0b01100000) >> 5) == 2;
++        return last_discharging_;
++    }
++
++private:
++    bool last_external_power_connected_ = true;
++    bool last_discharging_ = false;
+ };
+
+ class CustomBacklight : public Backlight {
