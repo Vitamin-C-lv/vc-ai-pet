@@ -1,5 +1,11 @@
 # VC AI Pet — Project State
 
+## 2026-09-21 — StackChan factory staging 改为固定复用
+
+`scripts/stackchan/prepare-factory-build.py` 不再要求每轮新建完整 clone。正常固件迭代固定复用 `~/.cache/vc-ai-pet/stackchan-factory-staging`：marker、官方 commit 和受保护 worktree 校验通过后，只恢复脚本修改的明确 tracked 文件、删除明确的局部生成物，并保留 `firmware/build` 与 `firmware/managed_components`。官方源固定为 `~/.cache/vc-ai-pet/stackchan-official-source`；普通流程禁止继续创建 `/tmp/stackchan-phase*-<commit>-r<N>`。现有 ota_0、Factory recovery、shared assets 与 app-only OTA 安全边界不变。
+
+tiny Git fixture 的 8 项 staging lifecycle 回归全部通过。真实 canonical staging 连续两轮 `prepare + idf.py build` 均成功：第一轮后 1,392,438,334 bytes，第二轮后 1,475,683,399 bytes；增长来自保留的增量 build cache。`managed_components` 两轮均为 624,771,082 bytes，目录 inode/mtime 不变，第二轮复制量为 0；没有创建新的 StackChan `/tmp` staging 或 sibling full staging。
+
 ## 2026-09-18 — 李花花实体 StackChan Phase 4 已部署
 
 基于既有 Phase 3C handoff 的已确认事实，本轮完成实体身体的 app-only OTA1 部署和真实端到端验收。ota_0 @ 0x20000 Factory 恢复槽保留，未写入其应用区；ota_1 @ 0x510000 运行音量 90 固件。部署结果为 OTA0_APP_WRITES=0、OTA1_WRITE_VERIFIED=YES、OTA1_FIRST_BOOT_VALIDATED=YES。

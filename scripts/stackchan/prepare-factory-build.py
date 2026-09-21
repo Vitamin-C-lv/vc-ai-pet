@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Create a fresh, locally configured StackChan factory build tree.
+"""Create or refresh a locally configured StackChan factory build tree.
 
 The output tree is intentionally outside the VC-AI-PET worktree.  The bridge
 URL is accepted only as a local build input and is never printed or written to
-the repository.  This script stages the already-reviewed source patch; it does
-not build, flash, erase, or switch OTA metadata.
+the repository.  A marked output tree is reused so its build and dependency
+caches survive firmware iterations.  This script stages the already-reviewed
+source patch; it does not build, flash, erase, or switch OTA metadata.
 """
 
 from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import re
 import shutil
 import struct
@@ -22,6 +24,25 @@ from pathlib import Path
 
 
 EXPECTED_SOURCE_COMMIT = "1b5765599fba8aaad1811d9a79358ccc7051f5f3"
+EXPECTED_UPSTREAM_URL = "https://github.com/m5stack/StackChan.git"
+STAGING_MARKER_FILE = ".vc-ai-pet-stackchan-staging.json"
+STAGING_MARKER_PURPOSE = "vc-ai-pet-stackchan-factory-staging"
+DEPENDENCY_DIRS = ("components", "managed_components", "xiaozhi-esp32")
+TRACKED_STAGING_PATHS = (
+    "firmware/main/CMakeLists.txt",
+    "firmware/main/apps/apps.h",
+    "firmware/main/main.cpp",
+    "firmware/main/hal/hal.cpp",
+    "firmware/main/hal/board/stackchan.cc",
+    "firmware/main/hal/board/stackchan_camera.cc",
+    "firmware/sdkconfig.defaults",
+)
+GENERATED_STAGING_PATHS = (
+    "firmware/main/apps/app_lihuahua_body",
+    "firmware/.vc-ai-pet-local-wake",
+    "firmware/sdkconfig",
+    "firmware/sdkconfig.old",
+)
 APP_FILES = (
     "lihuahua_body_app.cpp",
     "lihuahua_body_app.h",
@@ -63,6 +84,108 @@ def run_git(root: Path, *args: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def protected_worktrees(feature: Path) -> tuple[Path, ...]:
+    worktrees = []
+    for line in run_git(feature, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            worktrees.append(Path(line.removeprefix("worktree ")).resolve())
+    return tuple(worktrees)
+
+
+def validate_output_location(output: Path, source: Path, feature: Path) -> None:
+    if output == source:
+        raise SystemExit("OUTPUT_ROOT_IS_OFFICIAL_SOURCE_ROOT")
+    if output == feature:
+        raise SystemExit("OUTPUT_ROOT_IS_FEATURE_ROOT")
+    for worktree in protected_worktrees(feature):
+        if path_is_within(output, worktree):
+            raise SystemExit("OUTPUT_ROOT_IS_PROTECTED_WORKTREE")
+
+
+def marker_payload(source_commit: str) -> dict[str, object]:
+    return {
+        "schema": 1,
+        "purpose": STAGING_MARKER_PURPOSE,
+        "officialSourceCommit": source_commit,
+        "createdBy": "prepare-factory-build.py",
+    }
+
+
+def write_staging_marker(output: Path, source_commit: str) -> None:
+    marker = output / STAGING_MARKER_FILE
+    marker.write_text(
+        json.dumps(marker_payload(source_commit), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    marker.chmod(0o600)
+
+
+def validate_expected_upstream(root: Path, error: str) -> str:
+    try:
+        remote = run_git(root, "remote", "get-url", "origin")
+    except subprocess.CalledProcessError:
+        raise SystemExit(error) from None
+    if remote.rstrip("/").removesuffix(".git").lower() != EXPECTED_UPSTREAM_URL.removesuffix(".git").lower():
+        raise SystemExit(error)
+    return remote
+
+
+def validate_reusable_staging(output: Path) -> None:
+    marker = output / STAGING_MARKER_FILE
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise SystemExit("OUTPUT_ROOT_EXISTS_UNMANAGED") from None
+    required_marker = marker_payload(EXPECTED_SOURCE_COMMIT)
+    if any(payload.get(key) != value for key, value in required_marker.items()):
+        raise SystemExit("OUTPUT_ROOT_EXISTS_UNMANAGED")
+    if not (output / ".git").is_dir():
+        raise SystemExit("OUTPUT_ROOT_EXISTS_UNMANAGED")
+    try:
+        output_commit = run_git(output, "rev-parse", "HEAD")
+    except subprocess.CalledProcessError:
+        raise SystemExit("OUTPUT_ROOT_EXISTS_UNMANAGED") from None
+    if output_commit != EXPECTED_SOURCE_COMMIT:
+        raise SystemExit("STAGED_SOURCE_COMMIT_MISMATCH")
+    validate_expected_upstream(output, "STAGED_SOURCE_UPSTREAM_MISMATCH")
+
+
+def initialize_missing_dependencies(source: Path, output: Path) -> None:
+    for dependency_dir in DEPENDENCY_DIRS:
+        target_dependency = output / "firmware" / dependency_dir
+        if target_dependency.is_dir():
+            continue
+        source_dependency = source / "firmware" / dependency_dir
+        if not source_dependency.is_dir():
+            raise SystemExit(f"DEPENDENCY_SOURCE_MISSING:{dependency_dir}")
+        shutil.copytree(source_dependency, target_dependency)
+
+
+def refresh_reusable_staging(output: Path) -> None:
+    run_git(
+        output,
+        "restore",
+        "--source=HEAD",
+        "--worktree",
+        "--",
+        *TRACKED_STAGING_PATHS,
+    )
+    for relative_path in GENERATED_STAGING_PATHS:
+        target = output / relative_path
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
 
 
 def apply_body_safety_edits(output: Path) -> None:
@@ -147,11 +270,12 @@ def main() -> int:
     output = args.output_root.resolve()
     if not source.is_dir() or not (source / ".git").exists():
         raise SystemExit("OFFICIAL_SOURCE_ROOT_INVALID")
-    if output.exists():
-        raise SystemExit("OUTPUT_ROOT_ALREADY_EXISTS")
     source_commit = run_git(source, "rev-parse", "HEAD")
     if source_commit != EXPECTED_SOURCE_COMMIT:
         raise SystemExit("OFFICIAL_SOURCE_COMMIT_MISMATCH")
+    source_remote = validate_expected_upstream(source, "OFFICIAL_SOURCE_UPSTREAM_MISMATCH")
+    if run_git(source, "status", "--porcelain", "--untracked-files=no"):
+        raise SystemExit("OFFICIAL_SOURCE_TRACKED_WORKTREE_DIRTY")
     if not valid_bridge_url(args.bridge_url):
         raise SystemExit("BRIDGE_URL_MUST_BE_CURRENT_RFC1918_WLAN_ENDPOINT")
     if args.bridge_key and not valid_bridge_key(args.bridge_key):
@@ -168,20 +292,27 @@ def main() -> int:
     if not wake_defaults.is_file():
         raise SystemExit("WAKE_DEFAULTS_MISSING")
 
-    subprocess.run(
-        ["git", "clone", "--no-hardlinks", str(source), str(output)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    # The official checkout used for the prior build has locally provisioned
-    # dependencies ignored by Git.  Carry those exact dependency trees into
-    # the fresh staging tree when present; do not fetch or mutate global IDF
-    # state as part of this staging step.
-    for dependency_dir in ("components", "managed_components", "xiaozhi-esp32"):
-        source_dependency = source / "firmware" / dependency_dir
-        if source_dependency.is_dir():
-            target_dependency = output / "firmware" / dependency_dir
-            shutil.copytree(source_dependency, target_dependency, dirs_exist_ok=True)
+    validate_output_location(output, source, feature)
+    reused = output.exists()
+    if reused:
+        validate_reusable_staging(output)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "--no-hardlinks", str(source), str(output)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        run_git(output, "remote", "set-url", "origin", source_remote)
+        output.chmod(0o700)
+        if run_git(output, "rev-parse", "HEAD") != EXPECTED_SOURCE_COMMIT:
+            raise SystemExit("STAGED_SOURCE_COMMIT_MISMATCH")
+        write_staging_marker(output, source_commit)
+
+    # Dependencies are initialized only when absent.  Existing dependency and
+    # build trees are deliberately retained across prepares.
+    initialize_missing_dependencies(source, output)
+    refresh_reusable_staging(output)
     app_target = output / "firmware/main/apps/app_lihuahua_body"
     app_target.mkdir(parents=True, exist_ok=False)
     for filename in APP_FILES:
@@ -209,6 +340,7 @@ def main() -> int:
         encoding="ascii",
         newline="\n",
     )
+    config_path.chmod(0o600)
 
     staged_header = (app_target / "stackchan_body_config.h").read_text(encoding="ascii")
     if args.bridge_url not in staged_header:
@@ -224,6 +356,9 @@ def main() -> int:
     print("FACTORY_CONFIG_HEADER_STAGED=YES")
     print("BRIDGE_URL_CONFIGURED=YES")
     print(f"BRIDGE_KEY_CONFIGURED={'YES' if args.bridge_key else 'NO'}")
+    print(f"STAGING_REUSED={'YES' if reused else 'NO'}")
+    print("BUILD_CACHE_PRESERVED=YES")
+    print("MANAGED_COMPONENTS_REUSED=YES" if reused else "MANAGED_COMPONENTS_INITIALIZED=YES")
     print(f"STAGING_OUTPUT_ROOT={output}")
     return 0
 
