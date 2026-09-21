@@ -17,9 +17,9 @@ assert.equal(decision.wakeKind, 'huahua')
 assert.equal(decision.query, '')
 
 decision = evaluateWakeRecognition({
-  wakeText: '花花在吗',
+  wakeText: '花花',
   wakeConfidence: 0.91,
-  fullText: '',
+  fullText: '花花在吗',
   candidate: 'huahua',
   stage1Score: 0.89,
   stage1MinScore: 0.6,
@@ -32,7 +32,7 @@ assert.equal(decision.wakeOnly, true)
 decision = evaluateWakeRecognition({
   wakeText: '花花',
   wakeConfidence: 0.91,
-  fullText: '你在干嘛',
+  fullText: '花花你在干嘛',
   stage1Score: 0.89,
   ...policy,
 })
@@ -68,7 +68,7 @@ decision = evaluateWakeRecognition({
   ...policy,
 })
 assert.equal(decision.accepted, true)
-assert.equal(decision.wakeKind, 'huahua')
+assert.equal(decision.wakeKind, 'huahua_zaima')
 assert.equal(decision.query, '看看我')
 
 const embodied = await readFile(new URL('../src/embodied.mjs', import.meta.url), 'utf8')

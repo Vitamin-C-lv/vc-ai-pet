@@ -8,7 +8,11 @@ from pathlib import Path
 from vosk import KaldiRecognizer, Model, SetLogLevel
 
 
-WAKE_GRAMMAR = ["花花", "花花在吗", "[unk]"]
+WAKE_GRAMMAR_TIERS = [
+    (1, ["花花 在 吗", "花花", "[unk]"]),
+    (2, ["花花 在吗", "花花", "[unk]"]),
+    (3, ["花花", "[unk]"]),
+]
 
 
 def words_and_confidence(result):
@@ -28,32 +32,39 @@ def words_and_confidence(result):
 def make_recognizers(model, sample_rate, wake_mode):
     full = KaldiRecognizer(model, sample_rate)
     if not wake_mode:
-        return full, None, True, None
+        return full, None, None, True, None
     full.SetWords(True)
+
+    last_error = None
+    for tier, words in WAKE_GRAMMAR_TIERS:
+        verifier, warning, error = make_grammar_recognizer(model, sample_rate, words)
+        missing = re.search(r"Ignoring word missing in vocabulary: '([^']+)'", warning)
+        if verifier is not None and missing is None:
+            return full, verifier, tier, True, None
+        last_error = missing.group(1) if missing else (error or warning.strip() or "grammar-unavailable")
+    return full, None, "FALLBACK", False, last_error
+
+
+def make_grammar_recognizer(model, sample_rate, words):
     read_fd, write_fd = os.pipe()
     saved_stderr = os.dup(2)
     try:
         os.dup2(write_fd, 2)
-        grammar = json.dumps(WAKE_GRAMMAR, ensure_ascii=False)
+        grammar = json.dumps(words, ensure_ascii=False)
         verifier = KaldiRecognizer(model, sample_rate, grammar)
         verifier.SetWords(True)
     except Exception as error:
-        os.dup2(saved_stderr, 2)
-        os.close(write_fd)
-        warning = os.read(read_fd, 4096).decode("utf-8", errors="replace")
-        os.close(read_fd)
-        os.close(saved_stderr)
-        return full, None, False, str(error) + (":" + warning.strip() if warning.strip() else "")
+        verifier = None
+        failure = str(error)
     else:
+        failure = None
+    finally:
         os.dup2(saved_stderr, 2)
         os.close(write_fd)
         warning = os.read(read_fd, 4096).decode("utf-8", errors="replace")
         os.close(read_fd)
         os.close(saved_stderr)
-        missing = re.search(r"Ignoring word missing in vocabulary: '([^']+)'", warning)
-        if missing:
-            return full, None, False, missing.group(1)
-        return full, verifier, True, None
+    return verifier, warning, failure
 
 
 def main() -> int:
@@ -66,7 +77,7 @@ def main() -> int:
 
     SetLogLevel(-1)
     model = Model(str(args.model))
-    full, verifier, grammar_supported, grammar_error = make_recognizers(
+    full, verifier, grammar_tier, grammar_supported, grammar_error = make_recognizers(
         model, args.sample_rate, args.wake_mode)
 
     with args.pcm.open("rb") as source:
@@ -99,6 +110,7 @@ def main() -> int:
         "wakeText": wake_text,
         "wakeWords": wake_words,
         "wakeConfidence": wake_confidence,
+        "grammarTier": grammar_tier,
         "grammarSupported": grammar_supported,
         "missingWord": (grammar_error or "花花") if not grammar_supported else None,
         "grammarError": grammar_error,

@@ -403,15 +403,22 @@ void LiHuahuaWake::cleanupRuntime() {
     mn_queue_high_water_frames_.store(0);
     mn_queue_overflow_count_.store(0);
     mn_decision_lag_max_ms_.store(0);
+    latest_utterance_generation_.store(0);
+    mn_stale_frames_skipped_.store(0);
+    mn_generations_superseded_.store(0);
+    mn_stale_candidate_discarded_.store(0);
+    mn_latest_generation_lag_max_ms_.store(0);
     afe_ringbuffer_overflow_count_.store(0);
     afe_ringbuffer_min_free_pct_milli_.store(100000);
     inference_end_pending_.store(false);
     multinet_reset_requested_.store(false);
     kws_input_samples_ = 0;
+    kws_utterance_generation_ = 0;
     vad_speech_active_ = false;
     kws_utterance_active_ = false;
     kws_overflow_current_utterance_ = false;
     multinet_utterance_active_ = false;
+    multinet_processing_generation_ = 0;
     mn_last_telemetry_us_ = 0;
     task_alive_mask_.store(0);
 }
@@ -671,10 +678,11 @@ void LiHuahuaWake::applyMultinetResetIfRequested() {
     multinet_utterance_active_ = false;
 }
 
-bool LiHuahuaWake::enqueueInferenceMarker(InferenceKind kind) {
+bool LiHuahuaWake::enqueueInferenceMarker(InferenceKind kind, uint32_t generation) {
     if (inference_ring_ == nullptr) return false;
     InferenceItem item{};
     item.kind = static_cast<uint8_t>(kind);
+    item.generation = generation;
     item.enqueued_at_us = static_cast<uint64_t>(esp_timer_get_time());
     if (xRingbufferSend(inference_ring_, &item, sizeof(item), 0) != pdTRUE) return false;
     const uint32_t depth = mn_queue_depth_frames_.fetch_add(1) + 1;
@@ -685,7 +693,8 @@ bool LiHuahuaWake::enqueueInferenceMarker(InferenceKind kind) {
     return true;
 }
 
-bool LiHuahuaWake::enqueueInferenceData(const int16_t* data, std::size_t sample_count) {
+bool LiHuahuaWake::enqueueInferenceData(const int16_t* data, std::size_t sample_count,
+                                        uint32_t generation) {
     if (data == nullptr || sample_count == 0 || sample_count > kInferenceItemSamples ||
         inference_ring_ == nullptr) {
         return false;
@@ -693,6 +702,7 @@ bool LiHuahuaWake::enqueueInferenceData(const int16_t* data, std::size_t sample_
     InferenceItem item{};
     item.kind = static_cast<uint8_t>(InferenceKind::Data);
     item.sample_count = static_cast<uint16_t>(sample_count);
+    item.generation = generation;
     item.enqueued_at_us = static_cast<uint64_t>(esp_timer_get_time());
     std::copy_n(data, sample_count, item.samples);
     if (xRingbufferSend(inference_ring_, &item, sizeof(item), 0) != pdTRUE) return false;
@@ -720,7 +730,8 @@ void LiHuahuaWake::enqueueKwsSamples(const int16_t* data, std::size_t sample_cou
 
     while (kws_enqueue_buffer_.size() >= static_cast<std::size_t>(multinet_chunk_size_)) {
         if (!enqueueInferenceData(kws_enqueue_buffer_.data(),
-                                   static_cast<std::size_t>(multinet_chunk_size_))) {
+                                   static_cast<std::size_t>(multinet_chunk_size_),
+                                   kws_utterance_generation_)) {
             if (!kws_overflow_current_utterance_.exchange(true)) {
                 mn_queue_overflow_count_.fetch_add(1);
                 ESP_LOGW(kTag, "MN_INFERENCE_OVERFLOW_CURRENT_UTTERANCE=YES");
@@ -743,28 +754,45 @@ void LiHuahuaWake::drainInferenceQueue() {
     }
 }
 
-void LiHuahuaWake::processInferenceItem(InferenceItem& item) {
+bool LiHuahuaWake::processInferenceItem(InferenceItem& item) {
     const auto kind = static_cast<InferenceKind>(item.kind);
-    if (kind == InferenceKind::UtteranceStart) {
-        if (multinet_ != nullptr && multinet_model_data_ != nullptr) {
-            multinet_->clean(multinet_model_data_);
-        }
-        multinet_utterance_active_ = true;
-        return;
+    const uint32_t latest_generation = latest_utterance_generation_.load();
+    if (item.generation < latest_generation) {
+        if (kind == InferenceKind::Data) mn_stale_frames_skipped_.fetch_add(1);
+        return false;
     }
 
-    if (kind == InferenceKind::UtteranceEnd) {
+    // A current generation begins with one clean operation in this task. Old
+    // start/end markers are never allowed to reset its model context.
+    if (item.generation != multinet_processing_generation_) {
         if (multinet_utterance_active_ && multinet_ != nullptr && multinet_model_data_ != nullptr) {
             multinet_->clean(multinet_model_data_);
         }
         multinet_utterance_active_ = false;
-        return;
+        multinet_processing_generation_ = item.generation;
+        if (multinet_ != nullptr && multinet_model_data_ != nullptr) {
+            multinet_->clean(multinet_model_data_);
+        }
+    }
+
+    if (kind == InferenceKind::UtteranceStart) {
+        multinet_utterance_active_ = true;
+        return false;
+    }
+
+    if (kind == InferenceKind::UtteranceEnd) {
+        if (item.generation == latest_utterance_generation_.load() && multinet_utterance_active_ &&
+            multinet_ != nullptr && multinet_model_data_ != nullptr) {
+            multinet_->clean(multinet_model_data_);
+        }
+        multinet_utterance_active_ = false;
+        return false;
     }
 
     if (kind != InferenceKind::Data || !multinet_utterance_active_ ||
         candidate_pending_.load() || multinet_ == nullptr || multinet_model_data_ == nullptr ||
         item.sample_count != static_cast<uint16_t>(multinet_chunk_size_)) {
-        return;
+        return false;
     }
 
     const uint32_t lag_ms = static_cast<uint32_t>(
@@ -772,6 +800,10 @@ void LiHuahuaWake::processInferenceItem(InferenceItem& item) {
     uint32_t previous_lag = mn_decision_lag_max_ms_.load();
     while (lag_ms > previous_lag &&
            !mn_decision_lag_max_ms_.compare_exchange_weak(previous_lag, lag_ms)) {
+    }
+    uint32_t latest_lag = mn_latest_generation_lag_max_ms_.load();
+    while (lag_ms > latest_lag &&
+           !mn_latest_generation_lag_max_ms_.compare_exchange_weak(latest_lag, lag_ms)) {
     }
 
     const int64_t started_at = esp_timer_get_time();
@@ -781,6 +813,13 @@ void LiHuahuaWake::processInferenceItem(InferenceItem& item) {
     ++mn_detect_frame_count_;
     mn_detect_total_us_ += elapsed_us;
     mn_detect_max_us_ = std::max(mn_detect_max_us_, elapsed_us);
+
+    if (item.generation != latest_utterance_generation_.load()) {
+        mn_stale_candidate_discarded_.fetch_add(1);
+        multinet_->clean(multinet_model_data_);
+        multinet_utterance_active_ = false;
+        return true;
+    }
 
     if (state == ESP_MN_STATE_DETECTED) {
         ++mn_detected_count_;
@@ -793,18 +832,17 @@ void LiHuahuaWake::processInferenceItem(InferenceItem& item) {
         }
         multinet_->clean(multinet_model_data_);
         multinet_utterance_active_ = false;
-        drainInferenceQueue();
         inference_end_pending_.store(false);
-        return;
+        return true;
     }
 
     if (state == ESP_MN_STATE_TIMEOUT) {
         ++mn_timeout_count_;
         multinet_->clean(multinet_model_data_);
         multinet_utterance_active_ = false;
-        drainInferenceQueue();
         inference_end_pending_.store(false);
     }
+    return true;
 }
 
 void LiHuahuaWake::multinetTaskLoop() {
@@ -824,15 +862,15 @@ void LiHuahuaWake::multinetTaskLoop() {
             continue;
         }
         mn_queue_depth_frames_.fetch_sub(1);
-        if (item_size == sizeof(InferenceItem)) {
-            processInferenceItem(*static_cast<InferenceItem*>(raw));
-        }
+        const bool did_detect = item_size == sizeof(InferenceItem)
+                                    ? processInferenceItem(*static_cast<InferenceItem*>(raw))
+                                    : false;
         vRingbufferReturnItem(inference_ring_, raw);
         // MultiNet can take tens of milliseconds per frame.  Leave one
         // scheduler tick after each item so CPU1's idle task can run and
         // service the task watchdog while the higher-priority AFE fetch task
         // remains free to keep the capture path real-time.
-        vTaskDelay(1);
+        if (did_detect) vTaskDelay(1);
         maybeLogTelemetry();
     }
 
@@ -864,6 +902,14 @@ void LiHuahuaWake::maybeLogTelemetry() {
              static_cast<unsigned>(mn_queue_overflow_count_.load()),
              static_cast<unsigned>(mn_decision_lag_max_ms_.load()),
              static_cast<unsigned>(kKwsWindowMs));
+    ESP_LOGI(kTag, "MN_CURRENT_GENERATION=%u MN_STALE_FRAMES_SKIPPED=%u "
+                   "MN_GENERATIONS_SUPERSEDED=%u MN_STALE_CANDIDATE_DISCARDED=%u "
+                   "MN_LATEST_GENERATION_LAG_MAX_MS=%u",
+             static_cast<unsigned>(latest_utterance_generation_.load()),
+             static_cast<unsigned>(mn_stale_frames_skipped_.load()),
+             static_cast<unsigned>(mn_generations_superseded_.load()),
+             static_cast<unsigned>(mn_stale_candidate_discarded_.load()),
+             static_cast<unsigned>(mn_latest_generation_lag_max_ms_.load()));
     ESP_LOGI(kTag, "AFE_FETCH_FRAME_SAMPLES=%d MN_CHUNK_SAMPLES=%d VAD_CACHE_BYTES_LAST=%u "
                    "VAD_SPEECH_TRANSITIONS=%u MN_DETECTED_COUNT=%u MN_TIMEOUT_COUNT=%u",
              afe_fetch_samples_, multinet_chunk_size_, static_cast<unsigned>(vad_cache_bytes_last_),
@@ -949,10 +995,16 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
         vad_speech_active_ = true;
         ++vad_speech_transitions_;
         kws_utterance_active_ = true;
+        const uint32_t previous_generation = latest_utterance_generation_.load();
+        kws_utterance_generation_ = latest_utterance_generation_.fetch_add(1) + 1;
+        if (previous_generation != 0) mn_generations_superseded_.fetch_add(1);
+        // A failed end marker can only belong to an older generation. It
+        // must not prevent the newest utterance from entering the queue.
+        inference_end_pending_.store(false);
         kws_input_samples_ = 0;
         kws_enqueue_buffer_.clear();
         kws_overflow_current_utterance_.store(false);
-        if (inference_end_pending_.load() || !enqueueInferenceMarker(InferenceKind::UtteranceStart)) {
+        if (!enqueueInferenceMarker(InferenceKind::UtteranceStart, kws_utterance_generation_)) {
             kws_overflow_current_utterance_.store(true);
             mn_queue_overflow_count_.fetch_add(1);
             ESP_LOGW(kTag, "MN_INFERENCE_OVERFLOW_CURRENT_UTTERANCE=YES");
@@ -974,7 +1026,7 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
         if (vad_speech_active_) {
             kws_enqueue_buffer_.clear();
             kws_utterance_active_ = false;
-            if (!enqueueInferenceMarker(InferenceKind::UtteranceEnd)) {
+            if (!enqueueInferenceMarker(InferenceKind::UtteranceEnd, kws_utterance_generation_)) {
                 inference_end_pending_.store(true);
             }
             vad_speech_active_ = false;

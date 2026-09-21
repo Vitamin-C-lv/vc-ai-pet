@@ -286,11 +286,13 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
       words: Array.isArray(recognition?.wakeWords) ? recognition.wakeWords : [],
       confidence: Number.isFinite(wakeConfidence) ? wakeConfidence : 0,
       grammarSupported: recognition?.grammarSupported !== false,
+      grammarTier: recognition?.grammarTier ?? 'FALLBACK',
     }
     if (recognition?.grammarSupported === false) {
-      console.warn('WAKE_GRAMMAR_SUPPORTED=NO MISSING_WORD=' + String(recognition?.missingWord ?? '花花'))
+      console.warn('WAKE_GRAMMAR_TIER=FALLBACK WAKE_GRAMMAR_SUPPORTED=NO MISSING_WORD=' + String(recognition?.missingWord ?? '花花'))
     } else {
       status.wake.wakeVerifier.grammar = 'PASS'
+      console.log('WAKE_GRAMMAR_TIER=' + String(recognition?.grammarTier ?? 'FALLBACK') + ' WAKE_GRAMMAR_SUPPORTED=YES')
     }
 
     if (wakeSession.state === 'LISTENING') {

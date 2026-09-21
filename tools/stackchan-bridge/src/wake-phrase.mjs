@@ -63,8 +63,8 @@ export function evaluateWakeRecognition({
   stage1MinScore = 0,
   stage2MinConfidence = 0,
 }) {
-  const classified = classifyWakeTranscript(wakeText, candidate)
-  if (!classified.confirmed) {
+  const verifier = classifyWakeTranscript(wakeText, candidate)
+  if (!verifier.confirmed) {
     return {
       accepted: false,
       reason: 'wake-verifier-rejected',
@@ -73,11 +73,13 @@ export function evaluateWakeRecognition({
       wakeOnly: false,
     }
   }
+  const normalizedFull = normalizeWakeText(fullText)
+  const wakeKind = normalizedFull.startsWith('花花在吗') ? 'huahua_zaima' : 'huahua'
   if (!Number.isFinite(stage1Score) || stage1Score < stage1MinScore) {
     return {
       accepted: false,
       reason: 'stage1-score-rejected',
-      wakeKind: classified.wakeKind,
+      wakeKind,
       query: '',
       wakeOnly: false,
     }
@@ -86,16 +88,16 @@ export function evaluateWakeRecognition({
     return {
       accepted: false,
       reason: 'wake-confidence-rejected',
-      wakeKind: classified.wakeKind,
+      wakeKind,
       query: '',
       wakeOnly: false,
     }
   }
-  const query = stripWakePhrase(fullText, classified.wakeKind)
+  const query = stripWakePhrase(fullText, wakeKind)
   return {
     accepted: true,
     reason: 'wake-confirmed',
-    wakeKind: classified.wakeKind,
+    wakeKind,
     query,
     wakeOnly: query.length === 0,
   }

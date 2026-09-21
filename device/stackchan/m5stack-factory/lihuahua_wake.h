@@ -43,6 +43,7 @@ private:
         uint8_t kind = 0;
         uint8_t reserved = 0;
         uint16_t sample_count = 0;
+        uint32_t generation = 0;
         uint64_t enqueued_at_us = 0;
         int16_t samples[kInferenceItemSamples] = {};
     };
@@ -86,11 +87,13 @@ private:
     uint32_t silence_ms_ = 0;
     uint32_t capture_ms_ = 0;
     uint32_t kws_input_samples_ = 0;
+    uint32_t kws_utterance_generation_ = 0;
     float candidate_score_ = 0.0f;
     bool vad_speech_active_ = false;
     bool kws_utterance_active_ = false;
     std::atomic<bool> kws_overflow_current_utterance_{false};
     bool multinet_utterance_active_ = false;
+    uint32_t multinet_processing_generation_ = 0;
     int codec_input_rate_ = 0;
     int codec_input_channels_ = 0;
     int afe_feed_channels_ = 0;
@@ -108,6 +111,11 @@ private:
     std::atomic<uint32_t> mn_queue_high_water_frames_{0};
     std::atomic<uint32_t> mn_queue_overflow_count_{0};
     std::atomic<uint32_t> mn_decision_lag_max_ms_{0};
+    std::atomic<uint32_t> latest_utterance_generation_{0};
+    std::atomic<uint32_t> mn_stale_frames_skipped_{0};
+    std::atomic<uint32_t> mn_generations_superseded_{0};
+    std::atomic<uint32_t> mn_stale_candidate_discarded_{0};
+    std::atomic<uint32_t> mn_latest_generation_lag_max_ms_{0};
     std::atomic<uint32_t> afe_ringbuffer_overflow_count_{0};
     std::atomic<uint32_t> afe_ringbuffer_min_free_pct_milli_{100000};
     int64_t mn_last_telemetry_us_ = 0;
@@ -125,9 +133,9 @@ private:
     void callbackTaskLoop();
     void processAfeResult(const afe_fetch_result_t* result);
     void enqueueKwsSamples(const int16_t* data, std::size_t sample_count);
-    bool enqueueInferenceMarker(InferenceKind kind);
-    bool enqueueInferenceData(const int16_t* data, std::size_t sample_count);
-    void processInferenceItem(InferenceItem& item);
+    bool enqueueInferenceMarker(InferenceKind kind, uint32_t generation);
+    bool enqueueInferenceData(const int16_t* data, std::size_t sample_count, uint32_t generation);
+    bool processInferenceItem(InferenceItem& item);
     void drainInferenceQueue();
     void applyMultinetResetIfRequested();
     void maybeLogTelemetry();
