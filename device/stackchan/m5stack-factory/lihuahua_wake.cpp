@@ -7,10 +7,12 @@
 
 #include <esp_heap_caps.h>
 #include <esp_image_format.h>
+#include <esp_private/esp_clk.h>
 #include <esp_log.h>
 #include <esp_partition.h>
 #include <esp_timer.h>
 #include <esp_mn_speech_commands.h>
+#include <freertos/ringbuf.h>
 #include <miniz.h>
 
 #include <assets.h>
@@ -22,15 +24,17 @@ constexpr int kInputFrameMs = 10;
 constexpr int kPreRollMs = 2000;
 constexpr int kEndSilenceMs = 800;
 constexpr int kMaximumCaptureMs = 12000;
-// The ESP-SR AFE ring is the SDK's own feed/fetch buffer.  MultiNet5 runs
-// synchronously in the AFE fetch task, so its bounded detect latency must be
-// absorbed by the SDK ring while a short utterance is being processed.  This
-// remains a bounded SDK buffer; it is not an application-side inference queue
-// and it does not drop/reset the command stream.
+constexpr uint32_t kKwsWindowMs = 2500;
+constexpr uint32_t kKwsWindowSamples = kAfeSampleRate * kKwsWindowMs / 1000;
+// The ESP-SR AFE ring remains the SDK's own bounded feed/fetch buffer. The
+// application-side inference ring below absorbs MultiNet lag without blocking
+// fetch or resetting the model context.
 constexpr int kAfeRingBufferFrames = 128;
+constexpr uint32_t kInferenceRingCapacityFrames = 128;
 constexpr UBaseType_t kFeedTaskPriority = 2;
 constexpr UBaseType_t kAfeTaskPriority = 3;
-constexpr UBaseType_t kFetchTaskPriority = 4;
+constexpr UBaseType_t kFetchTaskPriority = 5;
+constexpr UBaseType_t kMultinetTaskPriority = 3;
 constexpr UBaseType_t kCallbackTaskPriority = 1;
 constexpr size_t kMaximumEmbeddedModelSize = 3 * 1024 * 1024;
 
@@ -176,12 +180,15 @@ bool LiHuahuaWake::initializeModel() {
         auto* psram_model = multinet_->switch_loader_mode(multinet_model_data_, ESP_MN_LOAD_FROM_PSRAM);
         if (psram_model != nullptr) {
             multinet_model_data_ = psram_model;
-            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=PSRAM");
+            multinet_loader_mode_ = "PSRAM";
+            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=%s", multinet_loader_mode_);
         } else {
-            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=DEFAULT reason=unsupported");
+            multinet_loader_mode_ = "DEFAULT";
+            ESP_LOGI(kTag, "MULTINET_LOADER_MODE=%s reason=unsupported", multinet_loader_mode_);
         }
     } else {
-        ESP_LOGI(kTag, "MULTINET_LOADER_MODE=DEFAULT reason=unavailable");
+        multinet_loader_mode_ = "DEFAULT";
+        ESP_LOGI(kTag, "MULTINET_LOADER_MODE=%s reason=unavailable", multinet_loader_mode_);
     }
     multinet_chunk_size_ = multinet_->get_samp_chunksize(multinet_model_data_);
     if (multinet_chunk_size_ <= 0) {
@@ -302,14 +309,35 @@ bool LiHuahuaWake::initializeAfe() {
         return false;
     }
     afe_feed_buffer_.clear();
-    kws_buffer_.clear();
+    kws_enqueue_buffer_.clear();
     afe_fetch_samples_ = afe_iface_->get_fetch_chunksize(afe_data_);
+    if (multinet_chunk_size_ <= 0 ||
+        multinet_chunk_size_ > static_cast<int>(kInferenceItemSamples)) {
+        ESP_LOGE(kTag, "MULTINET_CHUNK_UNSUPPORTED=%d max=%u",
+                 multinet_chunk_size_, static_cast<unsigned>(kInferenceItemSamples));
+        return false;
+    }
+    kws_enqueue_buffer_.reserve(kInferenceItemSamples * 2);
+    const size_t inference_ring_bytes =
+        sizeof(InferenceItem) * static_cast<size_t>(kInferenceRingCapacityFrames);
+    inference_ring_ = xRingbufferCreateWithCaps(
+        inference_ring_bytes, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (inference_ring_ == nullptr) {
+        ESP_LOGE(kTag, "MN_INFERENCE_RING_CREATE=FAIL bytes=%u",
+                 static_cast<unsigned>(inference_ring_bytes));
+        return false;
+    }
     ESP_LOGI(kTag, "AFE_INITIALIZED=YES feed_rate=%d feed_channels=%d feed_chunk=%d fetch_chunk=%d",
              afe_iface_->get_samp_rate(afe_data_), afe_feed_channels_,
              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(kTag, "AFE_FETCH_SAMPLES=%d", afe_fetch_samples_);
     ESP_LOGI(kTag, "AFE_RINGBUF_FRAMES=%d", kAfeRingBufferFrames);
     ESP_LOGI(kTag, "MN_CHUNK_SAMPLES=%d", multinet_chunk_size_);
+    ESP_LOGI(kTag, "MN_QUEUE_CAPACITY_FRAMES=%u", static_cast<unsigned>(kInferenceRingCapacityFrames));
+    ESP_LOGI(kTag, "MN_KWS_WINDOW_MS=%u", static_cast<unsigned>(kKwsWindowMs));
+    ESP_LOGI(kTag, "CPU_FREQ_MHZ=%d", esp_clk_cpu_freq() / 1000000);
+    ESP_LOGI(kTag, "AFE_MODE=HIGH_PERF");
+    ESP_LOGI(kTag, "MULTINET_LOADER_MODE=%s", multinet_loader_mode_);
     ESP_LOGI(kTag, "AFE_VAD_ENABLED=YES");
     ESP_LOGI(kTag, "AFE_VAD_CONFIG=MODE_2 MIN_SPEECH_MS=128 MIN_NOISE_MS=200 DELAY_MS=128");
     afe_iface_->print_pipeline(afe_data_);
@@ -317,6 +345,10 @@ bool LiHuahuaWake::initializeAfe() {
 }
 
 void LiHuahuaWake::cleanupRuntime() {
+    if (inference_ring_ != nullptr) {
+        vRingbufferDeleteWithCaps(inference_ring_);
+        inference_ring_ = nullptr;
+    }
     if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_model_data_);
     }
@@ -347,10 +379,11 @@ void LiHuahuaWake::cleanupRuntime() {
     embedded_model_storage_size_ = 0;
     multinet_ = nullptr;
     multinet_name_ = nullptr;
+    multinet_loader_mode_ = "UNKNOWN";
     multinet_chunk_size_ = 0;
     afe_fetch_samples_ = 0;
     afe_feed_buffer_.clear();
-    kws_buffer_.clear();
+    kws_enqueue_buffer_.clear();
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
         callback_queue_.clear();
@@ -366,8 +399,19 @@ void LiHuahuaWake::cleanupRuntime() {
     mn_timeout_count_ = 0;
     mn_detect_max_us_ = 0;
     mn_detect_total_us_ = 0;
-    mn_chunks_since_idle_yield_ = 0;
-    afe_ringbuffer_full_count_ = 0;
+    mn_queue_depth_frames_.store(0);
+    mn_queue_high_water_frames_.store(0);
+    mn_queue_overflow_count_.store(0);
+    mn_decision_lag_max_ms_.store(0);
+    afe_ringbuffer_overflow_count_.store(0);
+    afe_ringbuffer_min_free_pct_milli_.store(100000);
+    inference_end_pending_.store(false);
+    multinet_reset_requested_.store(false);
+    kws_input_samples_ = 0;
+    vad_speech_active_ = false;
+    kws_utterance_active_ = false;
+    kws_overflow_current_utterance_ = false;
+    multinet_utterance_active_ = false;
     mn_last_telemetry_us_ = 0;
     task_alive_mask_.store(0);
 }
@@ -394,7 +438,17 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     mn_timeout_count_ = 0;
     mn_detect_max_us_ = 0;
     mn_detect_total_us_ = 0;
-    afe_ringbuffer_full_count_ = 0;
+    mn_queue_depth_frames_.store(0);
+    mn_queue_high_water_frames_.store(0);
+    mn_queue_overflow_count_.store(0);
+    mn_decision_lag_max_ms_.store(0);
+    afe_ringbuffer_overflow_count_.store(0);
+    afe_ringbuffer_min_free_pct_milli_.store(100000);
+    inference_end_pending_.store(false);
+    kws_input_samples_ = 0;
+    kws_utterance_active_ = false;
+    kws_overflow_current_utterance_ = false;
+    multinet_utterance_active_ = false;
     mn_last_telemetry_us_ = esp_timer_get_time();
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
@@ -427,8 +481,21 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
     if (xTaskCreatePinnedToCore([](void* arg) {
             static_cast<LiHuahuaWake*>(arg)->fetchTaskLoop();
             vTaskDelete(nullptr);
-        }, "lihuahua_wake_afe", 8192, this, kFetchTaskPriority, &afe_task_, 1) != pdPASS) {
+        }, "lihuahua_wake_fetch", 8192, this, kFetchTaskPriority, &afe_task_, 1) != pdPASS) {
         task_alive_mask_.fetch_and(~kFetchTaskBit);
+        running_.store(false);
+        while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
+        cleanupRuntime();
+        callback_ = nullptr;
+        codec_ = nullptr;
+        return false;
+    }
+    task_alive_mask_.fetch_or(kMultinetTaskBit);
+    if (xTaskCreatePinnedToCore([](void* arg) {
+            static_cast<LiHuahuaWake*>(arg)->multinetTaskLoop();
+            vTaskDelete(nullptr);
+        }, "lihuahua_wake_mn", 8192, this, kMultinetTaskPriority, &multinet_task_, 1) != pdPASS) {
+        task_alive_mask_.fetch_and(~kMultinetTaskBit);
         running_.store(false);
         while (task_alive_mask_.load() != 0) vTaskDelay(pdMS_TO_TICKS(10));
         cleanupRuntime();
@@ -452,7 +519,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         return false;
     }
     ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
-    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P2_AFE_CORE0P3_FETCH_DETECT_CORE1P4_CALLBACK_CORE0P1");
+    ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P2_AFE_CORE0P3_FETCH_CORE1P5_MULTINET_CORE1P3_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
     return true;
@@ -495,6 +562,10 @@ void LiHuahuaWake::Pause() {
         silence_ms_ = 0;
         capture_ms_ = 0;
         capture_.clear();
+        kws_enqueue_buffer_.clear();
+        kws_input_samples_ = 0;
+        kws_utterance_active_ = false;
+        kws_overflow_current_utterance_.store(false);
     }
     requestMultinetReset();
 }
@@ -574,7 +645,6 @@ void LiHuahuaWake::fetchTaskLoop() {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
-        applyMultinetResetIfRequested();
         const auto* result = afe_iface_ != nullptr && afe_data_ != nullptr
                                  ? afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(100))
                                  : nullptr;
@@ -588,66 +658,187 @@ void LiHuahuaWake::fetchTaskLoop() {
 
 void LiHuahuaWake::requestMultinetReset() {
     multinet_reset_requested_.store(true);
+    if (multinet_task_ != nullptr) xTaskNotifyGive(multinet_task_);
 }
 
 void LiHuahuaWake::applyMultinetResetIfRequested() {
     if (!multinet_reset_requested_.exchange(false)) return;
-    kws_buffer_.clear();
-    vad_speech_active_ = false;
+    drainInferenceQueue();
+    inference_end_pending_.store(false);
     if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
         multinet_->clean(multinet_model_data_);
     }
+    multinet_utterance_active_ = false;
 }
 
-void LiHuahuaWake::processMultinetSamples(const int16_t* data, std::size_t sample_count) {
-    if (data == nullptr || sample_count == 0 || !running_.load() || paused_.load() ||
-        mode_.load() != Mode::Idle || candidate_pending_.load() || multinet_model_data_ == nullptr ||
-        multinet_ == nullptr || multinet_chunk_size_ <= 0) {
+bool LiHuahuaWake::enqueueInferenceMarker(InferenceKind kind) {
+    if (inference_ring_ == nullptr) return false;
+    InferenceItem item{};
+    item.kind = static_cast<uint8_t>(kind);
+    item.enqueued_at_us = static_cast<uint64_t>(esp_timer_get_time());
+    if (xRingbufferSend(inference_ring_, &item, sizeof(item), 0) != pdTRUE) return false;
+    const uint32_t depth = mn_queue_depth_frames_.fetch_add(1) + 1;
+    uint32_t high_water = mn_queue_high_water_frames_.load();
+    while (depth > high_water &&
+           !mn_queue_high_water_frames_.compare_exchange_weak(high_water, depth)) {
+    }
+    return true;
+}
+
+bool LiHuahuaWake::enqueueInferenceData(const int16_t* data, std::size_t sample_count) {
+    if (data == nullptr || sample_count == 0 || sample_count > kInferenceItemSamples ||
+        inference_ring_ == nullptr) {
+        return false;
+    }
+    InferenceItem item{};
+    item.kind = static_cast<uint8_t>(InferenceKind::Data);
+    item.sample_count = static_cast<uint16_t>(sample_count);
+    item.enqueued_at_us = static_cast<uint64_t>(esp_timer_get_time());
+    std::copy_n(data, sample_count, item.samples);
+    if (xRingbufferSend(inference_ring_, &item, sizeof(item), 0) != pdTRUE) return false;
+    const uint32_t depth = mn_queue_depth_frames_.fetch_add(1) + 1;
+    uint32_t high_water = mn_queue_high_water_frames_.load();
+    while (depth > high_water &&
+           !mn_queue_high_water_frames_.compare_exchange_weak(high_water, depth)) {
+    }
+    return true;
+}
+
+void LiHuahuaWake::enqueueKwsSamples(const int16_t* data, std::size_t sample_count) {
+    if (data == nullptr || sample_count == 0 || !kws_utterance_active_ ||
+        kws_overflow_current_utterance_.load() || candidate_pending_.load() ||
+        multinet_chunk_size_ <= 0) {
         return;
     }
 
-    kws_buffer_.insert(kws_buffer_.end(), data, data + sample_count);
-    while (static_cast<int>(kws_buffer_.size()) >= multinet_chunk_size_ && running_.load() &&
-           !paused_.load() && mode_.load() == Mode::Idle && !candidate_pending_.load()) {
-        const int64_t started_at = esp_timer_get_time();
-        const auto state = multinet_->detect(multinet_model_data_, kws_buffer_.data());
-        const uint32_t elapsed_us = static_cast<uint32_t>(std::max<int64_t>(0, esp_timer_get_time() - started_at));
-        ++mn_detect_frame_count_;
-        mn_detect_total_us_ += elapsed_us;
-        mn_detect_max_us_ = std::max(mn_detect_max_us_, elapsed_us);
+    const std::size_t remaining =
+        kws_input_samples_ < kKwsWindowSamples ? kKwsWindowSamples - kws_input_samples_ : 0;
+    const std::size_t accepted = std::min(sample_count, remaining);
+    if (accepted == 0) return;
+    kws_enqueue_buffer_.insert(kws_enqueue_buffer_.end(), data, data + accepted);
+    kws_input_samples_ += static_cast<uint32_t>(accepted);
 
-        kws_buffer_.erase(kws_buffer_.begin(), kws_buffer_.begin() + multinet_chunk_size_);
-        // Yield after each completed chunk so the AFE worker can run. Every
-        // bounded group also gives the idle task one tick; this avoids a task
-        // watchdog report during a long continuous stream without adding a
-        // per-chunk inference delay or dropping any audio.
-        if (++mn_chunks_since_idle_yield_ >= 32) {
-            mn_chunks_since_idle_yield_ = 0;
-            // pdMS_TO_TICKS(1) rounds to zero with the firmware tick rate;
-            // delay by one actual tick so the idle task gets a real slot.
-            vTaskDelay(1);
-        } else {
-            taskYIELD();
-        }
-        if (state == ESP_MN_STATE_DETECTED) {
-            ++mn_detected_count_;
-            auto* result_data = multinet_->get_results(multinet_model_data_);
-            if (result_data != nullptr && result_data->num > 0 && result_data->command_id[0] == 1) {
-                const float score = std::clamp(result_data->prob[0], 0.0f, 1.0f);
-                candidate_score_pending_.store(score);
-                candidate_pending_.store(true);
-                ESP_LOGI(kTag, "local wake candidate=huahua score=%0.4f vad=speech", score);
+    while (kws_enqueue_buffer_.size() >= static_cast<std::size_t>(multinet_chunk_size_)) {
+        if (!enqueueInferenceData(kws_enqueue_buffer_.data(),
+                                   static_cast<std::size_t>(multinet_chunk_size_))) {
+            if (!kws_overflow_current_utterance_.exchange(true)) {
+                mn_queue_overflow_count_.fetch_add(1);
+                ESP_LOGW(kTag, "MN_INFERENCE_OVERFLOW_CURRENT_UTTERANCE=YES");
             }
-            multinet_->clean(multinet_model_data_);
-            break;
+            kws_enqueue_buffer_.clear();
+            return;
         }
-        if (state == ESP_MN_STATE_TIMEOUT) {
-            ++mn_timeout_count_;
-            multinet_->clean(multinet_model_data_);
-            kws_buffer_.clear();
-            break;
-        }
+        kws_enqueue_buffer_.erase(
+            kws_enqueue_buffer_.begin(),
+            kws_enqueue_buffer_.begin() + multinet_chunk_size_);
     }
+}
+
+void LiHuahuaWake::drainInferenceQueue() {
+    if (inference_ring_ == nullptr) return;
+    size_t item_size = 0;
+    while (void* raw = xRingbufferReceive(inference_ring_, &item_size, 0)) {
+        mn_queue_depth_frames_.fetch_sub(1);
+        vRingbufferReturnItem(inference_ring_, raw);
+    }
+}
+
+void LiHuahuaWake::processInferenceItem(InferenceItem& item) {
+    const auto kind = static_cast<InferenceKind>(item.kind);
+    if (kind == InferenceKind::UtteranceStart) {
+        if (multinet_ != nullptr && multinet_model_data_ != nullptr) {
+            multinet_->clean(multinet_model_data_);
+        }
+        multinet_utterance_active_ = true;
+        return;
+    }
+
+    if (kind == InferenceKind::UtteranceEnd) {
+        if (multinet_utterance_active_ && multinet_ != nullptr && multinet_model_data_ != nullptr) {
+            multinet_->clean(multinet_model_data_);
+        }
+        multinet_utterance_active_ = false;
+        return;
+    }
+
+    if (kind != InferenceKind::Data || !multinet_utterance_active_ ||
+        candidate_pending_.load() || multinet_ == nullptr || multinet_model_data_ == nullptr ||
+        item.sample_count != static_cast<uint16_t>(multinet_chunk_size_)) {
+        return;
+    }
+
+    const uint32_t lag_ms = static_cast<uint32_t>(
+        std::max<int64_t>(0, esp_timer_get_time() - static_cast<int64_t>(item.enqueued_at_us)) / 1000);
+    uint32_t previous_lag = mn_decision_lag_max_ms_.load();
+    while (lag_ms > previous_lag &&
+           !mn_decision_lag_max_ms_.compare_exchange_weak(previous_lag, lag_ms)) {
+    }
+
+    const int64_t started_at = esp_timer_get_time();
+    const auto state = multinet_->detect(multinet_model_data_, item.samples);
+    const uint32_t elapsed_us = static_cast<uint32_t>(
+        std::max<int64_t>(0, esp_timer_get_time() - started_at));
+    ++mn_detect_frame_count_;
+    mn_detect_total_us_ += elapsed_us;
+    mn_detect_max_us_ = std::max(mn_detect_max_us_, elapsed_us);
+
+    if (state == ESP_MN_STATE_DETECTED) {
+        ++mn_detected_count_;
+        auto* result_data = multinet_->get_results(multinet_model_data_);
+        if (result_data != nullptr && result_data->num > 0 && result_data->command_id[0] == 1) {
+            const float score = std::clamp(result_data->prob[0], 0.0f, 1.0f);
+            candidate_score_pending_.store(score);
+            candidate_pending_.store(true);
+            ESP_LOGI(kTag, "local wake candidate=huahua score=%0.4f vad=speech", score);
+        }
+        multinet_->clean(multinet_model_data_);
+        multinet_utterance_active_ = false;
+        drainInferenceQueue();
+        inference_end_pending_.store(false);
+        return;
+    }
+
+    if (state == ESP_MN_STATE_TIMEOUT) {
+        ++mn_timeout_count_;
+        multinet_->clean(multinet_model_data_);
+        multinet_utterance_active_ = false;
+        drainInferenceQueue();
+        inference_end_pending_.store(false);
+    }
+}
+
+void LiHuahuaWake::multinetTaskLoop() {
+    while (running_.load()) {
+        if (paused_.load()) {
+            applyMultinetResetIfRequested();
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+            continue;
+        }
+        applyMultinetResetIfRequested();
+        size_t item_size = 0;
+        void* raw = inference_ring_ != nullptr
+                        ? xRingbufferReceive(inference_ring_, &item_size, pdMS_TO_TICKS(100))
+                        : nullptr;
+        if (raw == nullptr) {
+            maybeLogTelemetry();
+            continue;
+        }
+        mn_queue_depth_frames_.fetch_sub(1);
+        if (item_size == sizeof(InferenceItem)) {
+            processInferenceItem(*static_cast<InferenceItem*>(raw));
+        }
+        vRingbufferReturnItem(inference_ring_, raw);
+        maybeLogTelemetry();
+    }
+
+    applyMultinetResetIfRequested();
+    drainInferenceQueue();
+    if (multinet_utterance_active_ && multinet_model_data_ != nullptr && multinet_ != nullptr) {
+        multinet_->clean(multinet_model_data_);
+    }
+    multinet_utterance_active_ = false;
+    task_alive_mask_.fetch_and(~kMultinetTaskBit);
+    multinet_task_ = nullptr;
 }
 
 void LiHuahuaWake::maybeLogTelemetry() {
@@ -657,17 +848,27 @@ void LiHuahuaWake::maybeLogTelemetry() {
     const uint32_t average_us = mn_detect_frame_count_ == 0
                                     ? 0
                                     : static_cast<uint32_t>(mn_detect_total_us_ / mn_detect_frame_count_);
+    const uint32_t min_free_milli = afe_ringbuffer_min_free_pct_milli_.load();
     ESP_LOGI(kTag, "MN_DETECT_FRAME_COUNT=%u MN_DETECT_AVG_US=%u MN_DETECT_MAX_US=%u",
              static_cast<unsigned>(mn_detect_frame_count_), static_cast<unsigned>(average_us),
              static_cast<unsigned>(mn_detect_max_us_));
+    ESP_LOGI(kTag, "MN_QUEUE_DEPTH_FRAMES=%u MN_QUEUE_HIGH_WATER_FRAMES=%u "
+                   "MN_QUEUE_OVERFLOW_COUNT=%u MN_DECISION_LAG_MAX_MS=%u MN_KWS_WINDOW_MS=%u",
+             static_cast<unsigned>(mn_queue_depth_frames_.load()),
+             static_cast<unsigned>(mn_queue_high_water_frames_.load()),
+             static_cast<unsigned>(mn_queue_overflow_count_.load()),
+             static_cast<unsigned>(mn_decision_lag_max_ms_.load()),
+             static_cast<unsigned>(kKwsWindowMs));
     ESP_LOGI(kTag, "AFE_FETCH_FRAME_SAMPLES=%d MN_CHUNK_SAMPLES=%d VAD_CACHE_BYTES_LAST=%u "
                    "VAD_SPEECH_TRANSITIONS=%u MN_DETECTED_COUNT=%u MN_TIMEOUT_COUNT=%u",
              afe_fetch_samples_, multinet_chunk_size_, static_cast<unsigned>(vad_cache_bytes_last_),
              static_cast<unsigned>(vad_speech_transitions_), static_cast<unsigned>(mn_detected_count_),
              static_cast<unsigned>(mn_timeout_count_));
-    ESP_LOGI(kTag, "VAD_CACHE_USED=%s AFE_RINGBUFFER_FULL=%u",
-             vad_cache_bytes_last_ > 0 ? "YES" : "NO",
-             static_cast<unsigned>(afe_ringbuffer_full_count_));
+    ESP_LOGI(kTag, "AFE_RINGBUF_MIN_FREE_PCT=%0.1f AFE_FEED_OVERFLOW=%u "
+                   "MN_INFERENCE_OVERFLOW_CURRENT_UTTERANCE=%s",
+             static_cast<float>(min_free_milli) / 1000.0f,
+             static_cast<unsigned>(afe_ringbuffer_overflow_count_.load()),
+             kws_overflow_current_utterance_.load() ? "YES" : "NO");
 }
 
 void LiHuahuaWake::enqueueCallback(std::vector<int16_t>&& pcm, float score) {
@@ -709,43 +910,53 @@ void LiHuahuaWake::callbackTaskLoop() {
 void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
     if (result == nullptr || result->data == nullptr || result->data_size <= 0) return;
     if (!running_.load() || paused_.load()) return;
-    applyMultinetResetIfRequested();
     std::lock_guard<std::mutex> state_lock(state_mutex_);
     if (!running_.load() || paused_.load()) return;
+
     const size_t samples = static_cast<size_t>(result->data_size) / sizeof(int16_t);
     if ((result->data_size % static_cast<int>(sizeof(int16_t))) != 0) {
         ESP_LOGW(kTag, "AFE_DATA_ODD_BYTES=%d", result->data_size);
     }
     std::vector<int16_t> frame(result->data, result->data + samples);
     pushRing(frame);
-    const bool speech = result->vad_state == VAD_SPEECH;
-    if (result->ringbuff_free_pct <= 0.0f) ++afe_ringbuffer_full_count_;
+    const float free_pct = std::clamp(result->ringbuff_free_pct, 0.0f, 100.0f);
+    const uint32_t free_milli = static_cast<uint32_t>(free_pct * 1000.0f);
+    uint32_t previous_free = afe_ringbuffer_min_free_pct_milli_.load();
+    while (free_milli < previous_free &&
+           !afe_ringbuffer_min_free_pct_milli_.compare_exchange_weak(previous_free, free_milli)) {
+    }
+    if (free_pct <= 0.0f) afe_ringbuffer_overflow_count_.fetch_add(1);
 
+    const bool speech = result->vad_state == VAD_SPEECH;
     bool started_capture = false;
     if (candidate_pending_.exchange(false) && mode_.load() == Mode::Idle) {
         candidate_score_ = std::clamp(candidate_score_pending_.load(), 0.0f, 1.0f);
         beginCapture();
-        // beginCapture() snapshots the ring after this frame was inserted, so
-        // appending it a second time would duplicate the boundary frame.
         started_capture = true;
     }
 
     if (mode_.load() == Mode::Capture) {
         if (!started_capture) appendCapture(frame, speech);
-        maybeLogTelemetry();
         return;
     }
 
     if (speech && !vad_speech_active_) {
         vad_speech_active_ = true;
         ++vad_speech_transitions_;
-        multinet_->clean(multinet_model_data_);
-        kws_buffer_.clear();
+        kws_utterance_active_ = true;
+        kws_input_samples_ = 0;
+        kws_enqueue_buffer_.clear();
+        kws_overflow_current_utterance_.store(false);
+        if (inference_end_pending_.load() || !enqueueInferenceMarker(InferenceKind::UtteranceStart)) {
+            kws_overflow_current_utterance_.store(true);
+            mn_queue_overflow_count_.fetch_add(1);
+            ESP_LOGW(kTag, "MN_INFERENCE_OVERFLOW_CURRENT_UTTERANCE=YES");
+        }
         vad_cache_bytes_last_ = result->vad_cache_size > 0 ? static_cast<uint32_t>(result->vad_cache_size) : 0;
         if (result->vad_cache != nullptr && result->vad_cache_size > 0) {
             if ((result->vad_cache_size % static_cast<int>(sizeof(int16_t))) == 0) {
-                processMultinetSamples(result->vad_cache,
-                                       static_cast<size_t>(result->vad_cache_size) / sizeof(int16_t));
+                enqueueKwsSamples(result->vad_cache,
+                                  static_cast<size_t>(result->vad_cache_size) / sizeof(int16_t));
             } else {
                 ESP_LOGW(kTag, "VAD_CACHE_ODD_BYTES=%d", result->vad_cache_size);
             }
@@ -754,21 +965,20 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
                  static_cast<unsigned>(vad_cache_bytes_last_));
     }
 
-    // V1 remains VAD-gated, but MultiNet now runs synchronously on this AFE
-    // fetch task so it sees one continuous utterance without an intermediate
-    // queue that can reset the model under normal speech load.
     if (!speech) {
         if (vad_speech_active_) {
-            multinet_->clean(multinet_model_data_);
-            kws_buffer_.clear();
+            kws_enqueue_buffer_.clear();
+            kws_utterance_active_ = false;
+            if (!enqueueInferenceMarker(InferenceKind::UtteranceEnd)) {
+                inference_end_pending_.store(true);
+            }
             vad_speech_active_ = false;
             ESP_LOGI(kTag, "VAD_SPEECH_TRANSITION=END");
         }
-        maybeLogTelemetry();
         return;
     }
-    processMultinetSamples(frame.data(), frame.size());
-    maybeLogTelemetry();
+
+    enqueueKwsSamples(frame.data(), frame.size());
 }
 
 void LiHuahuaWake::pushRing(const std::vector<int16_t>& frame) {
@@ -814,7 +1024,7 @@ void LiHuahuaWake::finishCapture() {
     silence_ms_ = 0;
     capture_ms_ = 0;
     candidate_score_ = 0.0f;
-    multinet_reset_requested_.store(true);
+    requestMultinetReset();
     vad_speech_active_ = false;
     enqueueCallback(std::move(pcm), score);
 }
