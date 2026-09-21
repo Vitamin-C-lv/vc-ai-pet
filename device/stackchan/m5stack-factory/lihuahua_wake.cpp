@@ -998,6 +998,10 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
         const uint32_t previous_generation = latest_utterance_generation_.load();
         kws_utterance_generation_ = latest_utterance_generation_.fetch_add(1) + 1;
         if (previous_generation != 0) mn_generations_superseded_.fetch_add(1);
+        // This metric describes the generation that is currently eligible to
+        // produce a candidate. A superseded generation's historical peak is
+        // intentionally not reported as latency of the new utterance.
+        mn_latest_generation_lag_max_ms_.store(0);
         // A failed end marker can only belong to an older generation. It
         // must not prevent the newest utterance from entering the queue.
         inference_end_pending_.store(false);
