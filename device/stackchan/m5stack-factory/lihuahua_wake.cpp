@@ -828,6 +828,11 @@ void LiHuahuaWake::multinetTaskLoop() {
             processInferenceItem(*static_cast<InferenceItem*>(raw));
         }
         vRingbufferReturnItem(inference_ring_, raw);
+        // MultiNet can take tens of milliseconds per frame.  Leave one
+        // scheduler tick after each item so CPU1's idle task can run and
+        // service the task watchdog while the higher-priority AFE fetch task
+        // remains free to keep the capture path real-time.
+        vTaskDelay(1);
         maybeLogTelemetry();
     }
 
