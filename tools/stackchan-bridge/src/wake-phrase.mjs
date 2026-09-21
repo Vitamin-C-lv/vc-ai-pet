@@ -52,3 +52,51 @@ export function classifyWakeTranscript(transcript, candidate = 'huahua') {
     wakeOnly: query.length === 0,
   }
 }
+
+
+export function evaluateWakeRecognition({
+  wakeText,
+  wakeConfidence,
+  fullText,
+  candidate = 'huahua',
+  stage1Score = 1,
+  stage1MinScore = 0,
+  stage2MinConfidence = 0,
+}) {
+  const classified = classifyWakeTranscript(wakeText, candidate)
+  if (!classified.confirmed) {
+    return {
+      accepted: false,
+      reason: 'wake-verifier-rejected',
+      wakeKind: null,
+      query: '',
+      wakeOnly: false,
+    }
+  }
+  if (!Number.isFinite(stage1Score) || stage1Score < stage1MinScore) {
+    return {
+      accepted: false,
+      reason: 'stage1-score-rejected',
+      wakeKind: classified.wakeKind,
+      query: '',
+      wakeOnly: false,
+    }
+  }
+  if (!Number.isFinite(wakeConfidence) || wakeConfidence < stage2MinConfidence) {
+    return {
+      accepted: false,
+      reason: 'wake-confidence-rejected',
+      wakeKind: classified.wakeKind,
+      query: '',
+      wakeOnly: false,
+    }
+  }
+  const query = stripWakePhrase(fullText, classified.wakeKind)
+  return {
+    accepted: true,
+    reason: 'wake-confirmed',
+    wakeKind: classified.wakeKind,
+    query,
+    wakeOnly: query.length === 0,
+  }
+}

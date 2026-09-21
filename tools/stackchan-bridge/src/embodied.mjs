@@ -9,7 +9,7 @@ import { mapPetStateToBodyContract } from './contract.mjs'
 import { isAllowedLanAddress } from './lan-guard.mjs'
 import { hasValidBodyKey, loadBodyKey } from './body-auth.mjs'
 import { TurnSpeechAggregator } from './turn-speech-aggregator.mjs'
-import { classifyWakeTranscript, stripWakePhrase } from './wake-phrase.mjs'
+import { evaluateWakeRecognition, stripWakePhrase } from './wake-phrase.mjs'
 import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
@@ -270,58 +270,92 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
     status.wake.stage1Score = stage1Score
     status.wake.status = 'transcribing'
     const recognition = await transcribeLocal(pcmPath, sampleRate, { wakeMode: true })
-    const transcript = typeof recognition?.text === 'string' ? recognition.text : ''
-    const confidence = Number(recognition?.confidence ?? 0)
-    status.wake.transcript = transcript
+    const fullText = typeof recognition?.text === 'string' ? recognition.text : ''
+    const fullConfidence = Number(recognition?.confidence ?? 0)
+    const wakeText = typeof recognition?.wakeText === 'string' ? recognition.wakeText : ''
+    const wakeConfidence = Number(recognition?.wakeConfidence ?? 0)
+    status.wake.transcript = fullText
+    status.wake.fullTranscript = fullText
+    status.wake.wakeText = wakeText
+    status.wake.wakeConfidence = Number.isFinite(wakeConfidence) ? wakeConfidence : 0
     status.wake.vosk = {
       words: Array.isArray(recognition?.words) ? recognition.words : [],
-      confidence: Number.isFinite(confidence) ? confidence : 0,
+      confidence: Number.isFinite(fullConfidence) ? fullConfidence : 0,
+    }
+    status.wake.wakeVerifier = {
+      words: Array.isArray(recognition?.wakeWords) ? recognition.wakeWords : [],
+      confidence: Number.isFinite(wakeConfidence) ? wakeConfidence : 0,
+      grammarSupported: recognition?.grammarSupported !== false,
+    }
+    if (recognition?.grammarSupported === false) {
+      console.warn('WAKE_GRAMMAR_SUPPORTED=NO MISSING_WORD=' + String(recognition?.missingWord ?? '花花'))
+    } else {
+      status.wake.wakeVerifier.grammar = 'PASS'
     }
 
     if (wakeSession.state === 'LISTENING') {
-      const accepted = wakeSession.acceptFollowUp(stripWakePhrase(transcript, candidate))
+      const accepted = wakeSession.acceptFollowUp(stripWakePhrase(fullText, candidate))
       if (!accepted.accepted) {
         status.wake.status = accepted.reason
         return
       }
       status.wake.status = accepted.kind
       status.wake.query = accepted.query
+      status.wake.finalDecision = accepted.kind
       status.wake.voice = await askHuahuaByVoice(accepted.query)
       return
     }
 
-    const classified = classifyWakeTranscript(transcript, candidate)
-    status.wake.wakeKind = classified.wakeKind
-    if (!classified.confirmed || !wakePolicy[classified.wakeKind]) {
-      status.wake.status = 'candidate-rejected'
-      return
+    const policyCandidate = evaluateWakeRecognition({
+      wakeText,
+      wakeConfidence,
+      fullText,
+      candidate,
+      stage1Score,
+      stage1MinScore: 0,
+      stage2MinConfidence: 0,
+    })
+    status.wake.wakeKind = policyCandidate.wakeKind
+    const policy = policyCandidate.wakeKind ? wakePolicy[policyCandidate.wakeKind] : null
+    if (policy) {
+      status.wake.policy = {
+        name: policy.policy,
+        stage1MinScore: policy.stage1MinScore,
+        stage2MinConfidence: policy.stage2MinConfidence,
+        calibration: 'PROVISIONAL_UNCALIBRATED',
+      }
     }
-    const policy = wakePolicy[classified.wakeKind]
-    status.wake.policy = {
-      name: policy.policy,
-      stage1MinScore: policy.stage1MinScore,
-      stage2MinConfidence: policy.stage2MinConfidence,
-      calibration: 'PROVISIONAL_UNCALIBRATED',
-    }
-    if (stage1Score < policy.stage1MinScore) {
-      status.wake.status = 'stage1-score-rejected'
-      return
-    }
-    if (!Number.isFinite(confidence) || confidence < policy.stage2MinConfidence) {
-      status.wake.status = 'stage2-confidence-rejected'
+    const decision = evaluateWakeRecognition({
+      wakeText,
+      wakeConfidence,
+      fullText,
+      candidate,
+      stage1Score,
+      stage1MinScore: policy?.stage1MinScore ?? 1,
+      stage2MinConfidence: policy?.stage2MinConfidence ?? 1,
+    })
+    status.wake.wakeKind = decision.wakeKind
+    if (!decision.accepted) {
+      status.wake.status = decision.reason === 'wake-verifier-rejected'
+        ? 'candidate-rejected'
+        : decision.reason
+      status.wake.finalDecision = status.wake.status
       return
     }
     if (!wakeSession.beginCandidate()) {
       status.wake.status = 'session-busy'
+      status.wake.finalDecision = status.wake.status
       return
     }
-    const accepted = wakeSession.acceptWake(classified.query)
+    const accepted = wakeSession.acceptWake(decision.query)
     if (!accepted.accepted) {
       status.wake.status = accepted.reason
+      status.wake.finalDecision = status.wake.status
       return
     }
     status.wake.status = accepted.kind
     status.wake.query = accepted.query
+    status.wake.finalDecision = accepted.kind
     if (accepted.kind === 'query') status.wake.voice = await askHuahuaByVoice(accepted.query)
   } finally {
     await unlink(pcmPath).catch(() => {})
