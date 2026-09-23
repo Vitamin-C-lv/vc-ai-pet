@@ -1,5 +1,13 @@
 # VC AI Pet — Project State
 
+## 2026-09-23 — 花花本机 VAD 唤醒路径（真实验收中）
+
+用户改为优先使用不等官方专属模型的本机方案，并接受实体设备把 VAD 人声片段发给本机 PC 离线识别；未提交公开唤醒词请求。固件保留原 MultiNet 候选，同时对 VAD 语音发送有界片段；Bridge 只在本机运行 Vosk 双路识别，普通 VAD 候选须由开放识别结果与限定词识别共同确认。音频在识别结束后、任何后续提问处理前删除；校准录音不进入对话。修复限定词识别为“花花”而开放识别为“画画”时误转发“画画”提问的问题。
+
+在固定 canonical staging 中构建成功，新 app 4,564,832 bytes，小于 ota_1 容量。首轮写入和镜像校验通过，但部署脚本的 selector 读回额外触发重启，导致 ota_1 被标记 ABORTED 并退回 ota_0；已修复读回重启顺序，并在不重复写 app 的前提下复核镜像、重选 ota_1。随后真实启动日志确认 `Loaded app ... 0x510000`、`partition=ota_1, state=1` 和 app 标记 valid；ota_0 应用区未写入。Bridge 收到真实 VAD 片段，非唤醒语音被拒绝，临时 PCM 删除。
+
+用户首轮实测“花花在吗”三次才有反应。日志显示“花花在吗”被开放识别成“花花在忙”，旧策略曾把“在忙”错误转成提问；本机判定现已据此修正并部署，等待修正后的再次实测。当前不能声称唤醒体验已最终验收。Pet `/api/pet/state` 可返回 200；Bridge event feed 曾短时报告 `fetch failed`，需继续观察。公开词模型请求未提交。
+
 ## 2026-09-23 — StackChan WSL 启动恢复
 
 新增 `scripts/stackchan/systemd/` 下的两个系统服务：WSL 启动时调用现有 `ensure-server.sh` 恢复主 DSH/Pet 上游，然后启动带 Body Key 的 StackChan Bridge。Bridge 绑定 WSL 回环地址，Windows `192.168.1.70:17871` 只转发到 `127.0.0.1:17871`，不再依赖会变化的 WSL IPv4。两个服务已安装并启用；现有 `17870`、Tailscale 转发和防火墙规则未改。

@@ -35,9 +35,10 @@ def esptool_main(port: str, *args: str) -> None:
     esptool.main(["--chip", "esp32s3", "--port", port, "--baud", "115200", *args])
 
 
-def read_otadata(port: str, output: Path) -> bytes:
+def read_otadata(port: str, output: Path, *, no_reset: bool = False) -> bytes:
     output.unlink(missing_ok=True)
-    esptool_main(port, "read_flash", hex(OTA_DATA_OFFSET), hex(OTADATA_SIZE), str(output))
+    after = ("--after", "no_reset") if no_reset else ()
+    esptool_main(port, *after, "read_flash", hex(OTA_DATA_OFFSET), hex(OTADATA_SIZE), str(output))
     metadata = output.read_bytes()
     if len(metadata) != OTADATA_SIZE:
         raise SystemExit("OTADATA_READ_LENGTH_INVALID")
@@ -63,7 +64,10 @@ def write_selector_and_verify(
         hex(offset),
         str(selector_path),
     )
-    readback = read_otadata(port, readback_path)
+    # Keep the chip in the bootloader until capture_boot() performs the one
+    # observed app boot. A readback reset here can start NEW -> PENDING_VERIFY,
+    # and the next reset would immediately mark ota_1 ABORTED.
+    readback = read_otadata(port, readback_path, no_reset=True)
     selector = decode_selector(readback, copy)
     if not selector.valid or selector.sequence != seq or selector.slot != (seq - 1) % 2:
         raise SystemExit(f"OTADATA_READBACK_INVALID:copy={copy}:seq={seq}")
@@ -108,6 +112,8 @@ def main() -> int:
     parser.add_argument("--port", default="COM5")
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--resume-verified-ota1", action="store_true",
+                        help="verify the already-written ota_1 image, then select and observe one boot")
     args = parser.parse_args()
 
     image = args.image.resolve()
@@ -119,25 +125,29 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="lihuahua-ota1-") as temporary:
         temp = Path(temporary)
-        # Read fresh metadata for this mutation and select the inactive copy.
-        metadata = read_otadata(args.port, temp / "otadata-before-ota0.bin")
-        ota0_selector = temp / "select-ota0.bin"
-        ota0_copy, ota0_seq = next_selector_update(metadata, slot=0)
-        write_selector_and_verify(
-            args.port,
-            metadata,
-            ota0_copy,
-            ota0_seq,
-            ota0_selector,
-            temp / "otadata-after-ota0-selector.bin",
-            state=OTA_IMG_VALID,
-        )
-        ota0_log = capture_boot(args.port, evidence / "ota0-safety-boot.log")
-        if "Loaded app from partition at offset 0x20000" not in ota0_log:
-            raise SystemExit("OTA0_SAFETY_BOOT_NOT_PROVEN")
+        if not args.resume_verified_ota1:
+            # Read fresh metadata for this mutation and select the inactive copy.
+            metadata = read_otadata(args.port, temp / "otadata-before-ota0.bin")
+            ota0_selector = temp / "select-ota0.bin"
+            ota0_copy, ota0_seq = next_selector_update(metadata, slot=0)
+            write_selector_and_verify(
+                args.port,
+                metadata,
+                ota0_copy,
+                ota0_seq,
+                ota0_selector,
+                temp / "otadata-after-ota0-selector.bin",
+                state=OTA_IMG_VALID,
+            )
+            ota0_log = capture_boot(args.port, evidence / "ota0-safety-boot.log")
+            if "Loaded app from partition at offset 0x20000" not in ota0_log:
+                raise SystemExit("OTA0_SAFETY_BOOT_NOT_PROVEN")
 
-        # A failed write/verify raises here, so no ota_1 selector is changed.
-        write_ota1_image_and_verify(args.port, image)
+            # A failed write/verify raises here, so no ota_1 selector is changed.
+            write_ota1_image_and_verify(args.port, image)
+        else:
+            # Resume only when the exact image is still present in ota_1.
+            esptool_main(args.port, "verify_flash", hex(OTA_1_OFFSET), str(image))
 
         # Read fresh metadata after the image transaction.  Boot state changes
         # may have modified either copy, so stale metadata must never plan this
@@ -165,7 +175,7 @@ def main() -> int:
 
     print(f"OTA1_IMAGE_BYTES={len(image_bytes)}")
     print("OTA0_APP_WRITES=0")
-    print("OTA1_WRITE_VERIFIED=YES")
+    print("OTA1_WRITE_VERIFIED=YES" if not args.resume_verified_ota1 else "OTA1_IMAGE_REVERIFIED=YES")
     print("OTA1_FIRST_BOOT_VALIDATED=YES")
     return 0
 

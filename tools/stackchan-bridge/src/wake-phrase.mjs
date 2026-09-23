@@ -74,7 +74,9 @@ export function evaluateWakeRecognition({
     }
   }
   const normalizedFull = normalizeWakeText(fullText)
-  const wakeKind = normalizedFull.startsWith('花花在吗') ? 'huahua_zaima' : 'huahua'
+  const verifiedZaima = normalizeWakeText(wakeText).startsWith('花花在吗')
+  const zaimaMisheard = verifiedZaima && (normalizedFull === '花在吗' || normalizedFull === '花花在忙')
+  const wakeKind = normalizedFull.startsWith('花花在吗') || zaimaMisheard ? 'huahua_zaima' : 'huahua'
   if (!Number.isFinite(stage1Score) || stage1Score < stage1MinScore) {
     return {
       accepted: false,
@@ -93,6 +95,17 @@ export function evaluateWakeRecognition({
       wakeOnly: false,
     }
   }
+  // The constrained recognizer can confirm the wake phrase while the open
+  // recognizer hears a homophone. Never forward that mismatch as a query.
+  if (zaimaMisheard) {
+    return { accepted: true, reason: 'wake-confirmed-zaima', wakeKind, query: '', wakeOnly: true }
+  }
+  if (normalizedFull && !normalizedFull.startsWith('花花')) {
+    if (normalizedFull === '画画') {
+      return { accepted: true, reason: 'wake-confirmed-homophone', wakeKind, query: '', wakeOnly: true }
+    }
+    return { accepted: false, reason: 'full-transcript-mismatch', wakeKind, query: '', wakeOnly: false }
+  }
   const query = stripWakePhrase(fullText, wakeKind)
   return {
     accepted: true,
@@ -101,4 +114,27 @@ export function evaluateWakeRecognition({
     query,
     wakeOnly: query.length === 0,
   }
+}
+
+export function evaluateVadWakeRecognition({ wakeText, wakeConfidence, fullText, fullConfidence }) {
+  const verifier = classifyWakeTranscript(wakeText)
+  const full = normalizeWakeText(fullText)
+  const zaimaVariant = (full === '花在吗' || full === '花花在忙') &&
+    normalizeWakeText(wakeText).startsWith('花花在吗')
+  if (!verifier.confirmed || !Number.isFinite(wakeConfidence) || wakeConfidence < 0.8 ||
+      !Number.isFinite(fullConfidence) || fullConfidence < (zaimaVariant ? 0.5 : 0.6)) {
+    return { accepted: false, reason: 'vad-verifier-rejected', wakeKind: null, query: '', wakeOnly: false }
+  }
+  // A grammar recognizer alone can confidently hallucinate "花花" on other
+  // speech. The open recognizer must independently hear the phrase, except
+  // for this calibrated one-character omission in "花花在吗".
+  if (zaimaVariant) {
+    return { accepted: true, reason: 'wake-confirmed', wakeKind: 'huahua_zaima', query: '', wakeOnly: true }
+  }
+  if (!full.startsWith('花花')) {
+    return { accepted: false, reason: 'vad-full-transcript-mismatch', wakeKind: null, query: '', wakeOnly: false }
+  }
+  const wakeKind = full.startsWith('花花在吗') ? 'huahua_zaima' : 'huahua'
+  const query = stripWakePhrase(fullText, wakeKind)
+  return { accepted: true, reason: 'wake-confirmed', wakeKind, query, wakeOnly: !query }
 }

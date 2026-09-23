@@ -9,7 +9,7 @@ import { mapPetStateToBodyContract } from './contract.mjs'
 import { isAllowedLanAddress } from './lan-guard.mjs'
 import { hasValidBodyKey, loadBodyKey } from './body-auth.mjs'
 import { TurnSpeechAggregator } from './turn-speech-aggregator.mjs'
-import { evaluateWakeRecognition, stripWakePhrase } from './wake-phrase.mjs'
+import { evaluateWakeRecognition, evaluateVadWakeRecognition, stripWakePhrase } from './wake-phrase.mjs'
 import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
@@ -64,6 +64,8 @@ const status = {
 }
 let capture = false
 let record = false
+let recordForCalibration = false
+let wakeProcessing = false
 let audioQueue = []
 let inFlightAudio = null
 let speechQueue = []
@@ -262,6 +264,18 @@ async function processMicrophone(pcmPath) {
   status.microphone.voice = await askHuahuaByVoice(transcript)
 }
 
+async function processCalibrationMicrophone(pcmPath) {
+  try {
+    const recognition = await transcribeLocal(pcmPath, 24000, { wakeMode: true })
+    status.microphone ??= {}
+    status.microphone.calibration = recognition
+    status.microphone.voice = { status: 'suppressed-for-calibration' }
+  } finally {
+    await unlink(pcmPath).catch(() => {})
+    status.microphone.audioFile = 'deleted'
+  }
+}
+
 async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
   status.wake ??= {}
   try {
@@ -270,6 +284,8 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
     status.wake.stage1Score = stage1Score
     status.wake.status = 'transcribing'
     const recognition = await transcribeLocal(pcmPath, sampleRate, { wakeMode: true })
+    await unlink(pcmPath).catch(() => {})
+    status.wake.audioFile = 'deleted'
     const fullText = typeof recognition?.text === 'string' ? recognition.text : ''
     const fullConfidence = Number(recognition?.confidence ?? 0)
     const wakeText = typeof recognition?.wakeText === 'string' ? recognition.wakeText : ''
@@ -327,15 +343,20 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
         calibration: 'PROVISIONAL_UNCALIBRATED',
       }
     }
-    const decision = evaluateWakeRecognition({
-      wakeText,
-      wakeConfidence,
-      fullText,
-      candidate,
-      stage1Score,
-      stage1MinScore: policy?.stage1MinScore ?? 1,
-      stage2MinConfidence: policy?.stage2MinConfidence ?? 1,
-    })
+    let decision = candidate === 'vad'
+      ? evaluateVadWakeRecognition({ wakeText, wakeConfidence, fullText, fullConfidence })
+      : evaluateWakeRecognition({
+        wakeText, wakeConfidence, fullText, candidate, stage1Score,
+        stage1MinScore: policy?.stage1MinScore ?? 1,
+        stage2MinConfidence: policy?.stage2MinConfidence ?? 1,
+      })
+    if (candidate === 'huahua' && !decision.accepted) {
+      const fallback = evaluateVadWakeRecognition({ wakeText, wakeConfidence, fullText, fullConfidence })
+      if (fallback.accepted) {
+        decision = fallback
+        status.wake.policy = { name: 'LOCAL_VAD_FALLBACK', calibration: 'PROVISIONAL_UNCALIBRATED' }
+      }
+    }
     status.wake.wakeKind = decision.wakeKind
     if (!decision.accepted) {
       status.wake.status = decision.reason === 'wake-verifier-rejected'
@@ -518,8 +539,12 @@ const server = createServer(async (req, res) => {
       const pcm = await body(req)
       const pcmPath = join(data, 'microphone.pcm')
       await writeFile(pcmPath, pcm)
-      status.microphone = { at: new Date().toISOString(), bytes: pcm.length, sampleRate: 24000, voice: { status: 'running' } }
-      void processMicrophone(pcmPath).then(() => console.log('MICROPHONE', JSON.stringify(status.microphone))).catch((error) => {
+      const calibrationOnly = recordForCalibration
+      recordForCalibration = false
+      status.microphone = { at: new Date().toISOString(), bytes: pcm.length, sampleRate: 24000,
+        voice: { status: calibrationOnly ? 'calibrating' : 'running' } }
+      const process = calibrationOnly ? processCalibrationMicrophone : processMicrophone
+      void process(pcmPath).then(() => console.log('MICROPHONE', JSON.stringify(status.microphone))).catch((error) => {
         status.microphone.voice = { status: 'error', error: error.message }
         console.error('MICROPHONE_ERROR', error.message)
       })
@@ -530,12 +555,19 @@ const server = createServer(async (req, res) => {
       const candidate = String(req.headers['x-lihuahua-wake-candidate'] ?? 'huahua')
       const stage1Score = Number(req.headers['x-lihuahua-wake-score'] ?? NaN)
       if (sampleRate !== 16000) return json(res, 400, { error: 'wake-audio-rate-must-be-16000' })
-      if (candidate !== 'huahua') return json(res, 400, { error: 'wake-candidate-invalid' })
+      if (candidate !== 'huahua' && candidate !== 'vad') return json(res, 400, { error: 'wake-candidate-invalid' })
       if (!Number.isFinite(stage1Score) || stage1Score < 0 || stage1Score > 1) return json(res, 400, { error: 'wake-score-invalid' })
       const pcm = await body(req, 512 * 1024)
       if (pcm.length === 0 || pcm.length % 2 !== 0) return json(res, 400, { error: 'wake-pcm-invalid' })
+      if (wakeProcessing) return json(res, 429, { error: 'wake-processing-busy' })
       const pcmPath = join(data, 'wake.pcm')
-      await writeFile(pcmPath, pcm)
+      wakeProcessing = true
+      try {
+        await writeFile(pcmPath, pcm)
+      } catch (error) {
+        wakeProcessing = false
+        throw error
+      }
       status.wake = {
         at: new Date().toISOString(),
         bytes: pcm.length,
@@ -551,12 +583,16 @@ const server = createServer(async (req, res) => {
           status.wake = { ...(status.wake ?? {}), status: 'error', error: error.message }
           console.error('WAKE_ERROR', error.message)
         })
+        .finally(() => { wakeProcessing = false })
       return json(res, 202, { ok: true, accepted: true, bytes: pcm.length })
     }
     if (req.method === 'POST' && path === '/v1/body/control') {
       const value = JSON.parse(await body(req, 16 * 1024))
       if (value.capture) capture = true
-      if (value.record) record = true
+      if (value.record) {
+        record = true
+        recordForCalibration = value.calibrationOnly === true
+      }
       if (value.reprocessMicrophone) {
         const pcmPath = join(data, 'microphone.pcm')
         status.microphone = { ...(status.microphone ?? {}), voice: { status: 'running' } }

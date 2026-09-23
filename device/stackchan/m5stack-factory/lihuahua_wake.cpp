@@ -525,7 +525,7 @@ bool LiHuahuaWake::Start(AudioCodec* codec, WakeCallback callback) {
         codec_ = nullptr;
         return false;
     }
-    ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_GATED_MULTINET");
+    ESP_LOGI(kTag, "LOCAL_WAKE_STAGE1=AFE_VAD_WITH_MULTINET_CANDIDATE");
     ESP_LOGI(kTag, "LOCAL_WAKE_TASKS=FEED_CORE0P2_AFE_CORE0P3_FETCH_CORE1P5_MULTINET_CORE1P3_CALLBACK_CORE0P1");
     ESP_LOGI(kTag, "local wake started: MultiNet=%s preroll=%dms eos=%dms",
              multinet_name_, kPreRollMs, kEndSilenceMs);
@@ -948,7 +948,7 @@ void LiHuahuaWake::callbackTaskLoop() {
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
             continue;
         }
-        if (callback_) callback_(std::move(item.first), "huahua", item.second);
+        if (callback_) callback_(std::move(item.first), item.second > 0.0f ? "huahua" : "vad", item.second);
     }
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
@@ -980,15 +980,12 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
 
     const bool speech = result->vad_state == VAD_SPEECH;
     bool started_capture = false;
-    if (candidate_pending_.exchange(false) && mode_.load() == Mode::Idle) {
+    if (candidate_pending_.exchange(false)) {
         candidate_score_ = std::clamp(candidate_score_pending_.load(), 0.0f, 1.0f);
-        beginCapture();
-        started_capture = true;
-    }
-
-    if (mode_.load() == Mode::Capture) {
-        if (!started_capture) appendCapture(frame, speech);
-        return;
+        if (mode_.load() == Mode::Idle) {
+            beginCapture();
+            started_capture = true;
+        }
     }
 
     if (speech && !vad_speech_active_) {
@@ -1024,6 +1021,10 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
         }
         ESP_LOGI(kTag, "VAD_SPEECH_TRANSITION=START VAD_CACHE_BYTES=%u",
                  static_cast<unsigned>(vad_cache_bytes_last_));
+        if (mode_.load() == Mode::Idle) {
+            beginCapture();
+            started_capture = true;
+        }
     }
 
     if (!speech) {
@@ -1036,10 +1037,10 @@ void LiHuahuaWake::processAfeResult(const afe_fetch_result_t* result) {
             vad_speech_active_ = false;
             ESP_LOGI(kTag, "VAD_SPEECH_TRANSITION=END");
         }
-        return;
+    } else {
+        enqueueKwsSamples(frame.data(), frame.size());
     }
-
-    enqueueKwsSamples(frame.data(), frame.size());
+    if (mode_.load() == Mode::Capture && !started_capture) appendCapture(frame, speech);
 }
 
 void LiHuahuaWake::pushRing(const std::vector<int16_t>& frame) {
