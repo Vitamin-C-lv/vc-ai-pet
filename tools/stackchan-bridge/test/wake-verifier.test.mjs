@@ -126,6 +126,13 @@ assert.equal(decision.accepted, true)
 assert.equal(decision.wakeOnly, true)
 assert.equal(decision.query, '')
 
+decision = evaluateVadWakeRecognition({
+  wakeText: '花花 在 吗', wakeConfidence: 1, fullText: '画画 在 吗', fullConfidence: 0.721,
+})
+assert.equal(decision.accepted, true)
+assert.equal(decision.wakeOnly, true)
+assert.equal(decision.query, '')
+
 for (const [wakeConfidence, fullConfidence] of [[0.94, 0.714], [1, 0.69]]) {
   decision = evaluateVadWakeRecognition({
     wakeText: '花花 在 吗', wakeConfidence, fullText: '哈哈 在 吗', fullConfidence,
@@ -133,7 +140,7 @@ for (const [wakeConfidence, fullConfidence] of [[0.94, 0.714], [1, 0.69]]) {
   assert.equal(decision.accepted, false)
 }
 
-for (const fullText of ['画画', '怎么样', '阿花 在 啊', '我 在 吗']) {
+for (const fullText of ['画画', '画画看看', '怎么样', '阿花 在 啊', '我 在 吗']) {
   decision = evaluateVadWakeRecognition({
     wakeText: '花花', wakeConfidence: 1, fullText, fullConfidence: 1,
   })

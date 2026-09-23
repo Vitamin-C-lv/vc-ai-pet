@@ -126,10 +126,10 @@ export function evaluateVadWakeRecognition({ wakeText, wakeConfidence, fullText,
   const verifier = classifyWakeTranscript(wakeText)
   const full = normalizeWakeText(fullText)
   const verifiedZaima = normalizeWakeText(wakeText).startsWith('花花在吗')
-  const haHaVariant = full === '哈哈在吗' && verifiedZaima &&
+  const homophoneVariant = (full === '哈哈在吗' || full === '画画在吗') && verifiedZaima &&
     wakeConfidence >= 0.95 && fullConfidence >= 0.7
   const zaimaVariant = verifiedZaima &&
-    (full === '花在吗' || full === '花在了' || full === '花花在忙' || haHaVariant)
+    (full === '花在吗' || full === '花在了' || full === '花花在忙' || homophoneVariant)
   if (!verifier.confirmed || !Number.isFinite(wakeConfidence) || wakeConfidence < 0.8 ||
       !Number.isFinite(fullConfidence) || fullConfidence < (zaimaVariant ? 0.5 : 0.6)) {
     return { accepted: false, reason: 'vad-verifier-rejected', wakeKind: null, query: '', wakeOnly: false }
