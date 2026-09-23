@@ -32,6 +32,7 @@ function offlinePresentation() {
     dream: false,
     sleeping: false,
     thinking: false,
+    listening: false,
     speaking: false,
     avatar: 'lihuahua-default',
     expression: 'offline',
@@ -46,6 +47,7 @@ export function mapPetStateToBodyContract(petState, {
   observedAt = new Date().toISOString(),
   stateAgeMs = 0,
   speaking = false,
+  listening = false,
 } = {}) {
   const hasState = petState !== null && typeof petState === 'object' && !Array.isArray(petState)
   const isOnline = hasState
@@ -68,6 +70,7 @@ export function mapPetStateToBodyContract(petState, {
       dream,
       sleeping: mappedSleeping,
       thinking,
+      listening: listening === true,
       speaking: speaking === true,
       avatar: 'lihuahua-default',
       expression,

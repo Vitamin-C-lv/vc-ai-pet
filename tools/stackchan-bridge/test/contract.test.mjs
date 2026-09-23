@@ -37,10 +37,12 @@ for (const [visualState, expression, animation, actionCue, dream, thinking] of m
   assert.equal(contract.presentation.sleeping, dream || visualState === 'sleep', visualState)
   assert.equal(contract.presentation.thinking, thinking, visualState)
   assert.equal(contract.presentation.speaking, false, visualState)
+  assert.equal(contract.presentation.listening, false, visualState)
   assert.equal(contract.presentation.speechText, null, visualState)
 }
 
 assert.equal(mapPetStateToBodyContract(makeState('idle', { dream: true }), { observedAt: at }).presentation.expression, 'dreaming')
+assert.equal(mapPetStateToBodyContract(makeState('idle'), { observedAt: at, listening: true }).presentation.listening, true)
 
 const unknown = mapPetStateToBodyContract(makeState('custom-state'), { observedAt: at })
 assert.equal(unknown.presentation.visualState, 'custom-state')

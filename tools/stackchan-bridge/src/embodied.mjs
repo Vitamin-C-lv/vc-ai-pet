@@ -126,7 +126,7 @@ async function runSpeechWorker() {
     const item = speechQueue.shift()
     try {
       const pcm = await renderSpeech(item.text)
-      audioQueue.push({ id: item.id, pcm })
+      audioQueue.push({ id: item.id, pcm, kind: item.kind })
       status.speech = {
         queuedAt: new Date().toISOString(),
         bytes: pcm.length,
@@ -134,6 +134,7 @@ async function runSpeechWorker() {
         turnId: item.turnId ?? null,
       }
     } catch (error) {
+      if (item.kind === 'wake-ack') status.wake.ack = 'tts-failed'
       status.speech = {
         ...(status.speech ?? {}),
         failedAt: new Date().toISOString(),
@@ -148,10 +149,10 @@ async function runSpeechWorker() {
   refreshSpeaking()
 }
 
-function enqueueSpeech(text, { turnId = null } = {}) {
+function enqueueSpeech(text, { turnId = null, kind = null } = {}) {
   const value = typeof text === 'string' ? text.trim() : ''
   if (!value || value.length > 2000) return false
-  speechQueue.push({ id: `${Date.now().toString(36)}-${speechQueue.length}`, text: value, turnId })
+  speechQueue.push({ id: `${Date.now().toString(36)}-${speechQueue.length}`, text: value, turnId, kind })
   refreshSpeaking()
   void runSpeechWorker()
   return true
@@ -379,6 +380,10 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
     status.wake.status = accepted.kind
     status.wake.query = accepted.query
     status.wake.finalDecision = accepted.kind
+    if (accepted.kind === 'wake-only') {
+      wakeSession.prepareWakeAcknowledgment()
+      status.wake.ack = enqueueSpeech('我在。', { kind: 'wake-ack' }) ? 'queued' : 'failed'
+    }
     if (accepted.kind === 'query') status.wake.voice = await askHuahuaByVoice(accepted.query)
   } finally {
     await unlink(pcmPath).catch(() => {})
@@ -460,7 +465,10 @@ const server = createServer(async (req, res) => {
       status.deviceSeenAt = new Date().toISOString()
       status.stateRequests++
       refreshSpeaking()
-      return json(res, 200, mapPetStateToBodyContract(state, { reachable: true, observedAt: status.deviceSeenAt, stateAgeMs: 0, speaking }))
+      return json(res, 200, mapPetStateToBodyContract(state, {
+        reachable: true, observedAt: status.deviceSeenAt, stateAgeMs: 0,
+        speaking, listening: wakeSession.state === 'LISTENING',
+      }))
     }
     if (req.method === 'GET' && path === '/v1/body/commands') {
       const canPlay = !inFlightAudio && audioQueue.length > 0
@@ -488,6 +496,7 @@ const server = createServer(async (req, res) => {
       const value = JSON.parse(await body(req, 16 * 1024))
       status.lastAck = { ...value, at: new Date().toISOString() }
       if (value?.kind === 'speaker') {
+        if (inFlightAudio?.kind === 'wake-ack') status.wake.ack = value.ok === true ? 'acknowledged' : 'failed'
         inFlightAudio = null
         refreshSpeaking()
         status.speech = { ...(status.speech ?? {}), playback: value.ok === true ? 'acknowledged' : 'failed' }

@@ -106,6 +106,13 @@ assert.equal(decision.wakeKind, 'huahua_zaima')
 assert.equal(decision.query, '')
 
 decision = evaluateVadWakeRecognition({
+  wakeText: '花花 在 吗', wakeConfidence: 1, fullText: '花 在 了', fullConfidence: 0.576,
+})
+assert.equal(decision.accepted, true)
+assert.equal(decision.wakeKind, 'huahua_zaima')
+assert.equal(decision.query, '')
+
+decision = evaluateVadWakeRecognition({
   wakeText: '花花 在 吗', wakeConfidence: 1, fullText: '花 在 吗', fullConfidence: 0.656,
 })
 assert.equal(decision.accepted, true)

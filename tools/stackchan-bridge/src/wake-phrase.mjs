@@ -75,7 +75,8 @@ export function evaluateWakeRecognition({
   }
   const normalizedFull = normalizeWakeText(fullText)
   const verifiedZaima = normalizeWakeText(wakeText).startsWith('花花在吗')
-  const zaimaMisheard = verifiedZaima && (normalizedFull === '花在吗' || normalizedFull === '花花在忙')
+  const zaimaMisheard = verifiedZaima &&
+    (normalizedFull === '花在吗' || normalizedFull === '花在了' || normalizedFull === '花花在忙')
   const wakeKind = normalizedFull.startsWith('花花在吗') || zaimaMisheard ? 'huahua_zaima' : 'huahua'
   if (!Number.isFinite(stage1Score) || stage1Score < stage1MinScore) {
     return {
@@ -119,7 +120,7 @@ export function evaluateWakeRecognition({
 export function evaluateVadWakeRecognition({ wakeText, wakeConfidence, fullText, fullConfidence }) {
   const verifier = classifyWakeTranscript(wakeText)
   const full = normalizeWakeText(fullText)
-  const zaimaVariant = (full === '花在吗' || full === '花花在忙') &&
+  const zaimaVariant = (full === '花在吗' || full === '花在了' || full === '花花在忙') &&
     normalizeWakeText(wakeText).startsWith('花花在吗')
   if (!verifier.confirmed || !Number.isFinite(wakeConfidence) || wakeConfidence < 0.8 ||
       !Number.isFinite(fullConfidence) || fullConfidence < (zaimaVariant ? 0.5 : 0.6)) {

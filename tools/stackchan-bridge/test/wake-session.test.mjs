@@ -32,4 +32,16 @@ now = 9000
 assert.equal(session.acceptFollowUp('太晚了').accepted, false)
 assert.equal(transitions.some(({ state }) => state === WakeSessionState.LISTENING), true)
 
+now = 20_000
+assert.equal(session.beginCandidate(), true)
+assert.equal(session.acceptWake('').kind, 'wake-only')
+assert.equal(session.prepareWakeAcknowledgment(), true)
+session.markSpeaking(true)
+assert.equal(session.state, WakeSessionState.SPEAKING)
+now = 24_000
+session.markSpeaking(false)
+assert.equal(session.state, WakeSessionState.LISTENING)
+now = 29_000
+assert.equal(session.acceptFollowUp('你好').kind, 'follow-up')
+
 console.log('LOCAL_WAKE_PHRASE_SESSION_TEST=PASS')

@@ -17,6 +17,7 @@ export class WakeSession {
     this.listenUntil = 0
     this.lastActivity = this.now()
     this.speakingUntil = 0
+    this.resumeListeningAfterSpeech = false
   }
 
   setState(state) {
@@ -29,7 +30,14 @@ export class WakeSession {
   reset() {
     this.listenUntil = 0
     this.lastActivity = this.now()
+    this.resumeListeningAfterSpeech = false
     this.setState(WakeSessionState.IDLE)
+  }
+
+  prepareWakeAcknowledgment() {
+    if (this.state !== WakeSessionState.LISTENING) return false
+    this.resumeListeningAfterSpeech = true
+    return true
   }
 
   tick(at = this.now()) {
@@ -83,6 +91,14 @@ export class WakeSession {
       this.lastActivity = at
       this.speakingUntil = at + this.maxIdleMs
       this.setState(WakeSessionState.SPEAKING)
+      return
+    }
+    if (this.resumeListeningAfterSpeech) {
+      this.resumeListeningAfterSpeech = false
+      this.speakingUntil = at + this.cooldownMs
+      this.listenUntil = at + this.followUpMs
+      this.lastActivity = at
+      this.setState(WakeSessionState.LISTENING)
       return
     }
     this.speakingUntil = at + this.cooldownMs
