@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { classifyWakeTranscript, confirmWakeCandidate, normalizeWakeText, stripWakePhrase } from '../src/wake-phrase.mjs'
+import { classifyWakeTranscript, confirmWakeCandidate, isClearFollowUp, normalizeWakeText, stripWakePhrase } from '../src/wake-phrase.mjs'
 import { WakeSession, WakeSessionState } from '../src/wake-session.mjs'
 
 assert.equal(normalizeWakeText(' 花花，在吗！ '), '花花在吗')
@@ -13,6 +13,9 @@ assert.equal(stripWakePhrase('花花你好吗'), '你好吗')
 assert.equal(stripWakePhrase('花花在吗看看这个'), '看看这个')
 assert.equal(stripWakePhrase('花花，在吗'), '')
 assert.equal(stripWakePhrase('普通句子'), '普通句子')
+assert.equal(isClearFollowUp('那', 0.466424), false)
+assert.equal(isClearFollowUp('看看我', 0.8), true)
+assert.equal(isClearFollowUp('看看我', 0.5), false)
 
 let now = 0
 const transitions = []

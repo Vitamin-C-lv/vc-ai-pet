@@ -37,6 +37,11 @@ export function stripWakePhrase(transcript, candidate = 'huahua') {
   return normalized
 }
 
+export function isClearFollowUp(transcript, confidence) {
+  return stripWakePhrase(transcript).length >= 2 &&
+    Number.isFinite(confidence) && confidence >= 0.6
+}
+
 export function classifyWakeTranscript(transcript, candidate = 'huahua') {
   const normalized = normalizeWakeText(transcript)
   if (!confirmWakeCandidate(candidate, transcript)) {

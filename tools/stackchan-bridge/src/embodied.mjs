@@ -9,7 +9,7 @@ import { mapPetStateToBodyContract } from './contract.mjs'
 import { isAllowedLanAddress } from './lan-guard.mjs'
 import { hasValidBodyKey, loadBodyKey } from './body-auth.mjs'
 import { TurnSpeechAggregator } from './turn-speech-aggregator.mjs'
-import { evaluateWakeRecognition, evaluateVadWakeRecognition, stripWakePhrase } from './wake-phrase.mjs'
+import { evaluateWakeRecognition, evaluateVadWakeRecognition, isClearFollowUp, stripWakePhrase } from './wake-phrase.mjs'
 import { WakeSession } from './wake-session.mjs'
 
 const run = promisify(execFile)
@@ -313,6 +313,11 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
     }
 
     if (wakeSession.state === 'LISTENING') {
+      if (!isClearFollowUp(fullText, fullConfidence)) {
+        status.wake.status = 'unclear-follow-up'
+        status.wake.finalDecision = status.wake.status
+        return
+      }
       const accepted = wakeSession.acceptFollowUp(stripWakePhrase(fullText, candidate))
       if (!accepted.accepted) {
         status.wake.status = accepted.reason
