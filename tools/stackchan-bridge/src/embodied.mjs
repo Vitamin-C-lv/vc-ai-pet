@@ -312,7 +312,7 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
       console.log('WAKE_GRAMMAR_TIER=' + String(recognition?.grammarTier ?? 'FALLBACK') + ' WAKE_GRAMMAR_SUPPORTED=YES')
     }
 
-    if (wakeSession.state === 'LISTENING') {
+    if (wakeSession.isListening()) {
       if (!isClearFollowUp(fullText, fullConfidence)) {
         status.wake.status = 'unclear-follow-up'
         status.wake.finalDecision = status.wake.status

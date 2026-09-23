@@ -52,6 +52,11 @@ export class WakeSession {
     return this.state === WakeSessionState.IDLE || this.state === WakeSessionState.LISTENING
   }
 
+  isListening(at = this.now()) {
+    this.tick(at)
+    return this.state === WakeSessionState.LISTENING
+  }
+
   beginCandidate(at = this.now()) {
     this.tick(at)
     if (this.state === WakeSessionState.SPEAKING || at < this.speakingUntil) return false

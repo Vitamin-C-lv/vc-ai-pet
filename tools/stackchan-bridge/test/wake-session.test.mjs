@@ -47,4 +47,12 @@ assert.equal(session.state, WakeSessionState.LISTENING)
 now = 29_000
 assert.equal(session.acceptFollowUp('你好').kind, 'follow-up')
 
+now = 40_000
+assert.equal(session.beginCandidate(), true)
+assert.equal(session.acceptWake('').kind, 'wake-only')
+assert.equal(session.isListening(), true)
+now = 49_001
+assert.equal(session.isListening(), false)
+assert.equal(session.state, WakeSessionState.IDLE)
+
 console.log('LOCAL_WAKE_PHRASE_SESSION_TEST=PASS')
