@@ -1,0 +1,17 @@
+[Unit]
+Description=Ensure VC-AI-PET upstream DSH host after WSL startup
+After=network.target
+
+[Service]
+Type=oneshot
+User=vitamin_c
+Group=vitamin_c
+WorkingDirectory=/home/vitamin_c/projects
+Environment=HOME=/home/vitamin_c
+ExecStart=/home/vitamin_c/.local/lib/deepseek-harness/ensure-server.sh
+RemainAfterExit=yes
+TimeoutStartSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

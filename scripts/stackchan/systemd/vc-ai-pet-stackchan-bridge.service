@@ -1,0 +1,22 @@
+[Unit]
+Description=VC-AI-PET StackChan body bridge
+Wants=vc-ai-pet-dsh-ensure.service
+After=network.target vc-ai-pet-dsh-ensure.service
+
+[Service]
+Type=simple
+User=vitamin_c
+Group=vitamin_c
+WorkingDirectory=/home/vitamin_c/projects/personal/vc-ai-pet-stackchan-body-mvp
+Environment=HOME=/home/vitamin_c
+Environment=STACKCHAN_DATA_DIR=/home/vitamin_c/.local/share/vc-ai-pet/stackchan-bridge
+Environment=STACKCHAN_BODY_KEY_FILE=/home/vitamin_c/.local/share/vc-ai-pet/stackchan-bridge/body-key
+Environment=STACKCHAN_BRIDGE_BIND=127.0.0.1
+Environment=VC_AI_PET_UPSTREAM=http://127.0.0.1:17870
+ExecStart=/usr/bin/node /home/vitamin_c/projects/personal/vc-ai-pet-stackchan-body-mvp/tools/stackchan-bridge/src/embodied.mjs
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

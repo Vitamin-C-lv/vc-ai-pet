@@ -1,5 +1,11 @@
 # VC AI Pet — Project State
 
+## 2026-09-23 — StackChan WSL 启动恢复
+
+新增 `scripts/stackchan/systemd/` 下的两个系统服务：WSL 启动时调用现有 `ensure-server.sh` 恢复主 DSH/Pet 上游，然后启动带 Body Key 的 StackChan Bridge。Bridge 绑定 WSL 回环地址，Windows `192.168.1.70:17871` 只转发到 `127.0.0.1:17871`，不再依赖会变化的 WSL IPv4。两个服务已安装并启用；现有 `17870`、Tailscale 转发和防火墙规则未改。
+
+当前验收：Bridge 服务重启后，实体设备连续报告 `state=IDLE reachable=1`，Bridge 收到有效状态请求，Pet `/api/pet/state` 为 HTTP 200。尚未执行整机 WSL 终止/重启测试，以免中断其他正在运行的 WSL 会话；开机自动启动由 systemd 启用状态和当前服务启动验收支持。
+
 ## 2026-09-21 — StackChan factory staging 改为固定复用
 
 `scripts/stackchan/prepare-factory-build.py` 不再要求每轮新建完整 clone。正常固件迭代固定复用 `~/.cache/vc-ai-pet/stackchan-factory-staging`：marker、官方 commit 和受保护 worktree 校验通过后，只恢复脚本修改的明确 tracked 文件、删除明确的局部生成物，并保留 `firmware/build` 与 `firmware/managed_components`。官方源固定为 `~/.cache/vc-ai-pet/stackchan-official-source`；普通流程禁止继续创建 `/tmp/stackchan-phase*-<commit>-r<N>`。现有 ota_0、Factory recovery、shared assets 与 app-only OTA 安全边界不变。
