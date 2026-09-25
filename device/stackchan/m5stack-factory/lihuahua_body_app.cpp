@@ -31,6 +31,7 @@ constexpr std::size_t kMaxResponseBytes = 4096;
 constexpr uint32_t kPollIntervalMs = 2000;
 constexpr uint32_t kLastKnownMaxAgeMs = 10000;
 constexpr int kHttpTimeoutMs = 1500;
+constexpr uint32_t kDoubleTapWindowMs = 450;
 
 struct HttpResponse {
     char body[kMaxResponseBytes + 1]{};
@@ -86,6 +87,7 @@ bool fetchBodyState(lihuahua_body::BodyState* output)
 
 void stylePill(lv_obj_t* object, lv_color_t color)
 {
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(object, color, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(object, 0, 0);
@@ -166,7 +168,16 @@ void LiHuahuaBodyApp::onOpen()
     lv_obj_align(reachability_label_, LV_ALIGN_BOTTOM_MID, 0, -5);
     lv_label_set_text(reachability_label_, "bridge offline");
 
-    lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestCapture(); }, LV_EVENT_SHORT_CLICKED, nullptr);
+    lv_obj_add_event_cb(root_, [](lv_event_t* event) {
+        auto* app = static_cast<LiHuahuaBodyApp*>(lv_event_get_user_data(event));
+        app->single_tap_at_ = GetHAL().millis();
+        app->pending_single_tap_ = true;
+    }, LV_EVENT_SINGLE_CLICKED, this);
+    lv_obj_add_event_cb(root_, [](lv_event_t* event) {
+        auto* app = static_cast<LiHuahuaBodyApp*>(lv_event_get_user_data(event));
+        app->pending_single_tap_ = false;
+        lihuahuaBodyRequestTouchWake();
+    }, LV_EVENT_DOUBLE_CLICKED, this);
     lv_obj_add_event_cb(root_, [](lv_event_t*) { lihuahuaBodyRequestRecord(); }, LV_EVENT_LONG_PRESSED, nullptr);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     running_.store(true);
@@ -379,12 +390,17 @@ void LiHuahuaBodyApp::renderState()
 void LiHuahuaBodyApp::onRunning()
 {
     if (root_ == nullptr || state_mutex_ == nullptr) return;
+    if (pending_single_tap_ && GetHAL().millis() - single_tap_at_ >= kDoubleTapWindowMs) {
+        pending_single_tap_ = false;
+        lihuahuaBodyRequestCapture();
+    }
     renderState();
 }
 
 void LiHuahuaBodyApp::onClose()
 {
     running_.store(false);
+    pending_single_tap_ = false;
     while (poll_task_ != nullptr) vTaskDelay(pdMS_TO_TICKS(10));
     lihuahuaBodyWakeStop();
 

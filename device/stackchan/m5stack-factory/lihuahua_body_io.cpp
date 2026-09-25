@@ -22,7 +22,7 @@
 #include <freertos/task.h>
 
 namespace {
-std::atomic<bool> capture_requested{false}, record_requested{false};
+std::atomic<bool> capture_requested{false}, record_requested{false}, touch_wake_requested{false};
 std::string bridge_base;
 LiHuahuaWake wake;
 void setBodyKey(esp_http_client_handle_t client) {
@@ -112,6 +112,7 @@ void play() {
 }
 void lihuahuaBodyRequestCapture() { capture_requested=true; }
 void lihuahuaBodyRequestRecord() { record_requested=true; }
+void lihuahuaBodyRequestTouchWake() { touch_wake_requested=true; }
 bool lihuahuaBodyWakeStart() {
     auto codec = Board::GetInstance().GetAudioCodec();
     if (!codec) return false;
@@ -157,6 +158,11 @@ void lihuahuaBodyIOPoll() {
     }
     if(capture_requested.exchange(false)) capture();
     if(record_requested.exchange(false)) record();
+    if(touch_wake_requested.exchange(false)) {
+        std::string response;
+        const bool ok=request("/v1/body/touch-wake", "{}", 2, "application/json", response);
+        ESP_LOGI("LiHuahua", "touch wake ok=%d", ok);
+    }
 }
 std::string lihuahuaBodyEndpoint(const char* path) {
     if(bridge_base.empty()) {

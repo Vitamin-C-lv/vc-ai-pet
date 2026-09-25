@@ -1,5 +1,23 @@
 # VC AI Pet — Project State
 
+## 2026-09-26 — 双击唤醒硬件写入停止；设备 Flash 部分受损
+
+双击屏幕的 Bridge 接口和 LVGL 固件源码已完成，canonical staging 增量编译通过；但实机写入后发现 staging 分区表与设备真实分区表不一致。设备只读回报：`otadata=0xe000`、`app0=0x10000/0x330000`、`app1=0x340000/0x330000`、`spiffs=0x670000/0x180000`、`coredump=0x7f0000/0x10000`。本地构建镜像为 `4565040` bytes，不能放入真实 `app1` 的 `3264K` 槽位。
+
+上一轮按错误的 staging 偏移执行了 app-only 写入：镜像在 `0x510000` 写入并通过 flash 校验，但该地址不是设备的 `app1`，因此设备没有运行新固件；当前 `app0` 串口日志为 `cat-litter ESP32-S3 Wi-Fi link test`，并成功获得 `192.168.1.200`。错误流程还在 `0xd000` 写过一次 selector（该地址位于设备 NVS 区域末页），不能声称 NVS/assets 未触碰。用户短暂拔插花花 USB 后，当前 USB 设备的 `LastArrivalDate=2026-09-26 00:47:10`；其设备 MAC 与 9 月 15 日原花花只读会话原始记录一致（不在仓库公开唯一值）。因此当前设备应按花花本体受影响处理，不能当作另一块猫砂盆测试板。当前分区表与旧固件布局为何不同尚未查明；本轮错误写入没有修改分区表。
+
+已停止继续刷写，并只修正真实 `otadata` `0xe000` 的 4KB selector：`copy0=SEQ1/VALID -> ota_0`、`copy1=UNDEFINED`，写入校验通过；随后复位确认当前 `app0` 猫砂盆测试程序启动并联网。这只证明设备仍可启动，**不是花花工厂固件恢复**。未写 bootloader、partition table、app0 或 eFuse；错误范围实际覆盖了真实 app1 后段、spiffs 区和 coredump 区，且 `0xd000` 位于真实 NVS 末页。当前受损状态已只读备份到 `D:\VC-AI-Pet\stackchan-recovery-20260926\postincident-flash.bin`（16,777,216 bytes，私有 ACL）；这份事后备份不含被覆盖前的原字节。文档所载 9 月 15 日原始 full-flash 备份目前未在既定 C 盘位置及已查的 D/E/WSL 路径找到。部署脚本已增加设备 MAC、分区表预读和严格布局/容量匹配检查，要求显式端口和独立确认的设备 MAC，并取消把猫砂盆程序启动当作花花安全启动的判断。
+
+当前结论：`DOUBLE_TAP_SOURCE_BUILD=PASS`、`BRIDGE_ENDPOINT_TEST=PASS`、`WRONG_LAYOUT_WRITE_OCCURRED=YES`、`CURRENT_APP0_BOOT=PASS`、`HUHUA_FACTORY_RECOVERY=NOT_DONE`、`PHYSICAL_DOUBLE_TAP=BLOCKED`。要恢复花花原有实体功能并上机安装双击固件，先找回原始备份或制定可审查的分区/固件恢复方案；目前禁止再猜测槽位或整机刷写。
+
+## 2026-09-25 — CosyVoice 预热与实体屏幕双击唤醒
+
+Body Bridge 已接入现有唤醒词、Pet 唤醒状态和新对话的模型预热。CosyVoice-300M 使用 D 盘现有模型与已选的罗小黑参考声音；本机 worker 按需启动并在 15 分钟空闲后退出，合成失败时回退到原 Windows TTS。已在当前 16K Qwen3.5-4B 同时运行时观测到 Brain/TTS 均 ready，GPU 总占用约 8.45 GB，余量约 3.56 GB；更高上下文档位的共存尚未实测。
+
+实体 app 源码新增 LVGL 双击事件：双击请求 Bridge `/v1/body/touch-wake`，进入原有 9 秒聆听窗口、排入“我在。”确认并预热两个模型；单击拍照延后 450 ms 判定，长按录音保留。Bridge 的新接口沿用设备密钥鉴权。当前服务已部署并验证未鉴权返回 401、有效双击请求返回 202、重复忙碌请求返回 409、Brain/TTS 预热均 ready。
+
+固件只在原 canonical staging 中增量构建，`stack-chan.bin` 通过容量检查，大小 `0x45a830`，最小 app 分区剩余 `0x957d0`。设备在本轮未连接 Bridge，未执行 OTA/写入，真实触摸和扬声器验收待上机；测试排入的确认音频已清理。生产 PetRuntime、Memory、摄像头协议、wake 识别阈值和 OTA 槽未改。
+
 ## 2026-09-23 — 花花本机 VAD 唤醒路径（真实验收中）
 
 用户改为优先使用不等官方专属模型的本机方案，并接受实体设备把 VAD 人声片段发给本机 PC 离线识别；未提交公开唤醒词请求。固件保留原 MultiNet 候选，同时对 VAD 语音发送有界片段；Bridge 只在本机运行 Vosk 双路识别，普通 VAD 候选须由开放识别结果与限定词识别共同确认。音频在识别结束后、任何后续提问处理前删除；校准录音不进入对话。修复限定词识别为“花花”而开放识别为“画画”时误转发“画画”提问的问题。

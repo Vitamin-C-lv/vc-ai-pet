@@ -36,4 +36,6 @@ private:
     lv_obj_t* reachability_label_ = nullptr;
     lv_obj_t* accent_label_ = nullptr;
     uint32_t last_blink_ = 0;
+    uint32_t single_tap_at_ = 0;
+    bool pending_single_tap_ = false;
 };

@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mapPetStateToBodyContract } from './contract.mjs'
 import { isAllowedLanAddress } from './lan-guard.mjs'
@@ -97,6 +97,70 @@ async function body(req, limit = 1024 * 1024) {
   return Buffer.concat(chunks)
 }
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const cosyvoiceUrl = 'http://127.0.0.1:17873'
+const cosyvoicePython = '/home/vitamin_c/.local/share/vc-ai-pet/tts/cosyvoice/.venv/bin/python'
+const wakeAckPcm = '/mnt/d/CosyVoice-300M-NPU-Probe/luoxiaohei/wake-ack-24000.pcm'
+let ttsWorker = null
+let ttsReady = null
+let brainWarm = null
+
+function warmTts() {
+  if (ttsReady) return ttsReady
+  let workerError = null
+  ttsWorker = spawn(cosyvoicePython, [join(root, '../cosyvoice-worker.py')], { stdio: 'ignore', windowsHide: true })
+  const worker = ttsWorker
+  worker.once('error', (error) => { workerError = error })
+  worker.once('exit', () => {
+    if (ttsWorker === worker) {
+      ttsWorker = null
+      ttsReady = null
+      status.prewarm = { ...(status.prewarm ?? {}), tts: 'idle' }
+    }
+  })
+  status.prewarm = { ...(status.prewarm ?? {}), tts: 'loading', ttsError: null }
+  ttsReady = (async () => {
+    for (let attempt = 0; attempt < 140; attempt++) {
+      if (workerError || worker.exitCode !== null) throw workerError ?? Error('CosyVoice worker exited during load')
+      try {
+        const response = await fetch(cosyvoiceUrl + '/health', { signal: AbortSignal.timeout(500) })
+        if (response.ok) {
+          status.prewarm = { ...(status.prewarm ?? {}), tts: 'ready', ttsError: null }
+          return
+        }
+      } catch {}
+      await wait(250)
+    }
+    throw Error('CosyVoice worker did not become ready')
+  })().catch((error) => {
+    status.prewarm = { ...(status.prewarm ?? {}), tts: 'failed', ttsError: error.message }
+    ttsReady = null
+    throw error
+  })
+  return ttsReady
+}
+
+function warmBrain() {
+  if (brainWarm) return brainWarm
+  status.prewarm = { ...(status.prewarm ?? {}), brain: 'loading' }
+  brainWarm = fetch('http://127.0.0.1:17862/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'local-brain-v1', messages: [{ role: 'user', content: '你好' }], max_tokens: 1, reasoning_effort: 'off', stream: false }),
+    signal: AbortSignal.timeout(30000),
+  }).then(async (response) => {
+    if (!response.ok) throw Error(`Local Brain warmup HTTP ${response.status}`)
+    await response.text()
+    status.prewarm = { ...(status.prewarm ?? {}), brain: 'ready' }
+  }).catch((error) => {
+    status.prewarm = { ...(status.prewarm ?? {}), brain: 'failed', brainError: error.message }
+  }).finally(() => { brainWarm = null })
+  return brainWarm
+}
+
+function prewarmModels({ brain = false } = {}) {
+  void warmTts().catch((error) => console.error('COSYVOICE_PREWARM_ERROR', error.message))
+  if (brain) void warmBrain()
+}
 
 function refreshSpeaking() {
   const next = speechWorkerRunning || speechQueue.length > 0 || audioQueue.length > 0 || Boolean(inFlightAudio)
@@ -108,6 +172,22 @@ function refreshSpeaking() {
 }
 
 async function renderSpeech(text) {
+  if (text === '我在。') {
+    try { return await readFile(wakeAckPcm) } catch {}
+  }
+  try {
+    await warmTts()
+    const response = await fetch(cosyvoiceUrl + '/synthesize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(120000),
+    })
+    if (!response.ok) throw Error(`CosyVoice synth HTTP ${response.status}`)
+    return Buffer.from(await response.arrayBuffer())
+  } catch (error) {
+    console.error('COSYVOICE_FALLBACK', error.message)
+  }
   const textPath = join(data, 'speech.txt')
   const pcmPath = join(data, 'speech.pcm')
   await writeFile(textPath, text, 'utf8')
@@ -262,6 +342,7 @@ async function processMicrophone(pcmPath) {
     status.microphone.voice = { status: 'no-speech' }
     return
   }
+  prewarmModels()
   status.microphone.voice = await askHuahuaByVoice(transcript)
 }
 
@@ -385,6 +466,7 @@ async function processWake(pcmPath, candidate, sampleRate, stage1Score) {
     status.wake.status = accepted.kind
     status.wake.query = accepted.query
     status.wake.finalDecision = accepted.kind
+    prewarmModels({ brain: accepted.kind === 'wake-only' })
     if (accepted.kind === 'wake-only') {
       wakeSession.prepareWakeAcknowledgment()
       status.wake.ack = enqueueSpeech('我在。', { kind: 'wake-ack' }) ? 'queued' : 'failed'
@@ -439,6 +521,7 @@ async function pollHostTurnEvents() {
     for (const item of feed.events ?? []) {
       if (!Number.isInteger(item.cursor) || item.cursor <= eventCursor) continue
       eventCursor = item.cursor
+      if (item.type === 'turn_started') prewarmModels()
       const reply = turnSpeech.ingest(item)
       if (reply) enqueueSpeech(reply, { turnId: item.turnId })
     }
@@ -450,6 +533,20 @@ async function pollHostTurnEvents() {
 
 const eventPoll = setInterval(() => { void pollHostTurnEvents() }, 800)
 eventPoll.unref?.()
+
+let lastHostVisualState = null
+async function pollHostWake() {
+  try {
+    const response = await fetch(`${upstream}/api/pet/state`, { signal: AbortSignal.timeout(1500) })
+    if (!response.ok) return
+    const { visualState } = await response.json()
+    if (lastHostVisualState === 'sleep' && visualState !== 'sleep') prewarmModels({ brain: true })
+    lastHostVisualState = visualState
+  } catch {}
+}
+const hostWakePoll = setInterval(() => { void pollHostWake() }, 2000)
+hostWakePoll.unref?.()
+void pollHostWake()
 
 const server = createServer(async (req, res) => {
   try {
@@ -599,6 +696,18 @@ const server = createServer(async (req, res) => {
         })
         .finally(() => { wakeProcessing = false })
       return json(res, 202, { ok: true, accepted: true, bytes: pcm.length })
+    }
+    if (req.method === 'POST' && path === '/v1/body/touch-wake') {
+      const accepted = wakeSession.acceptWake('')
+      if (!accepted.accepted) return json(res, 409, { error: accepted.reason })
+      status.wake = {
+        at: new Date().toISOString(), source: 'screen-double-tap',
+        status: accepted.kind, finalDecision: accepted.kind, session: wakeSession.state,
+      }
+      prewarmModels({ brain: true })
+      wakeSession.prepareWakeAcknowledgment()
+      status.wake.ack = enqueueSpeech('我在。', { kind: 'wake-ack' }) ? 'queued' : 'failed'
+      return json(res, 202, { ok: true, accepted: true, session: wakeSession.state })
     }
     if (req.method === 'POST' && path === '/v1/body/control') {
       const value = JSON.parse(await body(req, 16 * 1024))
