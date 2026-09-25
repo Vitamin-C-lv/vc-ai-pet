@@ -10,6 +10,8 @@
 
 当前结论：`DOUBLE_TAP_SOURCE_BUILD=PASS`、`BRIDGE_ENDPOINT_TEST=PASS`、`WRONG_LAYOUT_WRITE_OCCURRED=YES`、`CURRENT_APP0_BOOT=PASS`、`HUHUA_FACTORY_RECOVERY=NOT_DONE`、`PHYSICAL_DOUBLE_TAP=BLOCKED`。要恢复花花原有实体功能并上机安装双击固件，先找回原始备份或制定可审查的分区/固件恢复方案；目前禁止再猜测槽位或整机刷写。
 
+恢复素材预查：canonical build 的 `generated_assets.bin` 为 `4211053` bytes，大于其 `assets` 分区的 `4194304` bytes；它不能直接作为完整 Flash 恢复素材。只读 MAC 前置检查因当前 COM5 打开失败（端口忙或驱动 I/O 错误）未完成，失败发生在任何写入前。事后 Flash 及私有恢复笔记保存在 D 盘上述目录。
+
 ## 2026-09-25 — CosyVoice 预热与实体屏幕双击唤醒
 
 Body Bridge 已接入现有唤醒词、Pet 唤醒状态和新对话的模型预热。CosyVoice-300M 使用 D 盘现有模型与已选的罗小黑参考声音；本机 worker 按需启动并在 15 分钟空闲后退出，合成失败时回退到原 Windows TTS。已在当前 16K Qwen3.5-4B 同时运行时观测到 Brain/TTS 均 ready，GPU 总占用约 8.45 GB，余量约 3.56 GB；更高上下文档位的共存尚未实测。
