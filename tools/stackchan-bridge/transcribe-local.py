@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 from vosk import KaldiRecognizer, Model, SetLogLevel
@@ -67,20 +68,11 @@ def make_grammar_recognizer(model, sample_rate, words):
     return verifier, warning, failure
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--pcm", type=Path, required=True)
-    parser.add_argument("--sample-rate", type=float, default=24000)
-    parser.add_argument("--wake-mode", action="store_true")
-    args = parser.parse_args()
-
-    SetLogLevel(-1)
-    model = Model(str(args.model))
+def recognize(model, pcm_path, sample_rate, wake_mode):
     full, verifier, grammar_tier, grammar_supported, grammar_error = make_recognizers(
-        model, args.sample_rate, args.wake_mode)
+        model, sample_rate, wake_mode)
 
-    with args.pcm.open("rb") as source:
+    with pcm_path.open("rb") as source:
         while chunk := source.read(8000):
             full.AcceptWaveform(chunk)
             if verifier is not None:
@@ -88,10 +80,8 @@ def main() -> int:
 
     full_result = json.loads(full.FinalResult())
     text = str(full_result.get("text", "")).strip()
-    if not args.wake_mode:
-        # Preserve the existing microphone STT contract: one plain text line.
-        print(text)
-        return 0
+    if not wake_mode:
+        return text
 
     full_words, full_confidence = words_and_confidence(full_result)
     wake_result = json.loads(verifier.FinalResult()) if verifier is not None else {}
@@ -103,7 +93,7 @@ def main() -> int:
         wake_words = full_words
         wake_confidence = full_confidence
 
-    print(json.dumps({
+    return {
         "text": text,
         "words": full_words,
         "confidence": full_confidence,
@@ -114,7 +104,41 @@ def main() -> int:
         "grammarSupported": grammar_supported,
         "missingWord": (grammar_error or "花花") if not grammar_supported else None,
         "grammarError": grammar_error,
-    }, ensure_ascii=False))
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--pcm", type=Path)
+    parser.add_argument("--sample-rate", type=float, default=24000)
+    parser.add_argument("--wake-mode", action="store_true")
+    parser.add_argument("--worker", action="store_true")
+    args = parser.parse_args()
+
+    SetLogLevel(-1)
+    model = Model(str(args.model))
+    if args.worker:
+        print(json.dumps({"ready": True}), flush=True)
+        for line in sys.stdin:
+            request = json.loads(line)
+            try:
+                result = recognize(
+                    model,
+                    Path(request["pcm"]),
+                    float(request["sampleRate"]),
+                    request.get("wakeMode") is True,
+                )
+                response = {"requestId": request["requestId"], "ok": True, "result": result}
+            except Exception as error:
+                response = {"requestId": request["requestId"], "ok": False, "error": str(error)[:120]}
+            print(json.dumps(response, ensure_ascii=False), flush=True)
+        return 0
+
+    if args.pcm is None:
+        parser.error("--pcm is required without --worker")
+    result = recognize(model, args.pcm, args.sample_rate, args.wake_mode)
+    print(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False))
     return 0
 
 

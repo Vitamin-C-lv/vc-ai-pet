@@ -31,6 +31,7 @@ from cosyvoice.utils.file_utils import load_wav
 MODEL_DIR = "/home/vitamin_c/.cache/vc-ai-pet/models/CosyVoice-300M"
 REFERENCE = "/mnt/d/CosyVoice-300M-NPU-Probe/luoxiaohei/reference-luoxiaohei-16k.wav"
 PROMPT_TEXT = "那我也能学会你的吞噬吗？那我的领域是不是比你的吞噬厉害？"
+ZERO_SHOT_SPK_ID = "huahua-luo-xiaohei"
 IDLE_SECONDS = 900
 PORT = int(os.environ.get("COSYVOICE_WORKER_PORT", "17873"))
 
@@ -42,6 +43,9 @@ if free_mb < 2600:
 
 model = CosyVoice(MODEL_DIR, load_jit=False, load_trt=False, fp16=True)
 prompt = load_wav(REFERENCE, 16000)
+prompt_cache_started = time.perf_counter()
+model.add_zero_shot_spk(PROMPT_TEXT, prompt, ZERO_SHOT_SPK_ID)
+prompt_cache_ms = (time.perf_counter() - prompt_cache_started) * 1000
 last_used = time.monotonic()
 
 
@@ -50,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self.send_error(404)
             return
-        payload = b'{"status":"ready"}'
+        payload = json.dumps({"status": "ready", "promptCacheMs": round(prompt_cache_ms, 1)}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -68,16 +72,36 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 raise ValueError("empty text")
             last_used = time.monotonic()
+            synth_started = time.perf_counter()
+            first_chunk_ms = None
+            chunks = []
             with torch.inference_mode():
-                chunks = [part["tts_speech"].detach().cpu()
-                          for part in model.inference_zero_shot(text, PROMPT_TEXT, prompt, stream=True)]
+                for part in model.inference_zero_shot(
+                    text, PROMPT_TEXT, prompt,
+                    zero_shot_spk_id=ZERO_SHOT_SPK_ID, stream=True):
+                    chunk = part["tts_speech"].detach().cpu()
+                    if first_chunk_ms is None:
+                        first_chunk_ms = (time.perf_counter() - synth_started) * 1000
+                    chunks.append(chunk)
+            pcm_ready_ms = (time.perf_counter() - synth_started) * 1000
             wave = torch.cat(chunks, dim=1).squeeze(0)
+            duration_sec = wave.numel() / model.sample_rate
+            resample_started = time.perf_counter()
             wave = torchaudio.functional.resample(wave, model.sample_rate, 24000)
+            resample_ms = (time.perf_counter() - resample_started) * 1000
+            pack_started = time.perf_counter()
             pcm = (wave.clamp(-1, 1).numpy() * 32767).astype("<i2").tobytes()
+            pcm_pack_ms = (time.perf_counter() - pack_started) * 1000
             last_used = time.monotonic()
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(pcm)))
+            self.send_header("X-CosyVoice-First-Chunk-Ms", f"{first_chunk_ms:.1f}")
+            self.send_header("X-CosyVoice-Pcm-Complete-Ms", f"{pcm_ready_ms:.1f}")
+            self.send_header("X-CosyVoice-Resample-Ms", f"{resample_ms:.1f}")
+            self.send_header("X-CosyVoice-Pcm-Pack-Ms", f"{pcm_pack_ms:.1f}")
+            self.send_header("X-CosyVoice-Audio-Duration-Sec", f"{duration_sec:.3f}")
+            self.send_header("X-CosyVoice-Rtf", f"{pcm_ready_ms / 1000 / duration_sec:.3f}")
             self.end_headers()
             self.wfile.write(pcm)
         except Exception as error:
