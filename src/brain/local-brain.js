@@ -239,12 +239,15 @@ export class LocalBrain {
     }
   }
 
-  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], contextTurns = undefined, now = Date.now() }) {
+  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], contextTurns = undefined, voiceFastMode = false, now = Date.now() }) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
+    const fastVoiceReply = voiceFastMode === true && !visionImage
     const reasoningEffort = visionImage
       ? PET_REASONING_PROFILE.vision
-      : PET_REASONING_PROFILE.chat
+      : fastVoiceReply
+        ? 'off'
+        : PET_REASONING_PROFILE.chat
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
     const timeContext = this.timeProvider(now)
     const historicalIntent = detectHistoricalRecallIntent(ownerText)
@@ -301,7 +304,7 @@ export class LocalBrain {
     // visible reply and at most one memory candidate.
     messages[0] = {
       ...messages[0],
-      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}`,
+      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}${fastVoiceReply ? '\n\n这是实体机器人的日常语音对话。reply 请用自然、简短的中文口语，尽量一句话；必要时可以用两句，但要完整覆盖主人明确提出的要点，不要漏掉数量、步骤、选择或原因要求。不要输出推理过程。memory 和 beliefs 字段仍严格遵守 JSON Schema。' : ''}`,
     }
 
     const maxTokens = 768

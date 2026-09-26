@@ -4,9 +4,10 @@ import { assertPetPolicy } from '../core/pet-policy.js'
 import { ensurePetIdentity } from '../core/pet-identity.js'
 import { PetMemory } from '../memory/pet-memory.js'
 import { MemoryGate } from '../memory/memory-gate.js'
-import { containsSensitiveMemoryText, userOptedOutOfMemory } from '../brain/memory-candidate.js'
+import { containsSensitiveMemoryText, detectExplicitMemoryRequest, userOptedOutOfMemory } from '../brain/memory-candidate.js'
 import { containsNonAssertion } from '../memory/current-belief.js'
 import { LocalBrain } from '../brain/local-brain.js'
+import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
@@ -838,7 +839,7 @@ export class PetRuntime {
       || followUp?.retryOnNone === true
   }
 
-  async chat(userText, image = null, attachment = null, { turnId = createTurnId() } = {}) {
+  async chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null } = {}) {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
     // D-022: explicit long-term visual references take priority over the recent
@@ -910,6 +911,13 @@ export class PetRuntime {
         ? { source: 'recent-visual-recall' }
         : null
       const promptText = ownerText.trim() || (effectiveVisionImage ? VISION_ONLY_MESSAGE : ownerText)
+      const memoryRequest = detectExplicitMemoryRequest(ownerText)
+      const voiceFastMode = shouldUseFastVoiceMode({
+        source,
+        hasVision: Boolean(effectiveVisionImage),
+        explicitMemory: memoryRequest.explicit || memoryRequest.optOut,
+        memoryFollowUp: this.explicitMemoryController.snapshot().pending > 0,
+      })
 
       if (this.conversationPersistenceReady) {
         ownerMessage = await this.conversationStore.appendMessage({
@@ -931,6 +939,7 @@ export class PetRuntime {
         // The window the model is allowed to see, in turns. Passed explicitly so
         // the prompt builder can never cap it at some other hard-coded number.
         contextTurns: this.pipelineConfig.shortTermContextTurns,
+        voiceFastMode,
       })
 
       if (!result?.ok) return result
@@ -1250,7 +1259,7 @@ export class PetRuntime {
         this.turnOrchestrator.clearVisualRecallContext()
       }
       emit('turn_started', { mode: 'text' }); emit('thinking', {})
-      const result = await this.chat(userText, null, null, { turnId })
+      const result = await this.chat(userText, null, null, { turnId, source })
       if (!result?.ok) return result
       const replies = Array.isArray(result.replyMessages) && result.replyMessages.length ? result.replyMessages : [result.text]
       for (const text of replies) emit('assistant_message', { text })

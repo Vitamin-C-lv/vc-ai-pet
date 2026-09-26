@@ -315,7 +315,24 @@ const integratedRuntime = new PetRuntime({ sandboxRoot: integrationRoot })
 await integratedRuntime.initialize()
 const integratedAttachment = await integratedRuntime.conversationStore.saveAttachment({ image: { dataUrl: imageA }, thumbnail: { dataUrl: imageA }, width: 64, height: 64, thumbnailWidth: 64, thumbnailHeight: 64, requireThumbnail: true })
 const integratedCalls = []
-integratedRuntime.brain = { visualStep: async (request) => { integratedCalls.push(request); return { ok: true, observation: '图中有一个爪印。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['看到了。'] } } }
+const integratedVisualStep = async (request) => { integratedCalls.push(request); return { ok: true, observation: '图中有一个爪印。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['看到了。'] } }
+const voiceCalls = []
+integratedRuntime.brain = {
+  visualStep: integratedVisualStep,
+  async reply(request) {
+    voiceCalls.push(request)
+    return {
+      ok: true,
+      unavailable: false,
+      text: '花花在等主人呢。',
+      replyMessages: [],
+      memoryCandidate: null,
+      rawMemoryCandidate: null,
+      beliefCandidates: [],
+      reasoning: { effort: request.voiceFastMode ? 'off' : 'low', durationMs: 1 },
+    }
+  },
+}
 const integratedStart = integratedRuntime.startChatTurn({ userText: '这是什么', attachmentId: integratedAttachment.id })
 let integratedPoll = null
 // One turn genuinely costs ~240ms here (attachment persistence + visual plan +
@@ -331,6 +348,25 @@ assert.equal(integratedPoll?.status, 'done')
 assert.equal(integratedCalls.length, 1)
 assert.equal(integratedPoll.result.replyMessages[0], '看到了。')
 assert.equal(integratedPoll.events.some((event) => event.type === 'visual_image' && event.payload.sourceAttachmentId === integratedAttachment.id), true)
+integratedRuntime.turnOrchestrator.clearVisualRecallContext()
+const voiceStart = integratedRuntime.startChatTurn({ userText: '问花花你在干嘛。', source: 'stackchan-bridge' })
+let voicePoll = null
+for (let attempt = 0; attempt < 150; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  voicePoll = integratedRuntime.pollChatTurn(voiceStart.turnId, 0)
+  if (voicePoll?.status !== 'running') break
+}
+assert.equal(voicePoll?.status, 'done')
+assert.equal(voiceCalls.at(-1).voiceFastMode, true, 'StackChan voice source reaches the fast chat mode')
+const complexVoiceStart = integratedRuntime.startChatTurn({ userText: '先喝水再活动，最后回去工作。', source: 'stackchan-bridge' })
+let complexVoicePoll = null
+for (let attempt = 0; attempt < 150; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  complexVoicePoll = integratedRuntime.pollChatTurn(complexVoiceStart.turnId, 0)
+  if (complexVoicePoll?.status !== 'running') break
+}
+assert.equal(complexVoicePoll?.status, 'done')
+assert.equal(voiceCalls.at(-1).voiceFastMode, true, 'multi-step StackChan requests use the brief voice profile')
 const ambiguousAttachment = await integratedRuntime.conversationStore.saveAttachment({ image: { dataUrl: imageB }, thumbnail: { dataUrl: imageB }, width: 64, height: 64, thumbnailWidth: 64, thumbnailHeight: 64, requireThumbnail: true })
 await integratedRuntime.conversationStore.appendMessage({ role: 'user', text: '另一张图', attachment: ambiguousAttachment })
 const ambiguousResult = await integratedRuntime.chat('之前那个怎么样')

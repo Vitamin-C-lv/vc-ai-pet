@@ -6,7 +6,7 @@ import {
   LOCAL_BRAIN_QUEUE_FULL_RETRY_DELAYS_MS,
   LocalBrain,
 } from '../src/brain/local-brain.js'
-import { PET_REASONING_PROFILE } from '../src/brain/local-brain-config.js'
+import { PET_REASONING_PROFILE, shouldUseFastVoiceMode } from '../src/brain/local-brain-config.js'
 
 const IMAGE = { dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn' }
 
@@ -50,6 +50,11 @@ assert.deepEqual(PET_REASONING_PROFILE, {
   dream: 'high',
   reflection: 'off',
 })
+assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge' }), true)
+assert.equal(shouldUseFastVoiceMode({ source: 'web-chat' }), false)
+assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', hasVision: true }), false)
+assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', explicitMemory: true }), false)
+assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', memoryFollowUp: true }), false)
 
 {
   const calls = []
@@ -85,6 +90,34 @@ assert.deepEqual(PET_REASONING_PROFILE, {
     client: {
       chat: async (request) => {
         calls.push(request)
+        return chatResponse('我在桌子旁边等主人呢。')
+      },
+    },
+  })
+
+  const result = await brain.reply({
+    identity: LI_HUAHUA_IDENTITY,
+    state: state(),
+    userText: '问花花你在干嘛。',
+    voiceFastMode: true,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(calls[0].reasoningEffort, 'off')
+  assert.equal(calls[0].maxTokens, 768, 'voice mode keeps the structured-response token budget')
+  assert.match(calls[0].messages[0].content, /实体机器人的日常语音对话/)
+  assert.match(calls[0].messages[0].content, /完整覆盖主人明确提出的要点/)
+  assertDuration(result.reasoning, 'off')
+  console.log('STACKCHAN_VOICE_FAST_REASONING=PASS')
+}
+
+{
+  const calls = []
+  const brain = new LocalBrain({
+    memory: memory(),
+    client: {
+      chat: async (request) => {
+        calls.push(request)
         return chatResponse('图片看到了。')
       },
     },
@@ -95,6 +128,7 @@ assert.deepEqual(PET_REASONING_PROFILE, {
     state: state(),
     userText: '花花你看看这个。',
     image: IMAGE,
+    voiceFastMode: true,
   })
 
   assert.equal(result.ok, true)

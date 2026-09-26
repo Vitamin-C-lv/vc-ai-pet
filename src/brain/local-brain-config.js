@@ -13,6 +13,18 @@ export const PET_REASONING_PROFILE = Object.freeze({
   reflection: 'off',
 })
 
+export function shouldUseFastVoiceMode({
+  source,
+  hasVision = false,
+  explicitMemory = false,
+  memoryFollowUp = false,
+} = {}) {
+  return source === 'stackchan-bridge'
+    && !hasVision
+    && !explicitMemory
+    && !memoryFollowUp
+}
+
 export const DEFAULT_LOCAL_BRAIN_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:17862',
   // Read-only probe of the shared service reports n_ctx=16384. This is a Pet

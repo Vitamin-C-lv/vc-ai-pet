@@ -1,5 +1,13 @@
 # VC AI Pet — Project State
 
+## 2026-09-26 — StackChan 语音快答与延迟 A/B
+
+仅 `source=stackchan-bridge` 且不含视觉、显式记忆请求或记忆跟进的机器人语音聊天启用 `voiceFastMode`，将本地 4B 请求的 reasoning effort 设为 `off` 并要求简短口语回复。手机聊天及其他来源不匹配该门控；视觉、记忆请求和记忆跟进保留原推理策略。策略单测和 StackChan 来源集成测试通过。
+
+真实 `/api/pet/chat/start` 热态 A/B 使用同一句输入与同一 Qwen 4B/CosyVoice-300M/罗小黑参考音频。4B 调用从 `8.313 s` 降至 `3.629 s`，turn 完成观察从 `9.060 s` 降至 `3.807 s`；优化后回答长度从 15 增至 23 字符，CosyVoice 阶段变慢，最终请求至 24 kHz WAV 关闭时间从 `15.527 s` 增至 `16.283 s`。因此本轮只证实 LLM 阶段提速，尚未证实端到端提速。固定文本仅单次 A/B，不能作为稳定性结论。报告及 before/after WAV 在 `D:\CosyVoice-300M-NPU-Probe\luoxiaohei\latency-ab\`。
+
+另用六条相同 prompt 做 `reasoning=off/low` 配对质量测试，共 12 次结构化响应，未观察到 off 在该小样本中有稳定的整体质量下降；两种模式偶尔都会漏掉一个次要条件。平均调用时间为 `2.724 s` 对 `9.447 s`。机器人回复提示已改为尽量一句、必要时两句，并覆盖明确要点；手机来源和视觉/记忆例外没有改动。该测试未将样例写入聊天历史。
+
 ## 2026-09-18 — 李花花实体 StackChan Phase 4 已部署
 
 基于既有 Phase 3C handoff 的已确认事实，本轮完成实体身体的 app-only OTA1 部署和真实端到端验收。ota_0 @ 0x20000 Factory 恢复槽保留，未写入其应用区；ota_1 @ 0x510000 运行音量 90 固件。部署结果为 OTA0_APP_WRITES=0、OTA1_WRITE_VERIFIED=YES、OTA1_FIRST_BOOT_VALIDATED=YES。
