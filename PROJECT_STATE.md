@@ -1,6 +1,27 @@
 # VC AI Pet — Project State
 
-Status: FINAL_STATUS=READY_FOR_ADAPTIVE_LAN_FINAL_REVIEW
+Status: LAN_ANDROID_ACCEPTED_REMOTE_INGRESS_PENDING
+
+## 2026-09-28 — Android 连接故障与现有 LAN 自愈修复
+
+手机在 `192.168.1.8/24`，保存的 `.175` 与学到的 `.199` 已过期。Windows
+当前使用物理网卡“以太网 2”上的 `192.168.1.70/24`；WSL `17870` 的
+`/api/pet/state` 返回 200，但 Windows 的 `.70:17870` 转发没有监听，
+Android 实际显示“暂时没有找到花花”。原自愈脚本固定要求 `WLAN` Up；
+任务最近结果为 3，且原登录触发器只有延迟 1 分钟，没有定期重复。
+
+只改现有 LAN 自愈脚本和同一个计划任务：从活动的物理 Private 网卡选取
+私有 IPv4（有 WLAN 时优先 WLAN），在转发表内容正确但监听消失时重建
+仅 LAN `:17870` 条目；修正 `netsh delete` 的 PowerShell 属性参数展开；
+把命名防火墙规则限定到当前接口、本地地址、`LocalSubnet`、Private/TCP 17870。
+计划任务保留登录触发器，并增加每日触发且每分钟重复的现有任务调度。
+
+修复后 Windows LAN 首页和状态接口均为 HTTP 200；计划任务于
+2026-09-28 23:23:26 自动运行、结果 0，下一次运行时间已排定。
+Android 保留数据冷启动后自动学到 `192.168.1.70:17870` 并显示花花主页。
+本轮没有重装 APK、清除 App 数据、改 Pet 数据库或重启服务。
+原有 Tailscale `100.69.220.26:17870` 映射未改动；该入口当前仍未监听，
+远程使用验收待单独完成。
 
 ## 2026-09-10 — Adaptive LAN ingress self-heal 与 Android discovery 最终集成
 

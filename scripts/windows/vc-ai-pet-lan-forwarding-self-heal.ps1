@@ -8,7 +8,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$LanInterfaceAlias = 'WLAN'
+$PreferredLanInterfaceAlias = 'WLAN'
 $LanPort = 17870
 $FirewallRuleDisplayName = 'VC-AI-PET LAN Companion 17870'
 $DistroName = 'kali-linux'
@@ -78,27 +78,38 @@ function Assert-PrivateLanIPv4 {
     return $normalized
 }
 
-function Get-CurrentWindowsWlanIPv4 {
+function Get-CurrentWindowsLan {
     if (-not [string]::IsNullOrWhiteSpace($SimulatedWindowsLanIPv4)) {
-        return Assert-PrivateLanIPv4 -Value $SimulatedWindowsLanIPv4 -Label 'SIMULATED_WINDOWS_LAN_IPV4'
+        return [pscustomobject]@{
+            InterfaceAlias = $PreferredLanInterfaceAlias
+            IPv4 = Assert-PrivateLanIPv4 -Value $SimulatedWindowsLanIPv4 -Label 'SIMULATED_WINDOWS_LAN_IPV4'
+        }
     }
 
-    $adapter = Get-NetAdapter -Name $LanInterfaceAlias -ErrorAction SilentlyContinue
-    if ($null -eq $adapter -or $adapter.Status -ne 'Up') {
-        throw ('WINDOWS_WLAN_NOT_UP={0}' -f $LanInterfaceAlias)
-    }
-
-    $addresses = @(
-        Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias $LanInterfaceAlias -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.AddressState -eq 'Preferred' -and $_.IPAddress -notlike '169.254.*'
+    $candidates = @(
+        foreach ($adapter in @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })) {
+            $profile = Get-NetConnectionProfile -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue
+            if ($null -eq $profile -or $profile.NetworkCategory -ne 'Private') { continue }
+            $addresses = @(
+                Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.AddressState -eq 'Preferred' -and
+                        (Test-PrivateLanIPv4 -Value $_.IPAddress)
+                    }
+            )
+            foreach ($address in $addresses) {
+                [pscustomobject]@{
+                    InterfaceAlias = $adapter.Name
+                    IPv4 = $address.IPAddress
+                }
             }
+        }
     )
-    if ($addresses.Count -ne 1) {
-        throw ('WINDOWS_WLAN_IPV4_COUNT={0}' -f $addresses.Count)
-    }
-
-    return Assert-PrivateLanIPv4 -Value $addresses[0].IPAddress -Label 'WINDOWS_WLAN_IPV4'
+    if ($candidates.Count -eq 0) { throw 'WINDOWS_PRIVATE_LAN_NOT_FOUND' }
+    $preferred = @($candidates | Where-Object { $_.InterfaceAlias -eq $PreferredLanInterfaceAlias })
+    if ($preferred.Count -eq 1) { return $preferred[0] }
+    if ($candidates.Count -ne 1) { throw ('WINDOWS_PRIVATE_LAN_AMBIGUOUS={0}' -f $candidates.Count) }
+    return $candidates[0]
 }
 
 function Get-CurrentWslIPv4 {
@@ -187,7 +198,7 @@ function Update-LanPortProxy {
 
     $targetEntries = @(Get-LanPortProxyEntries -ExistingEntries $ExistingEntries)
     foreach ($entry in $targetEntries) {
-        $deleteOutput = @(& $NetshExe interface portproxy delete v4tov4 listenaddress=$entry.ListenAddress listenport=$LanPort 2>&1)
+        $deleteOutput = @(& $NetshExe interface portproxy delete v4tov4 ('listenaddress={0}' -f $entry.ListenAddress) ('listenport={0}' -f $LanPort) 2>&1)
         if ($LASTEXITCODE -ne 0) {
             throw ('PORTPROXY_DELETE_FAILED=exit_{0} {1}' -f $LASTEXITCODE, ($deleteOutput -join ' '))
         }
@@ -242,7 +253,6 @@ function Get-LanFirewallContext {
     $interfaceFilter = $rule | Get-NetFirewallInterfaceFilter
 
     if ($rule.Enabled -ne $true -or
-        [string]$rule.Profile -ne 'Private' -or
         [string]$rule.Direction -ne 'Inbound' -or
         [string]$rule.Action -ne 'Allow') {
         throw 'FIREWALL_RULE_SCOPE_MISMATCH'
@@ -266,14 +276,17 @@ function Get-LanFirewallContext {
 function Ensure-LanFirewallRule {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$WindowsLanIPv4
+        [string]$WindowsLanIPv4,
+        [Parameter(Mandatory = $true)]
+        [string]$LanInterfaceAlias
     )
 
     $context = Get-LanFirewallContext
     $currentLocalAddresses = @($context.AddressFilter.LocalAddress)
     $currentRemoteAddresses = @($context.AddressFilter.RemoteAddress)
     $currentInterfaces = @($context.InterfaceFilter.InterfaceAlias)
-    $needsUpdate = $currentLocalAddresses.Count -ne 1 -or
+    $needsUpdate = [string]$context.Rule.Profile -ne 'Private' -or
+        $currentLocalAddresses.Count -ne 1 -or
         $currentLocalAddresses[0] -ne $WindowsLanIPv4 -or
         $currentRemoteAddresses.Count -ne 1 -or
         $currentRemoteAddresses[0] -ne 'LocalSubnet' -or
@@ -290,6 +303,7 @@ function Ensure-LanFirewallRule {
     }
 
     if ($needsUpdate) {
+        $null = $context.Rule | Set-NetFirewallRule -Profile Private -ErrorAction Stop
         $null = $context.AddressFilter | Set-NetFirewallAddressFilter -LocalAddress $WindowsLanIPv4 -RemoteAddress 'LocalSubnet' -ErrorAction Stop
         $null = $context.InterfaceFilter | Set-NetFirewallInterfaceFilter -InterfaceAlias $LanInterfaceAlias -ErrorAction Stop
         Write-Result -Name 'FIREWALL_MUTATION' -Value 'UPDATED'
@@ -317,9 +331,12 @@ function Assert-HttpEndpoint {
 }
 
 try {
-    $windowsLanIPv4 = Get-CurrentWindowsWlanIPv4
+    $windowsLan = Get-CurrentWindowsLan
+    $windowsLanIPv4 = $windowsLan.IPv4
+    $lanInterfaceAlias = $windowsLan.InterfaceAlias
     $wslIPv4 = Get-CurrentWslIPv4
-    Write-Result -Name 'CURRENT_WINDOWS_WIFI_IPV4' -Value $windowsLanIPv4
+    Write-Result -Name 'CURRENT_WINDOWS_LAN_INTERFACE' -Value $lanInterfaceAlias
+    Write-Result -Name 'CURRENT_WINDOWS_LAN_IPV4' -Value $windowsLanIPv4
     Write-Result -Name 'CURRENT_WSL_IP' -Value $wslIPv4
     Write-Result -Name 'LAN_PORTPROXY_LISTEN_ADDRESS' -Value ('{0}:{1}' -f $windowsLanIPv4, $LanPort)
     Write-Result -Name 'LAN_PORTPROXY_CONNECT_ADDRESS' -Value ('{0}:{1}' -f $wslIPv4, $LanPort)
@@ -330,8 +347,9 @@ try {
         $lanTargets[0].ListenAddress -eq $windowsLanIPv4 -and
         $lanTargets[0].ConnectAddress -eq $wslIPv4 -and
         $lanTargets[0].ConnectPort -eq $LanPort
+    $listenerActive = @(Get-NetTCPConnection -LocalAddress $windowsLanIPv4 -LocalPort $LanPort -State Listen -ErrorAction SilentlyContinue).Count -eq 1
 
-    if ($isCorrect) {
+    if ($isCorrect -and $listenerActive) {
         Write-Result -Name 'PORTPROXY' -Value ('NOOP {0}:{1}->{2}:{3}' -f $lanTargets[0].ListenAddress, $lanTargets[0].ListenPort, $lanTargets[0].ConnectAddress, $lanTargets[0].ConnectPort)
         Write-Result -Name 'SELF_HEAL_CURRENT_RUN' -Value 'NOOP'
     } else {
@@ -344,7 +362,7 @@ try {
         Write-Result -Name 'SELF_HEAL_CURRENT_RUN' -Value 'UPDATED'
     }
 
-    Ensure-LanFirewallRule -WindowsLanIPv4 $windowsLanIPv4
+    Ensure-LanFirewallRule -WindowsLanIPv4 $windowsLanIPv4 -LanInterfaceAlias $lanInterfaceAlias
 
     $isSimulation = $DryRun -or
         -not [string]::IsNullOrWhiteSpace($SimulatedWslIPv4) -or
