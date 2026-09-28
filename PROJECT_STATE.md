@@ -1,6 +1,15 @@
 # VC AI Pet — Project State
 
-Status: LAN_ANDROID_ACCEPTED_REMOTE_INGRESS_PENDING
+Status: LAN_ANDROID_ACCEPTED_SELF_HEAL_DISABLED_REMOTE_INGRESS_PENDING
+
+## 2026-09-29 — 可见命令行窗口：自动任务暂停
+
+新增的每分钟计划任务会在用户桌面反复弹出管理员 PowerShell 窗口。
+收到用户报告后，已立即禁用并停止唯一的
+`\VC-AI-PET\LAN Forwarding Self-Heal`；当前状态为 `Disabled`。
+下面 2026-09-28 的自动运行记录只说明当时通过，**不代表现在仍在自动自愈**。
+LAN 转发和原脚本仍可用，但在以后台、无窗口的启动方式完成验证前，
+不要重新启用该计划任务或启动新的可见定时控制台。
 
 ## 2026-09-28 — Android 连接故障与现有 LAN 自愈修复
 
