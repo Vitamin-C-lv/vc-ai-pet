@@ -23,46 +23,48 @@
             android:gravity="center"
             android:layout_gravity="center_vertical"
             android:orientation="vertical"
-            android:paddingStart="32dp"
-            android:paddingTop="32dp"
-            android:paddingEnd="32dp"
-            android:paddingBottom="32dp">
+            android:paddingStart="24dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="24dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="@drawable/connection_card"
+                android:elevation="2dp"
                 android:gravity="center_horizontal"
                 android:orientation="vertical"
-                android:paddingStart="24dp"
-                android:paddingTop="28dp"
-                android:paddingEnd="24dp"
-                android:paddingBottom="28dp">
+                android:paddingStart="22dp"
+                android:paddingTop="24dp"
+                android:paddingEnd="22dp"
+                android:paddingBottom="22dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/paw"
-                    android:textSize="42sp" />
+                    android:textSize="38sp" />
 
                 <TextView
                     android:id="@+id/connection_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/app_name"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/connection_title"
                     android:textColor="@color/pet_text"
-                    android:textSize="26sp"
+                    android:textSize="24sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/connection_prompt"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="24dp"
+                    android:layout_marginTop="22dp"
                     android:text="@string/connection_prompt"
-                    android:textColor="@color/pet_muted"
-                    android:textSize="15sp" />
+                    android:textColor="@color/pet_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
                 <EditText
                     android:id="@+id/host_input"
@@ -74,6 +76,7 @@
                     android:inputType="textUri"
                     android:importantForAutofill="no"
                     android:maxLines="1"
+                    android:minHeight="54dp"
                     android:paddingStart="14dp"
                     android:paddingTop="12dp"
                     android:paddingEnd="14dp"
@@ -82,12 +85,24 @@
                     android:textColorHint="@color/pet_muted"
                     android:textSize="16sp" />
 
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center"
+                    android:text="@string/connection_help"
+                    android:textColor="@color/pet_muted"
+                    android:textSize="12sp" />
+
                 <Button
                     android:id="@+id/connect_button"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_height="54dp"
                     android:layout_marginTop="16dp"
                     android:background="@drawable/button_background"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:stateListAnimator="@null"
                     android:text="@string/connect"
                     android:textColor="@android:color/white"
                     android:textStyle="bold" />
@@ -100,20 +115,28 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@color/pet_background"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
         android:clickable="true"
         android:focusable="true">
 
         <LinearLayout
-            android:layout_width="280dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
+            android:background="@drawable/connection_card"
+            android:elevation="2dp"
             android:gravity="center_horizontal"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingTop="22dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="20dp">
 
             <ImageView
                 android:id="@+id/splash_animation"
-                android:layout_width="240dp"
-                android:layout_height="240dp"
+                android:layout_width="220dp"
+                android:layout_height="220dp"
                 android:adjustViewBounds="true"
                 android:contentDescription="@string/splash_animation_description"
                 android:scaleType="centerInside"
@@ -121,19 +144,21 @@
 
             <TextView
                 android:id="@+id/splash_title"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
+                android:layout_marginTop="14dp"
+                android:gravity="center"
                 android:text="@string/splash_searching_title"
                 android:textColor="@color/pet_text"
-                android:textSize="23sp"
+                android:textSize="22sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/splash_subtitle"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
+                android:gravity="center"
                 android:text="@string/splash_searching_subtitle"
                 android:textColor="@color/pet_muted"
                 android:textSize="16sp" />
@@ -142,8 +167,12 @@
                 android:id="@+id/splash_retry_button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="20dp"
                 android:background="@drawable/button_background"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="54dp"
+                android:stateListAnimator="@null"
                 android:text="@string/retry"
                 android:textColor="@android:color/white"
                 android:textStyle="bold"
@@ -155,6 +184,10 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:background="@drawable/button_secondary_background"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="54dp"
+                android:stateListAnimator="@null"
                 android:text="@string/advanced_settings"
                 android:textColor="@color/pet_text"
                 android:textStyle="bold"

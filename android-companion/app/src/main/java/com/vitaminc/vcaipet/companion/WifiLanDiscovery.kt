@@ -181,9 +181,8 @@ object WifiLanDiscovery {
     }
 
     private fun isVirtualInterface(interfaceName: String?): Boolean {
-        val normalized = interfaceName?.trim()?.lowercase() ?: return true
-        return normalized.isEmpty() ||
-            normalized.startsWith("tun") ||
+        val normalized = interfaceName?.trim()?.lowercase() ?: return false
+        return normalized.startsWith("tun") ||
             normalized.startsWith("vpn")
     }
 

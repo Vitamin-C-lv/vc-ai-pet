@@ -1,5 +1,25 @@
 # VC AI Pet — Project State
 
+## 2026-09-29 — Android 连接恢复与移动界面统一（待设备验收）
+
+Android Companion 在同一进程重新连接时先解除旧的 Wi-Fi 进程绑定；
+已选页面发生主框架加载错误时也会重新进入自动探测。
+物理 Wi-Fi 已有 Wi-Fi transport、无 VPN transport 和私有 IPv4 时，
+接口名称短暂缺失不再使整个网络被判作虚拟接口。
+连接目标、WebView 同源边界和已有 App 数据均未改动。
+
+原生启动、连接失败与手动设置页面，及 WebView 的首页、聊天、梦境和图库页，
+统一了暖色、按钮、卡片、间距和文字层级；主页状态名称改为中文展示，
+后端 `visualState` 原值及花花像素美术保持不变。
+
+Windows 临时构建副本位于 `D:\VC-AI-Pet\temp\codex-android-visual-unify`。
+`testDebugUnitTest assembleDebug lintDebug --no-daemon` 构建成功，36 个单测通过；
+`node test/v0.4-mobile-ui-navigation-redesign.mjs` 与 `node --check` 通过。
+用户已带走手机，**新 APK 未安装、改后界面未做设备截图验收**；
+WebView 页面源码也尚未切换到生产插件。先前 LAN 故障在旧 APK 上曾实测恢复，
+但 Windows 定时自愈任务因反复弹出可见命令行而被禁用，后续自动修复尚未恢复。
+Tailscale 远程入口仍待独立验收。
+
 ## 2026-09-26 — StackChan 语音快答与延迟 A/B
 
 仅 `source=stackchan-bridge` 且不含视觉、显式记忆请求或记忆跟进的机器人语音聊天启用 `voiceFastMode`，将本地 4B 请求的 reasoning effort 设为 `off` 并要求简短口语回复。手机聊天及其他来源不匹配该门控；视觉、记忆请求和记忆跟进保留原推理策略。策略单测和 StackChan 来源集成测试通过。

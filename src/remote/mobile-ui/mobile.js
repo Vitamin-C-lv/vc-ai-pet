@@ -63,6 +63,19 @@ const SUBMISSION_STAGE = globalThis.VcAiPetSubmission?.SUBMISSION_STAGE ?? Objec
   TURN_FAILED: 'TURN_FAILED',
 })
 const VALID_SCREENS = new Set(Object.values(SCREEN))
+const VISUAL_STATE_LABELS = Object.freeze({
+  idle: '安静待着',
+  thinking: '认真思考',
+  happy: '开心',
+  excited: '兴奋',
+  relaxed: '放松',
+  waiting: '等你来玩',
+  curious: '好奇',
+  confused: '有点困惑',
+  sleep: '睡着了',
+  dreaming: '做梦中',
+  walk: '散步中',
+})
 let selectedImage = null
 let imageProcessing = false
 let pressTimer = null
@@ -1066,7 +1079,7 @@ async function refresh() {
 function renderPetPresentation(state = {}) {
   const visualState = state.visualState || 'idle'
   const fallbackSprite = state.sprite || 'idle-front.png'
-  stateLabel.textContent = `当前状态：${visualState}`
+  stateLabel.textContent = `当前状态：${VISUAL_STATE_LABELS[visualState] ?? '陪着你'}`
   happiness.textContent = number(state.emotion?.happiness)
   energy.textContent = number(state.emotion?.energy)
   if (homeSpriteAnimator) homeSpriteAnimator.setPresentation(visualState, fallbackSprite)

@@ -188,6 +188,7 @@ class MainActivity : ComponentActivity() {
     private fun beginAttempt(): SplashTimingCoordinator.Attempt {
         cancelAttemptCallbacks()
         cancelProbeWork()
+        connectivityManager.bindProcessToNetwork(null)
         val attempt = splashTimingCoordinator.startAttempt(SystemClock.elapsedRealtime())
         endpointProbeGeneration = attempt.generation
         currentSplashAttempt = attempt
@@ -449,9 +450,18 @@ class MainActivity : ComponentActivity() {
         attempt: SplashTimingCoordinator.Attempt,
         address: LanAddress,
     ) {
-        if (!isAttemptOpen(attempt) || activeEndpoint != address) return
+        if (!isCurrentAttempt(attempt) || activeEndpoint != address) return
+        if (attemptClosed) {
+            if (connectionUiState == ConnectionUiState.CONNECTED ||
+                connectionUiState == ConnectionUiState.PAGE_READY_WAITING_MIN_HOLD
+            ) {
+                startAutomaticAttempt()
+            }
+            return
+        }
         petWebView.stopLoading()
         petWebView.visibility = View.GONE
+        connectivityManager.bindProcessToNetwork(null)
     }
 
     private fun revealSplash(attempt: SplashTimingCoordinator.Attempt) {

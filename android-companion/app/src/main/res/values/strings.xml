@@ -2,17 +2,19 @@
 <resources>
     <string name="app_name">李花花</string>
     <string name="paw">🐾</string>
+    <string name="connection_title">连接花花</string>
     <string name="connection_prompt">花花的电脑地址</string>
-    <string name="host_hint">例如 192.168.1.175:17870 或 100.69.220.26:17870</string>
+    <string name="connection_help">支持局域网或 Tailscale 地址</string>
+    <string name="host_hint">私有 IP:端口 或 名称.local</string>
     <string name="connect">连接</string>
     <string name="retry">重新连接</string>
-    <string name="advanced_settings">高级设置</string>
+    <string name="advanced_settings">手动设置地址</string>
     <string name="splash_searching_title">正在寻找花花…</string>
-    <string name="splash_searching_subtitle">花花正在回家中</string>
+    <string name="splash_searching_subtitle">正在连接花花的电脑</string>
     <string name="splash_found_title">找到花花啦</string>
     <string name="splash_found_subtitle">马上见面</string>
-    <string name="splash_failed_title">暂时没有找到花花</string>
-    <string name="splash_failed_subtitle">请确认花花的电脑已开机，或稍后再试</string>
-    <string name="splash_animation_description">花花正在寻找回家的路</string>
-    <string name="invalid_address">请输入允许的 LAN / Tailscale host:port 地址</string>
+    <string name="splash_failed_title">暂时联系不上花花</string>
+    <string name="splash_failed_subtitle">确认花花的电脑已开机且网络可用，再试一次或检查连接设置。</string>
+    <string name="splash_animation_description">花花的动态插画</string>
+    <string name="invalid_address">请填写有效的局域网/Tailscale IP 或 .local 地址</string>
 </resources>

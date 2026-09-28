@@ -22,6 +22,16 @@ class WifiLanDiscoveryTest {
     }
 
     @Test
+    fun wifiWithTemporarilyMissingInterfaceNameIsStillSelected() {
+        listOf<String?>(null, "").forEach { interfaceName ->
+            val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
+                listOf(candidate("wifi", interfaceName = interfaceName)),
+            )
+            assertEquals("wifi", selected?.network)
+        }
+    }
+
+    @Test
     fun vpnOverWifiCandidateIsRejected() {
         val selected = WifiLanDiscovery.selectPhysicalWifiCandidate(
             listOf(
@@ -158,7 +168,7 @@ class WifiLanDiscoveryTest {
         network: String,
         hasWifiTransport: Boolean = true,
         hasVpnTransport: Boolean = false,
-        interfaceName: String = "wlan0",
+        interfaceName: String? = "wlan0",
         address: String = "192.168.1.3",
         prefixLength: Int = 24,
     ): WifiNetworkCandidate<String> {
