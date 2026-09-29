@@ -26,7 +26,13 @@ WSL 与 Windows localhost 的 `/api/pet/state` 均返回 200。
 LAN `:17870`、StackChan `:17871` 与 Tailscale `:3080` 转发保留。
 手机 TCP 探测随后成功，冷启动进入 `pet_webview`，
 `lastSuccessfulEndpoint` 与 `pet_host` 更新为 `100.69.220.26:17870`，
-未见 AndroidRuntime fatal。未进行断网/重连切换回归，也未进行改后界面截图验收。
+未见 AndroidRuntime fatal；设备截图确认首页与花花形象实际显示。上轮 WebView
+页面视觉源码仍未部署，当前页还会显示英文状态词 `relaxed`。
+初次安装的是 `f6337fe` 对应 APK；随后针对失败页不能自行恢复，新增了
+前台每 20 秒自动重试、后台停止、返回前台立即重试。更新版 APK 的
+`testDebugUnitTest assembleDebug lintDebug --no-daemon` 已通过，但设备覆盖安装
+被手机安装确认拒绝（`INSTALL_FAILED_ABORTED`），待用户在手机允许后重试；
+这段自动恢复逻辑尚未做设备验收。
 WebView 页面源码尚未切换到生产插件。Windows LAN 定时自愈任务仍因
 反复弹出可见命令行而禁用，后续 LAN 自动修复尚未恢复。
 

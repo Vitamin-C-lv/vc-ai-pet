@@ -58,8 +58,10 @@ class MainActivity : ComponentActivity() {
     private var attemptClosed = false
     private var nextDiscoveryRetryIndex = 0
     private var connectionUiState = ConnectionUiState.SEARCHING
+    private var activityResumed = false
     private var recoveryDeadlineRunnable: Runnable? = null
     private var discoveryRetryRunnable: Runnable? = null
+    private var failureRetryRunnable: Runnable? = null
     private var revealRunnable: Runnable? = null
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
 
@@ -526,6 +528,28 @@ class MainActivity : ComponentActivity() {
         splashRetryButton.visibility = View.VISIBLE
         splashAdvancedButton.visibility = View.VISIBLE
         startSplashAnimation()
+        scheduleForegroundFailureRetry()
+    }
+
+    private fun scheduleForegroundFailureRetry() {
+        if (connectionUiState != ConnectionUiState.FAILED_RETRYABLE || !activityResumed ||
+            failureRetryRunnable != null
+        ) {
+            return
+        }
+        val runnable = Runnable {
+            failureRetryRunnable = null
+            if (connectionUiState == ConnectionUiState.FAILED_RETRYABLE && activityResumed) {
+                startAutomaticAttempt()
+            }
+        }
+        failureRetryRunnable = runnable
+        mainHandler.postDelayed(runnable, FAILURE_AUTO_RETRY_DELAY_MS)
+    }
+
+    private fun cancelForegroundFailureRetry() {
+        failureRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+        failureRetryRunnable = null
     }
 
     private fun openAdvancedSettings() {
@@ -577,6 +601,7 @@ class MainActivity : ComponentActivity() {
 
     private fun cancelAttemptCallbacks() {
         cancelDiscoveryAndRecoveryCallbacks()
+        cancelForegroundFailureRetry()
         revealRunnable?.let { mainHandler.removeCallbacks(it) }
         revealRunnable = null
     }
@@ -612,6 +637,20 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
+    override fun onResume() {
+        super.onResume()
+        activityResumed = true
+        if (connectionUiState == ConnectionUiState.FAILED_RETRYABLE) {
+            startAutomaticAttempt()
+        }
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        cancelForegroundFailureRetry()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         endpointProbeGeneration += 1
         cancelAttemptCallbacks()
@@ -634,6 +673,7 @@ class MainActivity : ComponentActivity() {
         private const val SPLASH_FOUND_MESSAGE_MS = 300L
         private const val SPLASH_FADE_DURATION_MS = 250L
         private const val WIFI_DISCOVERY_LOG_TAG = "WifiLanDiscovery"
+        private const val FAILURE_AUTO_RETRY_DELAY_MS = 20_000L
         private val DISCOVERY_RETRY_OFFSETS_MS = longArrayOf(4_000L, 9_000L, 14_000L)
         private val IMAGE_MIME_TYPES = arrayOf(
             "image/jpeg",
