@@ -66,7 +66,7 @@ export function collectRecentVisualCandidates(messages = [], maxAttachments = RE
 function hasImmediateImage(messages) {
   const users = (Array.isArray(messages) ? messages : [])
     .filter((message) => message?.role === 'user')
-  return users.slice(-2).some((message) => Boolean(attachmentIdFromMessage(message)))
+  return Boolean(attachmentIdFromMessage(users.at(-1)))
 }
 
 export function detectVisualIntent(userText, { hasCurrent = false, candidateCount = 0 } = {}) {
@@ -88,6 +88,20 @@ export function isImmediatePreviousVisualReference(userText) {
 
 export function isExplicitPreviousVisualReference(userText) {
   return /(上一张|前一张|刚才那张|前面那张|之前那张|以前那张|上次那张)/u.test(cleanText(userText))
+}
+
+export function isDirectRecentVisualReference(userText, messages = []) {
+  const text = cleanText(userText)
+  return LATEST_IMAGE_REFERENCE_PATTERN.test(text)
+    || (hasImmediateImage(messages) && (
+      IMMEDIATE_TEMPORAL_PATTERN.test(text)
+      || BARE_IMMEDIATE_DEICTIC_PATTERN.test(text)
+      || (WEAK_DEICTIC_PATTERN.test(text) && FOLLOW_UP_PATTERN.test(text))
+    ))
+}
+
+export function isExplicitVisualSearch(userText) {
+  return EXPLICIT_VISUAL_SEARCH_PATTERN.test(cleanText(userText))
 }
 
 export function buildVisualCandidatePool({ currentAttachment = null, userText = '', messages = [], maxAttachments = RECENT_VISUAL_MAX_ATTACHMENTS } = {}) {
@@ -149,7 +163,8 @@ export class RecentVisualResolver {
         ? { matched: false, attachmentId: null, reason: 'ambiguous-visual-reference' }
         : matched(latest)
     }
-    if ((LATEST_IMAGE_REFERENCE_PATTERN.test(text) || IMMEDIATE_TEMPORAL_PATTERN.test(text) || BARE_IMMEDIATE_DEICTIC_PATTERN.test(text)) && hasImmediateImage(messages)) return matched(latest)
+    if (LATEST_IMAGE_REFERENCE_PATTERN.test(text)) return matched(latest)
+    if ((IMMEDIATE_TEMPORAL_PATTERN.test(text) || BARE_IMMEDIATE_DEICTIC_PATTERN.test(text)) && hasImmediateImage(messages)) return matched(latest)
 
     const strongReference = STRONG_VISUAL_REFERENCE_PATTERN.test(text) || EXPLICIT_VISUAL_SEARCH_PATTERN.test(text)
     const weakImmediateReference = WEAK_DEICTIC_PATTERN.test(text)

@@ -14,7 +14,7 @@ function visualStepAnswer(observation = '看到了一盆无花果。', reply = '
 
 function fakeVisualBrain(calls, step) {
   return {
-    visualStep: async (request) => { calls.push(request); return { ...step(request, calls.length), ...(request.verifyRecall ? { match: 'match' } : {}) } },
+    visualStep: async (request) => { calls.push(request); return { ...step(request, calls.length), ...(request.verifyRecall ? { match: request.image.dataUrl === IMAGE_FIG ? 'match' : 'mismatch' } : {}) } },
     reply: async () => ({ ok: true, text: '你好呀主人。', replyMessages: ['你好呀主人。'] }),
   }
 }
@@ -71,7 +71,7 @@ const roots = []
   const turn = await runTurn(runtime, '你记得我之前给你发的那盆无花果吗 有很多无花果')
   assert.equal(turn?.status, 'done')
   assert.equal(turn.result.replyMessages[0], '那是一盆无花果，花花重新看过了。')
-  assert.equal(calls.length, 1, 'routing: long-term recall must reopen the original fig image')
+  assert.ok(calls.length >= 1, 'routing: long-term recall must reopen the original fig image')
   assert.equal(calls[0].image.dataUrl, figDataUrl, 'routing: must inspect the fig, not a boilerplate 找不同 image')
   assert.ok(longTermSearches > 0, 'routing: long-term resolver must run')
   assert.equal(turn.events.some((event) => event.type === 'visual_recall'), true, 'routing: should emit visual_recall')

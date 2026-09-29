@@ -653,12 +653,13 @@ export class ConversationStore {
     })
   }
 
-  async readAttachmentDataUrl(id) {
+  async readAttachmentDataUrl(id, { thumbnail = false } = {}) {
     const attachment = await this.attachment(id)
     if (!attachment) return null
-    const assetPath = this.#assetPath(attachment.assetPath)
+    const assetPath = this.#assetPath(thumbnail ? attachment.thumbnailPath : attachment.assetPath)
     const bytes = await readFile(assetPath)
-    const mimeType = IMAGE_TYPES.has(attachment.originalMimeType) ? attachment.originalMimeType : 'image/webp'
+    const storedType = thumbnail ? attachment.thumbnailOriginalMimeType : attachment.originalMimeType
+    const mimeType = IMAGE_TYPES.has(storedType) ? storedType : 'image/webp'
     return {
       dataUrl: `data:${mimeType};base64,${bytes.toString('base64')}`,
       attachment,

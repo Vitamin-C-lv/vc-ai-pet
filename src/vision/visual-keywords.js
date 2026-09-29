@@ -81,6 +81,13 @@ export function contentQueryTerms(text) {
   return suppressGenericTerms(visualTermsFor(text, { boost: 1 }))
 }
 
+const VISUAL_REQUEST_WORDS = new Set([...CJK_STOP_CHARACTERS, ...'记得以前之前过去上次回忆搜索检索翻出调出发给帮请能可以照片那个有没如何啥的在里想知讲说'])
+
+export function hasVisualContentDescription(text) {
+  return [...visualKeywordTerms(text)].some(([term]) =>
+    term.length >= 2 && [...term].filter((character) => !VISUAL_REQUEST_WORDS.has(character)).length >= 2)
+}
+
 // A stop character can still be part of a meaningful compound (花 in 无花果).
 // Phrase quality therefore rejects boilerplate and all-stop phrases, while
 // allowing a semantic compound to retain its full raw substring.

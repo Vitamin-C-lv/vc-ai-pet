@@ -11,7 +11,7 @@ import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
-import { RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { isDirectRecentVisualReference, isExplicitVisualSearch, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { selectContextTurns } from '../conversation/context-budget.js'
 import { resolveMemoryPipelineConfig } from '../memory/memory-pipeline-config.js'
 import { ExplicitMemoryController } from '../memory/explicit-memory-controller.js'
@@ -889,8 +889,9 @@ export class PetRuntime {
       let recalledVisionImage = null
       let recalledVisual = null
       if (!currentVisionImage && this.conversationPersistenceReady) {
-        recalledVisual = await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
-        if (recalledVisual.matched) {
+        const recentMessages = await this.conversationStore.listForRecentVisualRecall()
+        recalledVisual = this.recentVisualResolver.resolve(ownerText, recentMessages)
+        if (recalledVisual.matched && isDirectRecentVisualReference(ownerText, recentMessages)) {
           try {
             const stored = await this.conversationStore.readAttachmentDataUrl(recalledVisual.attachmentId)
             if (stored?.dataUrl) recalledVisionImage = normalizeVisionImage({ dataUrl: stored.dataUrl })
@@ -1248,6 +1249,7 @@ export class PetRuntime {
       // resolver's generic-boilerplate overlapScore, so they reach the long-term
       // resolver instead of being short-circuited to a wrong recent image.
       if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      if (isExplicitVisualSearch(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       const recalled = await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
       if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       const followUp = this.turnOrchestrator.planFollowUp(userText)

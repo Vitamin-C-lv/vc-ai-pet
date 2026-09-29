@@ -112,6 +112,13 @@ try {
   assert.equal(resolver.resolve('你再仔细看看黑莓在纸箱子里玩', breakfastConversation).attachmentId, 'cat-in-box')
   assert.equal(resolver.resolve('帮我找黑莓在纸箱子里玩的照片', breakfastConversation).attachmentId, 'cat-in-box')
   assert.equal(resolver.resolve('你找错图片了', breakfastConversation).matched, false)
+  const interveningDescription = [
+    { role: 'user', text: '这是早餐三明治', attachment: { id: 'sandwich' }, timestamp: 1 },
+    { role: 'assistant', text: '看到了。', timestamp: 2 },
+    { role: 'user', text: '你记得笑脸吐司那份早餐吗', timestamp: 3 },
+  ]
+  assert.equal(resolver.resolve('你能回看这张图吗', interveningDescription).matched, false, 'intervening subject change must not pin the old upload')
+  assert.equal(resolver.resolve('你能回看这张图吗', interveningDescription.slice(0, 2)).attachmentId, 'sandwich')
   const noImmediateImage = [
     { role: 'user', text: 'IMAGE_01', attachment: { id: attachments[0].id } },
     { role: 'assistant', text: '看到了。' },
@@ -214,6 +221,9 @@ try {
   assert.equal(restartCalls[2].image, null)
   assert.equal(normal.reasoning.effort, 'low')
   console.log('NORMAL_CHAT_AFTER_IMAGE_REASONING=low')
+  const contentSearchInLegacyChat = await restarted.chat('帮我找植物叶子的照片')
+  assert.equal(contentSearchInLegacyChat.ok, true)
+  assert.equal(restartCalls.at(-1).image, null, 'legacy chat must not show an unverified content match')
 
   const localCalls = []
   const localMemoryCalls = []

@@ -50,7 +50,7 @@ function makeBrain(matches, calls) {
   return {
     async visualStep(request) {
       calls.push(request)
-      const match = matches[calls.length - 1]
+      const match = matches[calls.length - 1] ?? 'mismatch'
       return {
         ok: true,
         observation: match === 'match' ? '和主人描述的主体与场景一致。' : '',
@@ -119,6 +119,16 @@ try {
     .filter((message) => message.turnId === 'recall-verify-match' && message.kind === 'media_ref')
     .map((message) => message.sourceAttachmentId), [imageB.id])
 
+  const duplicateMatchEvents = []
+  const duplicateMatch = await createSession({
+    store, candidates: rankedCandidates, matches: ['match', 'match'],
+    turnId: 'recall-verify-not-unique', events: duplicateMatchEvents, calls: [],
+  }).run('V0')
+  assert.equal(duplicateMatch.ok, true)
+  assert.equal(duplicateMatch.verifiedAttachmentId, null)
+  assert.equal(duplicateMatchEvents.some(({ type }) => type === 'visual_image'), false)
+  assert.match(duplicateMatch.final.replyMessages[0], /先不发图/u)
+
   // The long-term resolver's runner-up must reach the visual session. The
   // previous orchestrator discarded it and substituted recent-chat images.
   const routedCalls = []
@@ -145,11 +155,79 @@ try {
     emit(type, payload) { routedEvents.push({ type, payload }); return { seq: routedEvents.length, at: routedEvents.length } },
   })
   assert.equal(routed.ok, true)
-  assert.equal(routedCalls.length, 2)
+  assert.equal(routedCalls.length, MAX_VISUAL_INSPECTIONS_PER_TURN)
   assert.deepEqual(routedEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [imageB.id])
   assert.deepEqual((await store.listForRecentVisualRecall(100))
     .filter((message) => message.turnId === 'recall-verify-routed' && message.kind === 'media_ref')
     .map((message) => message.sourceAttachmentId), [imageB.id])
+
+  const wrongRecent = await store.saveAttachment({ image: { dataUrl: IMAGES[4] }, thumbnail: { dataUrl: IMAGES[5] }, width: 1024, height: 768, thumbnailWidth: 256, thumbnailHeight: 192, requireThumbnail: true })
+  const rightRecent = await store.saveAttachment({ image: { dataUrl: IMAGES[6] }, thumbnail: { dataUrl: IMAGES[7] }, width: 1024, height: 768, thumbnailWidth: 256, thumbnailHeight: 192, requireThumbnail: true })
+  await store.appendMessage({ role: 'user', text: '桌上的玩具', attachment: wrongRecent })
+  await store.appendMessage({ role: 'user', text: '猫在纸箱里', attachment: rightRecent })
+  const semanticSearchCalls = []
+  const semanticVerifyCalls = []
+  const semanticEvents = []
+  const semanticOrchestrator = new PetTurnOrchestrator({
+    runtime: { ...runtime, brain: {
+      async visualSearch(request) {
+        semanticSearchCalls.push(request)
+        return { ok: true, visualIds: ['V1', 'V0'] }
+      },
+      ...makeBrain(['mismatch', 'match'], semanticVerifyCalls),
+    } },
+  })
+  const semanticResult = await semanticOrchestrator.runVisual({
+    turnId: 'recent-semantic-verify', userText: '帮我找猫在纸箱里的照片', attachment: null,
+    emit(type, payload) { semanticEvents.push({ type, payload }) },
+  })
+  assert.equal(semanticResult.ok, true)
+  assert.deepEqual(semanticSearchCalls[0].candidates.map(({ image }) => image.dataUrl), [IMAGES[7], IMAGES[5]])
+  assert.deepEqual(semanticVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[4], IMAGES[6]])
+  assert.deepEqual(semanticEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [rightRecent.id])
+  assert.deepEqual((await store.listForRecentVisualRecall(100)).filter((message) => message.turnId === 'recent-semantic-verify' && message.kind === 'media_ref').map((message) => message.sourceAttachmentId), [rightRecent.id])
+
+  const gallery = []
+  for (let index = 0; index < 12; index += 1) {
+    const attachment = await saveImage(store, IMAGES[0])
+    gallery.push({ experienceId: `gallery-${index}`, attachmentId: attachment.id, userText: '早餐', lastOccurredAt: index, occurrenceCount: index === 11 ? 2 : 1 })
+  }
+  const groupedTarget = await saveImage(store, IMAGES[8])
+  const gallerySearchCalls = []
+  const galleryVerifyCalls = []
+  const galleryEvents = []
+  const galleryOrchestrator = new PetTurnOrchestrator({
+    runtime: { ...runtime, brain: {
+      async visualSearch(request) {
+        gallerySearchCalls.push(request)
+        const target = request.candidates.find(({ image }) => image.dataUrl === IMAGES[8])
+        return { ok: true, visualIds: target ? [target.visualId] : [] }
+      },
+      ...makeBrain(['match'], galleryVerifyCalls),
+    } },
+    experienceStore: {
+      async listExperiences() { return gallery },
+      async occurrenceFor() { return [gallery[11], { attachmentId: groupedTarget.id, userText: '是这个早餐', occurredAt: 13 }] },
+    },
+  })
+  const galleryResult = await galleryOrchestrator.runVisual({
+    turnId: 'gallery-semantic-verify', userText: '帮我找纸箱里的猫照片', attachment: null,
+    emit(type, payload) { galleryEvents.push({ type, payload }) },
+  })
+  assert.equal(galleryResult.ok, true)
+  assert.equal(gallerySearchCalls.length, 2, 'gallery previews are screened in small batches')
+  assert.deepEqual(galleryVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[8]])
+  assert.deepEqual(galleryEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [groupedTarget.id])
+  const searchCallsBeforeBareReference = gallerySearchCalls.length
+  const bareEvents = []
+  const bareReference = await galleryOrchestrator.runVisual({
+    turnId: 'gallery-bare-reference', userText: '你记得以前那张照片吗', attachment: null,
+    emit(type, payload) { bareEvents.push({ type, payload }) },
+  })
+  assert.equal(bareReference.ok, true)
+  assert.equal(gallerySearchCalls.length, searchCallsBeforeBareReference)
+  assert.equal(bareEvents.some(({ type }) => type === 'visual_image'), false)
+  assert.match(bareReference.text, /哪一张/u)
 
   const noMatchEvents = []
   const noMatchOrchestrator = new PetTurnOrchestrator({

@@ -147,7 +147,7 @@ const noneOrchestrator = new PetTurnOrchestrator({
   longTermResolver: { async resolve() { return { status: 'none', candidates: [], winner: null } } },
 })
 const noneResult = await noneOrchestrator.runVisual({ turnId: 'turn-long-none', emit: () => {}, userText: '以前那盆植物', attachment: null })
-assert.match(noneResult.text, /没有找到和这个有关/u)
+assert.match(noneResult.text, /没有找到能确认的那张照片/u)
 
 // A comparison inspection stores a comparison event linked to the other root.
 const comparisonA = await saveImage(imageA, '比较植物甲')
