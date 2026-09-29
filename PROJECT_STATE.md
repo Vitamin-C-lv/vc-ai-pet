@@ -30,9 +30,13 @@ LAN `:17870`、StackChan `:17871` 与 Tailscale `:3080` 转发保留。
 页面视觉源码仍未部署，当前页还会显示英文状态词 `relaxed`。
 初次安装的是 `f6337fe` 对应 APK；随后针对失败页不能自行恢复，新增了
 前台每 20 秒自动重试、后台停止、返回前台立即重试。更新版 APK 的
-`testDebugUnitTest assembleDebug lintDebug --no-daemon` 已通过，但设备覆盖安装
-被手机安装确认拒绝（`INSTALL_FAILED_ABORTED`），待用户在手机允许后重试；
-这段自动恢复逻辑尚未做设备验收。
+`testDebugUnitTest assembleDebug lintDebug --no-daemon` 已通过。手机经 vivo
+安装确认后，`adb install -r` 返回 Success，`firstInstallTime` 与 AUTO/Tailscale
+连接偏好仍在。设备验收时保持蜂窝网络与 Tailscale 不变，短暂关闭 PC 的
+Serve `:17870` 后冷启动 App，确认显示“暂时联系不上花花”；恢复 Serve，
+未触碰手机，失败页自行消失并进入 `pet_webview`，进程仍运行。
+这验证了同一 VPN 网络下家中服务恢复后的前台自动重连；VPN 开关切换、
+后台返回触发的立即重试仍未单独实测。
 WebView 页面源码尚未切换到生产插件。Windows LAN 定时自愈任务仍因
 反复弹出可见命令行而禁用，后续 LAN 自动修复尚未恢复。
 
