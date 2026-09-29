@@ -1,4 +1,4 @@
-import { buildVisualCandidatePool, detectVisualIntent, isImmediatePreviousVisualReference, RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { buildVisualCandidatePool, detectVisualIntent, isExplicitPreviousVisualReference, isImmediatePreviousVisualReference, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
 import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
@@ -34,6 +34,9 @@ export class PetTurnOrchestrator {
     const resolved = await this.resolver.resolve(userText, messages)
     const intent = detectVisualIntent(userText, { hasCurrent: Boolean(attachment), candidateCount: pool.length - (attachment ? 1 : 0) })
     const comparisonPair = buildPrimaryComparisonPair(pool, intent)
+    // A new upload is the subject unless the owner explicitly refers to an
+    // earlier image or asks for a comparison.
+    if (attachment && intent !== 'comparison' && !isExplicitPreviousVisualReference(userText)) pool = pool.filter((candidate) => candidate.relation === 'current')
     emit('turn_started', { mode: 'visual' }); emit('thinking', {})
     const historicalCandidateCount = pool.length - (attachment ? 1 : 0)
     const explicitPreviousReference = intent === 'temporal_followup' && isImmediatePreviousVisualReference(userText)

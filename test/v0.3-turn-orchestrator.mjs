@@ -25,7 +25,10 @@ await store.appendMessage({ role: 'assistant', kind: 'final', text: '第一张�
 const persisted = await store.listForRecentVisualRecall()
 const resolver = new RecentVisualResolver()
 assert.equal(resolver.resolve('刚才的面里面有几种蘑菇', persisted).attachmentId, attachmentA.id)
+assert.equal(resolver.resolve('前一张', persisted).attachmentId, attachmentA.id)
 assert.equal(detectVisualIntent('这张和上一张有什么区别', { hasCurrent: true, candidateCount: 1 }), 'comparison')
+assert.equal(detectVisualIntent('这张和前一张再确认一下', { hasCurrent: true, candidateCount: 1 }), 'comparison')
+assert.equal(detectVisualIntent('你看看前一张', { hasCurrent: true, candidateCount: 1 }), 'historical_visual')
 assert.equal(detectVisualIntent('之前那个怎么样', { candidateCount: 2 }), 'ambiguous')
 assert.equal(detectVisualIntent('这是什么', { hasCurrent: true, candidateCount: 0 }), 'single_inspection')
 
@@ -373,6 +376,46 @@ const ambiguousResult = await integratedRuntime.chat('之前那个怎么样')
 assert.equal(ambiguousResult.reasoning.effort, 'low')
 assert.match(ambiguousResult.text, /哪一张/u)
 assert.equal(integratedCalls.length, 1)
+
+const breakfastAttachment = await integratedRuntime.conversationStore.saveAttachment({ image: { dataUrl: imageA }, thumbnail: { dataUrl: imageA }, width: 64, height: 64, thumbnailWidth: 64, thumbnailHeight: 64, requireThumbnail: true })
+const breakfastCalls = []
+integratedRuntime.brain.visualStep = async (request) => {
+  breakfastCalls.push(request)
+  return request.candidatePool.length > 1
+    ? { ok: true, observation: '错误地去看前一张。', action: 'inspect', nextVisualId: 'V1', focus: '', replyMessages: [] }
+    : { ok: true, observation: '当前早餐照片。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['看到我们的早饭啦。'] }
+}
+const breakfastTurn = integratedRuntime.startChatTurn({ userText: '你看看这个，这个是我们的早饭', attachmentId: breakfastAttachment.id })
+let breakfastPoll = null
+for (let attempt = 0; attempt < 150; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  breakfastPoll = integratedRuntime.pollChatTurn(breakfastTurn.turnId, 0)
+  if (breakfastPoll?.status !== 'running') break
+}
+assert.equal(breakfastPoll?.status, 'done')
+assert.equal(breakfastCalls.length, 1)
+assert.deepEqual(breakfastCalls[0].candidatePool.map((candidate) => candidate.attachmentId), [breakfastAttachment.id])
+assert.equal(breakfastCalls[0].image.dataUrl, imageA)
+assert.deepEqual(breakfastPoll.events.filter((event) => event.type === 'visual_image').map((event) => event.payload.sourceAttachmentId), [breakfastAttachment.id])
+assert.deepEqual((await integratedRuntime.conversationStore.history()).filter((message) => message.turnId === breakfastTurn.turnId && message.kind === 'media_ref').map((message) => message.sourceAttachmentId), [breakfastAttachment.id])
+
+const previousRequestAttachment = await integratedRuntime.conversationStore.saveAttachment({ image: { dataUrl: imageB }, thumbnail: { dataUrl: imageB }, width: 64, height: 64, thumbnailWidth: 64, thumbnailHeight: 64, requireThumbnail: true })
+const previousCalls = []
+integratedRuntime.brain.visualStep = async (request) => {
+  previousCalls.push(request)
+  return { ok: true, observation: '上一张照片。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['我回头看了上一张。'] }
+}
+const previousTurn = integratedRuntime.startChatTurn({ userText: '你看看上一张', attachmentId: previousRequestAttachment.id })
+let previousPoll = null
+for (let attempt = 0; attempt < 150; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  previousPoll = integratedRuntime.pollChatTurn(previousTurn.turnId, 0)
+  if (previousPoll?.status !== 'running') break
+}
+assert.equal(previousPoll?.status, 'done')
+assert.equal(previousCalls.length, 1)
+assert.equal(previousCalls[0].image.dataUrl, imageA)
+assert.deepEqual(previousPoll.events.filter((event) => event.type === 'visual_image').map((event) => event.payload.sourceAttachmentId), [breakfastAttachment.id])
 integratedRuntime.close()
 await rm(integrationRoot, { recursive: true, force: true })
 
@@ -388,7 +431,9 @@ console.log('MAX_VISUAL_INSPECTIONS_PER_TURN=5')
 console.log('REPEATED_VISUAL_INSPECTION=PASS')
 console.log('SIXTH_INSPECTION_EXECUTED=NO')
 console.log('CURRENT_IMAGE_PRIORITY=PASS')
-console.log('CURRENT_IMAGE_EXCLUSIVE=NO')
+console.log('CURRENT_IMAGE_EXCLUSIVE=YES')
+console.log('CURRENT_UPLOAD_ATTACHMENT_PIN=PASS')
+console.log('EXPLICIT_PREVIOUS_IMAGE_REFERENCE=PASS')
 console.log('IMMEDIATE_TEMPORAL_HARD_PIN=PASS')
 console.log('COMPARISON_INTENT=PASS')
 console.log('AMBIGUITY_GUARD=PASS')

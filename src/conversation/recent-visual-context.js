@@ -9,14 +9,14 @@ import { isStackchanCameraMessage } from '../vision/visual-source.js'
 export const RECENT_VISUAL_MAX_ATTACHMENTS = 10
 export const RECENT_VISUAL_WINDOW = '10_IMAGE_MESSAGES'
 
-const LATEST_IMAGE_REFERENCE_PATTERN = /(上一张|刚才那张|前面那张|最后一张|最新那张|最近那张)/u
+const LATEST_IMAGE_REFERENCE_PATTERN = /(上一张|前一张|刚才那张|前面那张|最后一张|最新那张|最近那张)/u
 const STRONG_VISUAL_REFERENCE_PATTERN = /(图片|照片|图像|截图|图里|图中|这张图|这张图片|上一张|前一张|刚才那张|前面那张|再看一下|再看看|看看|重新看看|仔细看看|仔细看|看清楚|你再看|图片里面|照片里面|画面里|之前|前面|以前|那盆|那碗|那盘|那张|上次)/u
 const WEAK_DEICTIC_PATTERN = /(这|这个|这些|它|那个|刚才那个|里面那个)/u
 const FOLLOW_UP_PATTERN = /(吗|么|呢|？|\?|是不是|是否|真的吗|真的|什么|哪|怎么|多少|好不好|能不能|可以吗|看起来|看清|仔细|吃|喝|味道|叶子|颜色|画面|内容|是什么|怎么样|如何|像不像|对不对|有没有|好看|漂亮|可爱|不错|真实|真假|应该|感觉)/u
 const IMMEDIATE_TEMPORAL_PATTERN = /(刚才|刚刚|刚发的|刚给你看的|这碗|这盘|这个图里|刚才的面|刚才那个)/u
 const IMMEDIATE_PREVIOUS_PATTERN = /(刚才|刚刚|刚发的|刚给你看的|刚才的面|刚才那个)/u
 const BARE_IMMEDIATE_DEICTIC_PATTERN = /^(?:这个|这张|它|这个图)$/u
-const COMPARISON_PATTERN = /(两张|这两个|这两幅|比较|区别|不同|哪里不一样|找不同|对比|相比|前一张|上一张和这张)/u
+const COMPARISON_PATTERN = /(两张|这两个|这两幅|比较|区别|不同|哪里不一样|找不同|对比|相比|上一张和这张|这张和上一张|前一张和这张|这张和前一张)/u
 const STANDALONE_PREVIOUS_PATTERN = /^(?:前一张|上一张)$/u
 const AMBIGUOUS_DEICTIC_PATTERN = /(之前那个|前面那个|那个怎么样)/u
 
@@ -82,6 +82,10 @@ export function detectVisualIntent(userText, { hasCurrent = false, candidateCoun
 
 export function isImmediatePreviousVisualReference(userText) {
   return IMMEDIATE_PREVIOUS_PATTERN.test(cleanText(userText))
+}
+
+export function isExplicitPreviousVisualReference(userText) {
+  return /(上一张|前一张|刚才那张|前面那张|之前那张|以前那张|上次那张)/u.test(cleanText(userText))
 }
 
 export function buildVisualCandidatePool({ currentAttachment = null, userText = '', messages = [], maxAttachments = RECENT_VISUAL_MAX_ATTACHMENTS } = {}) {
