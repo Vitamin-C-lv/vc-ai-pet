@@ -180,21 +180,22 @@ export class PetTurnOrchestrator {
     }
 
     const ranked = [result.winner, ...(Array.isArray(result.candidates) ? result.candidates : [])]
+    const candidateAttachments = [
+      ...ranked.map((candidate) => ({ candidate, attachmentId: candidate?.attachmentId })),
+      ...ranked.flatMap((candidate) => (Array.isArray(candidate?.attachmentIds) ? candidate.attachmentIds : [])
+        .map((attachmentId) => ({ candidate, attachmentId }))),
+    ]
     const seenAttachments = new Set()
     const recalledPool = []
-    for (const candidate of ranked) {
-      const attachmentIds = [candidate?.attachmentId, ...(Array.isArray(candidate?.attachmentIds) ? candidate.attachmentIds : [])]
-      for (const candidateAttachmentId of attachmentIds) {
-        if (!candidateAttachmentId || seenAttachments.has(candidateAttachmentId)) continue
-        seenAttachments.add(candidateAttachmentId)
-        try {
-          const stored = await store.readAttachmentDataUrl(candidateAttachmentId)
-          if (!stored?.dataUrl || !stored.attachment) continue
-          recalledPool.push({ visualId: `V${recalledPool.length}`, attachmentId: candidateAttachmentId, relation: 'recalled', userText: candidate.userText, timestamp: candidate.occurredAt })
-        } catch {
-          // An unavailable occurrence cannot be checked or sent.
-        }
-        if (recalledPool.length >= MAX_VISUAL_INSPECTIONS_PER_TURN) break
+    for (const { candidate, attachmentId } of candidateAttachments) {
+      if (!attachmentId || seenAttachments.has(attachmentId)) continue
+      seenAttachments.add(attachmentId)
+      try {
+        const stored = await store.readAttachmentDataUrl(attachmentId)
+        if (!stored?.dataUrl || !stored.attachment) continue
+        recalledPool.push({ visualId: `V${recalledPool.length}`, attachmentId, relation: 'recalled', userText: candidate.userText, timestamp: candidate.occurredAt })
+      } catch {
+        // An unavailable occurrence cannot be checked or sent.
       }
       if (recalledPool.length >= MAX_VISUAL_INSPECTIONS_PER_TURN) break
     }

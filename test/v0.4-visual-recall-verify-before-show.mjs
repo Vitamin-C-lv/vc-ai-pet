@@ -123,6 +123,9 @@ try {
   // previous orchestrator discarded it and substituted recent-chat images.
   const routedCalls = []
   const routedEvents = []
+  const otherOccurrences = []
+  for (let index = 0; index < 4; index += 1) otherOccurrences.push((await saveImage(store, IMAGES[index + 2])).id)
+  const groupedWinner = { ...rankedCandidates[0], attachmentIds: [imageA.id, ...otherOccurrences] }
   const runtime = {
     conversationStore: store,
     conversation: { append() {} },
@@ -132,7 +135,7 @@ try {
   const orchestrator = new PetTurnOrchestrator({
     runtime,
     longTermResolver: { async resolve() {
-      return { status: 'matched', winner: rankedCandidates[0], candidates: rankedCandidates }
+      return { status: 'matched', winner: groupedWinner, candidates: [groupedWinner, rankedCandidates[1]] }
     } },
   })
   const routed = await orchestrator.runVisual({
