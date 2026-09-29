@@ -57,6 +57,7 @@ function createElement({ value = '', scrollHeight = 44, maxLength = -1 } = {}) {
       element.selectionEnd = end
     },
     focus() { element.focused = true },
+    blur() { element.focused = false },
     replaceChildren(...nodes) { element.children = nodes },
     append(...nodes) { element.children.push(...nodes) },
   }
@@ -159,8 +160,10 @@ let holdSend = false
 let releaseSend = null
 let sendGate = null
 let emojiCloseCalls = 0
+const focusedAtSend = []
 
 async function sendExistingText(message) {
+  focusedAtSend.push(textarea.focused)
   sent.push({ message, hadAttachment: pendingImage })
   if (nextSendFailure) {
     nextSendFailure = false
@@ -246,10 +249,14 @@ form.dispatch('submit', { keyCode: 229 })
 await tick()
 assert.equal(sent.at(-1).message, '图片先选')
 const closesBeforeTap = emojiCloseCalls
+textarea.focus()
+assert.equal(sendButton.dispatch('pointerdown').defaultPrevented, true)
 sendButton.dispatch('click')
 await tick()
 assert.deepEqual(sent.at(-1), { message: '拼音中', hadAttachment: false })
 assert.equal(emojiCloseCalls, closesBeforeTap + 1)
+assert.equal(focusedAtSend.at(-1), false)
+assert.equal(textarea.focused, false)
 textarea.dispatch('compositionend')
 textarea.value = '确认键发送'
 textarea.dispatch('input')

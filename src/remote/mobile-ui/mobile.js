@@ -1382,7 +1382,6 @@ async function submitComposer(message = input.value.trim()) {
   if (!message && !pendingImage) return
 
   const draftText = input.value
-  const restoreInputFocus = document.activeElement === input
   input.value = ''
   input.readOnly = true
   sendButton.disabled = true
@@ -1397,7 +1396,6 @@ async function submitComposer(message = input.value.trim()) {
     }
   } finally {
     input.readOnly = false
-    if (restoreInputFocus && currentScreen === SCREEN.CHAT) input.focus({ preventScroll: true })
     updateSendButton()
     scheduleComposerTextareaHeight()
     void refresh()

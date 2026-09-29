@@ -56,6 +56,7 @@
       sending = true
       sync()
       emojiController?.close?.()
+      input.blur()
       try {
         await sendExistingText(text)
       } finally {
@@ -87,6 +88,8 @@
     addButton.type = 'button'
     addButton.addEventListener('click', () => { void openImagePicker() })
     sendButton.type = 'button'
+    // Keep the keyboard open until click; otherwise WebView moves the button before pointerup.
+    sendButton.addEventListener('pointerdown', (event) => event.preventDefault())
     sendButton.addEventListener('click', () => { void submit() })
     micButton?.addEventListener('click', () => showToast('语音输入后续开放'))
 
