@@ -29,7 +29,7 @@ const attShinchan = await store.saveAttachment({ image: { dataUrl: IMAGE_B }, th
 
 const visualCalls = []
 runtime.brain = {
-  visualStep: async () => { visualCalls.push(1); return { ok: true, observation: '看到了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['花花看到了。'] } },
+  visualStep: async (request) => { visualCalls.push(1); return { ok: true, observation: '看到了。', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['花花看到了。'], ...(request.verifyRecall ? { match: 'match' } : {}) } },
   reply: async () => ({ ok: true, text: '这是普通文字回答。', replyMessages: ['这是普通文字回答。'] }),
 }
 

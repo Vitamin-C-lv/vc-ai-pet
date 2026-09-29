@@ -1,6 +1,6 @@
 import { buildVisualCandidatePool, detectVisualIntent, isImmediatePreviousVisualReference, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
-import { VisualWorkingSession } from '../vision/visual-working-session.js'
+import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
 import { detectContextualVisualRecallFollowUp, VisualRecallContext } from './visual-recall-context.js'
 
@@ -59,7 +59,7 @@ export class PetTurnOrchestrator {
       ? (followUp ? { mode: 'long-term-visual' } : detectLongTermVisualIntent(userText))
       : null
     if (!attachment && (longTermIntent || (intent === 'historical_visual' && !resolved?.matched))) {
-      return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store, messages, pool })
+      return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store })
     }
     if (pool.length === 0) {
       return this.#finishAmbiguous({
@@ -145,7 +145,7 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, startedAt, store, pool }) {
+  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, startedAt, store }) {
     if (!followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
@@ -179,41 +179,28 @@ export class PetTurnOrchestrator {
       return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
     }
 
-    if (followUp?.clarification === true) {
-      this.recallContext.record({
-        mode: 'long_term_visual_recall',
-        query: resolveQuery,
-        result,
-        clarificationRequested: false,
-        uses: contextUses,
-      })
-    } else {
-      this.recallContext.clear()
-    }
-    const winner = result.winner
-    const attachmentIds = [...new Set([
-      ...(Array.isArray(winner.attachmentIds) ? winner.attachmentIds : []),
-      winner.attachmentId,
-    ].filter(Boolean))]
-    let attachmentId = attachmentIds[0] ?? null
-    let metadata = null
-    for (const candidateAttachmentId of attachmentIds) {
-      try {
-        const stored = await store.readAttachmentDataUrl(candidateAttachmentId)
-        if (stored?.dataUrl && stored.attachment) {
-          attachmentId = candidateAttachmentId
-          metadata = stored.attachment
-          break
+    const ranked = [result.winner, ...(Array.isArray(result.candidates) ? result.candidates : [])]
+    const seenAttachments = new Set()
+    const recalledPool = []
+    for (const candidate of ranked) {
+      const attachmentIds = [candidate?.attachmentId, ...(Array.isArray(candidate?.attachmentIds) ? candidate.attachmentIds : [])]
+      for (const candidateAttachmentId of attachmentIds) {
+        if (!candidateAttachmentId || seenAttachments.has(candidateAttachmentId)) continue
+        seenAttachments.add(candidateAttachmentId)
+        try {
+          const stored = await store.readAttachmentDataUrl(candidateAttachmentId)
+          if (!stored?.dataUrl || !stored.attachment) continue
+          recalledPool.push({ visualId: `V${recalledPool.length}`, attachmentId: candidateAttachmentId, relation: 'recalled', userText: candidate.userText, timestamp: candidate.occurredAt })
+        } catch {
+          // An unavailable occurrence cannot be checked or sent.
         }
-      } catch {
-        // A missing occurrence asset falls through to the next preserved one.
+        if (recalledPool.length >= MAX_VISUAL_INSPECTIONS_PER_TURN) break
       }
+      if (recalledPool.length >= MAX_VISUAL_INSPECTIONS_PER_TURN) break
     }
-    const recallCaption = sanitizeSafeTraceText(
-      metadata ? '🐾 花花想起以前好像见过……' : '🐾 花花想起以前好像见过，可是原图已经找不到了……',
-      120,
-    )
-    if (!metadata) {
+    if (recalledPool.length === 0) {
+      const attachmentId = result.winner.attachmentId ?? null
+      const recallCaption = '🐾 花花找到一条旧记录，但原图已经找不到了……'
       const recallEvent = emit('visual_recall', { sourceAttachmentId: attachmentId, caption: recallCaption })
       await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text: recallCaption })
       const text = '主人，花花记得以前好像见过，可是原图找不到了，没办法重新确认哦。'
@@ -227,16 +214,10 @@ export class PetTurnOrchestrator {
 
     await store.appendMessage({ role: 'user', text: userText, turnId })
     await this.#appendMemoryRecall({ turnId, emit, userText, store })
-    const recallEvent = emit('visual_recall', { sourceAttachmentId: attachmentId, caption: recallCaption })
-    await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text: recallCaption })
-    pool = [
-      { visualId: 'V0', attachmentId, relation: 'recalled', userText: winner.userText, timestamp: winner.occurredAt },
-      ...pool.map((candidate, index) => ({ ...candidate, visualId: `V${index + 1}`, relation: 'previous' })),
-    ]
     const session = new VisualWorkingSession({
       turnId,
-      userText,
-      candidatePool: pool,
+      userText: resolveQuery,
+      candidatePool: recalledPool,
       comparison: false,
       conversationStore: store,
       brain: this.runtime.brain,
@@ -246,6 +227,12 @@ export class PetTurnOrchestrator {
     })
     const visualResult = await session.run('V0')
     if (!visualResult.ok) return visualResult
+    if (visualResult.verifiedAttachmentId) {
+      if (followUp?.clarification === true) this.recallContext.record({ mode: 'long_term_visual_recall', query: resolveQuery, result, clarificationRequested: false, uses: contextUses })
+      else this.recallContext.clear()
+    } else {
+      this.recallContext.record({ mode: 'visual_recall_ambiguous', query: resolveQuery, result, clarificationRequested: true, uses: contextUses })
+    }
     return this.#finishVisualResult({ turnId, emit, userText, attachment: null, startedAt, result: visualResult })
   }
 

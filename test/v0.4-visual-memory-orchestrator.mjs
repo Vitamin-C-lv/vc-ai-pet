@@ -59,9 +59,9 @@ function makeRuntime(calls, observation = '原图里是一盆绿色植物。') {
     conversation: { append() {} },
     memory: { recall() { return [] } },
     brain: {
-      async visualStep() {
+      async visualStep(request) {
         calls.push(arguments[0])
-        return { ok: true, observation, action: 'answer', nextVisualId: '', focus: '植物', replyMessages: ['花花重新确认到了。'] }
+        return { ok: true, observation, action: 'answer', nextVisualId: '', focus: '植物', replyMessages: ['花花重新确认到了。'], ...(request.verifyRecall ? { match: 'match' } : {}) }
       },
     },
   }

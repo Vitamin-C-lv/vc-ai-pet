@@ -17,7 +17,7 @@ function visualStepAnswer(observation = '看到了一盆开花的植物。', rep
 
 function fakeVisualBrain(calls, step) {
   return {
-    visualStep: async (request) => { calls.push(request); return step(request, calls.length) },
+    visualStep: async (request) => { calls.push(request); return { ...step(request, calls.length), ...(request.verifyRecall ? { match: 'match' } : {}) } },
     reply: async () => ({ ok: true, text: '你好呀主人。', replyMessages: ['你好呀主人。'] }),
   }
 }

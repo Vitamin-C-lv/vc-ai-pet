@@ -32,7 +32,7 @@ function visualAnswer(calls, { observation = '原图里有很多无花果。', r
     visualStep: async (request) => {
       calls.push(request)
       if (Array.isArray(steps)) return steps[calls.length - 1] ?? steps.at(-1)
-      return { ok: true, observation, action: 'answer', nextVisualId: '', focus: '果实', replyMessages: [reply] }
+      return { ok: true, observation, action: 'answer', nextVisualId: '', focus: '果实', replyMessages: [reply], ...(request.verifyRecall ? { match: 'match' } : {}) }
     },
     reply: async ({ userText }) => ({ ok: true, text: `普通回答：${userText}`, replyMessages: [`普通回答：${userText}`] }),
   }

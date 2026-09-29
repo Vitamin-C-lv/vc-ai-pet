@@ -30,7 +30,7 @@ function makeRuntime(calls) {
     brain: {
       async visualStep(request) {
         calls.push(request)
-        return { ok: true, observation: '原图里有很多无花果。', action: 'answer', nextVisualId: '', focus: '果实', replyMessages: ['花花重新确认到了。'] }
+        return { ok: true, observation: '原图里有很多无花果。', action: 'answer', nextVisualId: '', focus: '果实', replyMessages: ['花花重新确认到了。'], ...(request.verifyRecall ? { match: 'match' } : {}) }
       },
     },
   }

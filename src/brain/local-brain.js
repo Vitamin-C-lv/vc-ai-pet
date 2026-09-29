@@ -21,6 +21,15 @@ export const PET_VISUAL_STEP_RESPONSE_SCHEMA = Object.freeze({
   required: ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages'],
 })
 
+export const PET_VISUAL_RECALL_STEP_RESPONSE_SCHEMA = Object.freeze({
+  ...PET_VISUAL_STEP_RESPONSE_SCHEMA,
+  properties: {
+    ...PET_VISUAL_STEP_RESPONSE_SCHEMA.properties,
+    match: { type: 'string', enum: ['match', 'mismatch', 'uncertain'] },
+  },
+  required: [...PET_VISUAL_STEP_RESPONSE_SCHEMA.required, 'match'],
+})
+
 // The visual profile reserves 2,048 tokens for Qwen's hidden reasoning. The
 // previous 768-token cap could therefore end with finish_reason=length before
 // the public JSON was emitted, which surfaced as PET_LOCAL_BRAIN_BAD_RESPONSE.
@@ -43,17 +52,19 @@ function visualStepContent(message) {
   }).join('')
 }
 
-export function validateVisualStepResponse(value, { candidateIds = [], forceAnswer = false } = {}) {
+export function validateVisualStepResponse(value, { candidateIds = [], forceAnswer = false, verifyRecall = false } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidVisualStep('object-required')
-  const required = ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages']
+  const required = ['observation', 'action', 'nextVisualId', 'focus', 'replyMessages', ...(verifyRecall ? ['match'] : [])]
   if (required.some((key) => !Object.hasOwn(value, key))) return invalidVisualStep('required-field-missing')
   if (Object.keys(value).some((key) => !required.includes(key))) return invalidVisualStep('unknown-field')
   if (typeof value.observation !== 'string' || value.observation.trim().length > 180) return invalidVisualStep('observation-invalid')
   if (value.observation.trim() && !sanitizeSafeTraceText(value.observation, 180)) return invalidVisualStep('observation-unsafe')
   if (value.action !== 'inspect' && value.action !== 'answer') return invalidVisualStep('action-invalid')
+  if (verifyRecall && value.action !== 'answer') return invalidVisualStep('recall-action-invalid')
   if (typeof value.nextVisualId !== 'string' || value.nextVisualId.trim().length > 16) return invalidVisualStep('next-visual-id-invalid')
   if (typeof value.focus !== 'string' || value.focus.trim().length > 120) return invalidVisualStep('focus-invalid')
   if (value.focus.trim() && !sanitizeSafeTraceText(value.focus, 120)) return invalidVisualStep('focus-unsafe')
+  if (verifyRecall && !['match', 'mismatch', 'uncertain'].includes(value.match)) return invalidVisualStep('recall-match-invalid')
   if (!Array.isArray(value.replyMessages) || value.replyMessages.length > 3) return invalidVisualStep('reply-messages-invalid')
   const replyMessages = []
   for (const item of value.replyMessages) {
@@ -63,13 +74,15 @@ export function validateVisualStepResponse(value, { candidateIds = [], forceAnsw
   }
 
   const requested = value.nextVisualId.trim()
+  if (verifyRecall && (requested || (value.match === 'match' && replyMessages.length === 0))) return invalidVisualStep('recall-reply-invalid')
   if (value.action === 'inspect' && !forceAnswer) {
     if (!requested || (candidateIds.length > 0 && !candidateIds.includes(requested))) return invalidVisualStep('inspect-target-invalid')
   }
-  if (value.action === 'answer' && (requested || (!forceAnswer && replyMessages.length === 0))) return invalidVisualStep('answer-shape-invalid')
+  if (value.action === 'answer' && (requested || (!forceAnswer && replyMessages.length === 0 && !(verifyRecall && value.match !== 'match')))) return invalidVisualStep('answer-shape-invalid')
 
   return {
     ok: true,
+    ...(verifyRecall ? { match: value.match } : {}),
     observation: value.observation.trim(),
     action: forceAnswer ? 'answer' : value.action,
     nextVisualId: forceAnswer ? '' : value.action === 'inspect' ? requested : '',
@@ -187,11 +200,13 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false, memoryReview = false }) {
+  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false, memoryReview = false, verifyRecall = false }) {
     const visionImage = normalizeVisionImage(image)
     if (!visionImage) throw new LocalBrainApiError('visual step requires an image', { code: 'PET_INVALID_VISION_IMAGE' })
     const candidates = Array.isArray(candidatePool) ? candidatePool : []
-    const catalog = candidates.map(({ visualId, relation, userText: caption }) => `${visualId} (${relation}): ${String(caption ?? '').slice(0, 120)}`).join('\n')
+    const catalog = candidates.map(({ visualId, relation, userText: caption }) => verifyRecall
+      ? `${visualId} (${relation})`
+      : `${visualId} (${relation}): ${String(caption ?? '').slice(0, 120)}`).join('\n')
     const pair = (Array.isArray(comparisonPair) ? comparisonPair : [])
       .map((candidate) => String(candidate?.visualId ?? '').trim())
       .filter(Boolean)
@@ -208,14 +223,14 @@ export class LocalBrain {
       const safeFocus = sanitizeSafeTraceText(focus, 120)
       return safeSummary ? `${visualId}: ${safeSummary}${safeFocus ? `（重点：${safeFocus}）` : ''}` : ''
     }).filter(Boolean).join('\n') || '- 暂无'
-    const instruction = `你是李花花，正在分步看图片。只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+    const instruction = `你是李花花，正在分步看图片。只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${verifyRecall ? '这是找回主人描述的旧照片。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系，给出 match 字段：只有全部明确吻合才填 "match"；明确不符填 "mismatch"；看不清或无法确定填 "uncertain"。不要根据候选排名、旧文字或既有观察猜测。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。' : memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
     const startedAt = monotonicNow()
     let requestId = null
     try {
       const response = await chatWithBoundedQueueRetry(this.client, {
-        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: 0.45, topP: 0.85, maxTokens: PET_VISUAL_STEP_MAX_TOKENS,
-        responseFormat: { type: 'json_object', schema: PET_VISUAL_STEP_RESPONSE_SCHEMA },
+        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: verifyRecall ? 0 : 0.45, topP: 0.85, maxTokens: PET_VISUAL_STEP_MAX_TOKENS,
+        responseFormat: { type: 'json_object', schema: verifyRecall ? PET_VISUAL_RECALL_STEP_RESPONSE_SCHEMA : PET_VISUAL_STEP_RESPONSE_SCHEMA },
       })
       const { payload } = response
       requestId = response.requestId ?? null
@@ -230,7 +245,7 @@ export class LocalBrain {
       // a background tidy-up and must not fail because of a bubble count.
       const checked = memoryReview
         ? validateMemoryReviewResponse(parsed)
-        : validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer })
+        : validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer, verifyRecall })
       if (!checked.ok) throw new LocalBrainApiError(`invalid visual step: ${checked.reason}`, { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_STEP', requestId })
       return { ...checked, requestId, reasoning: { effort: PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
     } catch (error) {

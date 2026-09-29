@@ -45,7 +45,7 @@ async function runSession({ candidatePool, firstVisualId, steps, comparison = fa
     comparison,
     comparisonPair: comparison ? candidatePool.map(({ visualId, attachmentId }) => ({ visualId, attachmentId })) : [],
     conversationStore,
-    brain: { async visualStep() { return steps[stepIndex++] } },
+    brain: { async visualStep(request) { return { ...steps[stepIndex++], ...(request.verifyRecall ? { match: 'match' } : {}) } } },
     emit: (type, payload) => events.emit(type, payload),
     experienceStore,
   }).run(firstVisualId)
@@ -66,7 +66,7 @@ const recalled = await runSession({
 assert.equal(recalled.result.ok, true)
 assert.deepEqual(recalled.result.final.replyMessages, ['我记得这盆无花果。', '书架上那本书也看到了。'])
 const recalledActivities = (await conversationStore.listForRecentVisualRecall()).filter((message) => message.turnId === 'turn-recalled-compact' && message.kind === 'activity')
-assert.deepEqual(recalledActivities.map((message) => message.text), ['↩️ 花花翻到以前的一张照片', '👀 花花重新看了看'])
+assert.deepEqual(recalledActivities.map((message) => message.text), ['🐾 花花重新确认了以前的一张照片', '↩️ 花花翻到以前的一张照片', '👀 花花重新看了看'])
 assert.equal(recalledActivities.some((message) => /书架上|这是|画面中/u.test(message.text)), false)
 assert.equal(recalled.events.some((event) => event.type === 'visual_observation' && event.payload.summary === '👀 花花重新看了看'), true)
 const recalledObservations = await experienceStore.recentObservationsFor(recalledExperience.experienceId, { limit: 10 })

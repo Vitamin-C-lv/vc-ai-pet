@@ -161,6 +161,8 @@ export class VisualWorkingSession {
   async run(firstVisualId) {
     let visualId = firstVisualId
     let final = null
+    let verifiedAttachmentId = null
+    const verifyRecall = this.recalledSession && !this.comparison
     while (visualId && this.inspections.length < MAX_VISUAL_INSPECTIONS_PER_TURN) {
       const candidate = this.candidatePool.find((item) => item.visualId === visualId)
       if (!candidate) break
@@ -183,33 +185,43 @@ export class VisualWorkingSession {
           : candidate.relation === 'recalled'
             ? '↩️ 花花翻到以前的一张照片'
             : '↩️ 花花再回头看看前一张……'
-      const selectedEvent = this.emit('visual_selected', {
-        relation: candidate.relation,
-        sourceAttachmentId: candidate.attachmentId,
-        comparison: this.comparison,
-        revisit: alreadyInspected,
-        caption,
-      })
-      await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_selected', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: selectedEvent?.seq, activityAt: selectedEvent?.at, turnId: this.turnId, text: caption })
-      let publicAttachment
-      try {
-        publicAttachment = this.conversationStore.publicAttachment(metadata)
-      } catch (error) {
-        return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', requestId: error?.requestId ?? null, unavailable: error?.retryable === true, stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+      const publishImage = async () => {
+        const publicAttachment = this.conversationStore.publicAttachment(metadata)
+        if (!publicAttachment) return false
+        if (verifyRecall) {
+          const recallCaption = '🐾 花花重新确认了以前的一张照片'
+          const recallEvent = this.emit('visual_recall', { sourceAttachmentId: candidate.attachmentId, caption: recallCaption })
+          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: candidate.attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId: this.turnId, text: recallCaption })
+        }
+        const selectedEvent = this.emit('visual_selected', {
+          relation: candidate.relation,
+          sourceAttachmentId: candidate.attachmentId,
+          comparison: this.comparison,
+          revisit: alreadyInspected,
+          caption,
+        })
+        await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_selected', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: selectedEvent?.seq, activityAt: selectedEvent?.at, turnId: this.turnId, text: caption })
+        const imageCaption = candidate.relation === 'recalled'
+          ? '花花重新看看这张'
+          : candidate.relation === 'current' ? '花花看看这张' : '花花再看看这张'
+        const imageEvent = this.emit('visual_image', {
+          relation: candidate.relation,
+          sourceAttachmentId: candidate.attachmentId,
+          comparison: this.comparison,
+          revisit: alreadyInspected,
+          attachment: publicAttachment,
+          caption: imageCaption,
+        })
+        await this.conversationStore.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: imageEvent?.seq, activityAt: imageEvent?.at, turnId: this.turnId, text: caption, attachment: metadata })
+        return true
       }
-      if (!publicAttachment) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
-      const imageCaption = candidate.relation === 'recalled'
-        ? '花花重新看看这张'
-        : candidate.relation === 'current' ? '花花看看这张' : '花花再看看这张'
-      const imageEvent = this.emit('visual_image', {
-        relation: candidate.relation,
-        sourceAttachmentId: candidate.attachmentId,
-        comparison: this.comparison,
-        revisit: alreadyInspected,
-        attachment: publicAttachment,
-        caption: imageCaption,
-      })
-      await this.conversationStore.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', relation: candidate.relation, sourceAttachmentId: candidate.attachmentId, activitySeq: imageEvent?.seq, activityAt: imageEvent?.at, turnId: this.turnId, text: caption, attachment: metadata })
+      if (!verifyRecall) {
+        try {
+          if (!await publishImage()) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+        } catch (error) {
+          return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', requestId: error?.requestId ?? null, unavailable: error?.retryable === true, stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+        }
+      }
       this.inspections.push({ visualId, attachmentId: candidate.attachmentId })
       let step
       try {
@@ -224,12 +236,13 @@ export class VisualWorkingSession {
           inspections: this.inspections,
           requiredUniqueImages: this.requiredUniqueImages,
           forceAnswer: ordinal === MAX_VISUAL_INSPECTIONS_PER_TURN - 1,
+          verifyRecall,
         })
       } catch (error) {
         return visualFailure({ reason: error?.code ?? 'visual-step-failed', unavailable: error?.retryable === true, requestId: error?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
       }
       if (!step?.ok) return visualFailure({ reason: step?.reason ?? 'local-brain-unavailable', unavailable: step?.unavailable === true, requestId: step?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
-      if (typeof step.observation !== 'string' || typeof step.action !== 'string' || !['inspect', 'answer'].includes(step.action) || typeof step.nextVisualId !== 'string' || step.nextVisualId.trim().length > 16 || typeof step.focus !== 'string' || step.focus.trim().length > 120 || !Array.isArray(step.replyMessages) || step.replyMessages.length > 3 || step.replyMessages.some((item) => typeof item !== 'string' || item.trim().length < 1 || item.trim().length > 300)) {
+      if (typeof step.observation !== 'string' || typeof step.action !== 'string' || !['inspect', 'answer'].includes(step.action) || typeof step.nextVisualId !== 'string' || step.nextVisualId.trim().length > 16 || typeof step.focus !== 'string' || step.focus.trim().length > 120 || !Array.isArray(step.replyMessages) || step.replyMessages.length > 3 || step.replyMessages.some((item) => typeof item !== 'string' || item.trim().length < 1 || item.trim().length > 300) || (verifyRecall && !['match', 'mismatch', 'uncertain'].includes(step.match))) {
         return visualFailure({ reason: 'invalid-visual-step', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
       }
       const rawObservation = typeof step.observation === 'string' ? step.observation.trim() : ''
@@ -238,6 +251,20 @@ export class VisualWorkingSession {
       const focus = typeof step.focus === 'string' ? step.focus.trim() : ''
       const safeFocus = sanitizeSafeTraceText(focus, 120)
       if (focus.length > 120 || (focus && !safeFocus)) return visualFailure({ reason: 'unsafe-visual-focus', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
+      if (step.replyMessages.some((item) => item.length > 300 || !sanitizeSafeTraceText(item, 300))) return visualFailure({ reason: 'unsafe-visual-reply', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
+      if (verifyRecall) {
+        if (step.match !== 'match') {
+          visualId = this.candidatePool.find((item) => !this.inspections.some((inspected) => inspected.attachmentId === item.attachmentId))?.visualId ?? null
+          continue
+        }
+        if (step.action !== 'answer' || step.nextVisualId || step.replyMessages.length === 0) return visualFailure({ reason: 'invalid-visual-recall-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+        try {
+          if (!await publishImage()) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+        } catch (error) {
+          return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', requestId: error?.requestId ?? null, unavailable: error?.retryable === true, stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+        }
+        verifiedAttachmentId = candidate.attachmentId
+      }
       await this.#recordVisualEvents(candidate, summary, safeFocus)
       if (summary) {
         const observation = { visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary }
@@ -261,7 +288,6 @@ export class VisualWorkingSession {
       const replyMessages = Array.isArray(step.replyMessages)
         ? step.replyMessages.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
         : []
-      if (replyMessages.some((item) => item.length > 300 || !sanitizeSafeTraceText(item, 300))) return visualFailure({ reason: 'unsafe-visual-reply', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
       const uniqueImages = new Set(this.inspections.map((item) => item.attachmentId)).size
       if (this.comparison && uniqueImages < this.requiredUniqueImages) {
         const nextComparisonVisualId = this.#nextUninspectedComparisonVisualId()
@@ -304,10 +330,11 @@ export class VisualWorkingSession {
     const capped = this.inspections.length >= MAX_VISUAL_INSPECTIONS_PER_TURN && !final
     return {
       ok: true,
-      final: final ?? { replyMessages: ['花花已经来回看了好几遍，但这里还是不能完全确认哦。'] },
+      final: final ?? { replyMessages: [verifyRecall ? '花花看了找到的候选照片，但没法确认哪张是你说的，先不发图。你能再告诉我一些特征吗？' : '花花已经来回看了好几遍，但这里还是不能完全确认哦。'] },
       capped,
       inspections: this.inspections,
       observations: this.observations,
+      verifiedAttachmentId,
       prematureAnswersBlocked: this.prematureAnswersBlocked,
       prematureReplyMessagesDiscarded: this.prematureReplyMessagesDiscarded,
     }
