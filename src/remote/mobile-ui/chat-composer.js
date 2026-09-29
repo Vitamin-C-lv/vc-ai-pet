@@ -50,11 +50,12 @@
     }
 
     async function submit() {
-      if (sending || composing || isBusy?.()) return
+      if (sending || isBusy?.()) return
       const text = input.value.trim()
       if (!text && !hasPendingImage?.()) return
       sending = true
       sync()
+      emojiController?.close?.()
       try {
         await sendExistingText(text)
       } finally {

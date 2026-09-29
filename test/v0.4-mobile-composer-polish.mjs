@@ -158,6 +158,7 @@ let nextSendFailure = false
 let holdSend = false
 let releaseSend = null
 let sendGate = null
+let emojiCloseCalls = 0
 
 async function sendExistingText(message) {
   sent.push({ message, hadAttachment: pendingImage })
@@ -177,6 +178,7 @@ const controller = composer.wireVcComposer({
   micButton,
   addButton,
   sendButton,
+  emojiController: { close: () => { emojiCloseCalls += 1 } },
   openExistingImagePicker: async () => { pickerCalls += 1 },
   sendExistingText,
   hasPendingImage: () => pendingImage,
@@ -235,19 +237,25 @@ assert.equal(pendingImage, true)
 await controller.submit()
 assert.deepEqual(sent.at(-1), { message: '图片先选', hadAttachment: true })
 
-// CASE I: form and button sending paths share the composition guard.
+// CASE I: IME form confirmation waits for composition, but an explicit tap sends.
 textarea.value = '拼音中'
 textarea.scrollHeight = 70
 textarea.dispatch('input')
 textarea.dispatch('compositionstart')
 form.dispatch('submit', { keyCode: 229 })
-sendButton.dispatch('click')
 await tick()
 assert.equal(sent.at(-1).message, '图片先选')
-textarea.dispatch('compositionend')
-form.dispatch('submit')
+const closesBeforeTap = emojiCloseCalls
+sendButton.dispatch('click')
 await tick()
 assert.deepEqual(sent.at(-1), { message: '拼音中', hadAttachment: false })
+assert.equal(emojiCloseCalls, closesBeforeTap + 1)
+textarea.dispatch('compositionend')
+textarea.value = '确认键发送'
+textarea.dispatch('input')
+form.dispatch('submit')
+await tick()
+assert.deepEqual(sent.at(-1), { message: '确认键发送', hadAttachment: false })
 
 // CASE J: emoji replaces the caret selection, emits input, and honors the
 // textarea maxlength without producing a partial surrogate pair.

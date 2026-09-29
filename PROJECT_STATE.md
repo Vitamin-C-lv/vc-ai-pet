@@ -1,5 +1,16 @@
 # VC AI Pet — Project State
 
+## 2026-09-29 — 手机聊天发送与 emoji 面板修复
+
+手机截图显示 emoji 面板和系统键盘同时展开，输入 `hi🤗` 后页面“发送”无响应。
+线上 `chat-composer.js` 的显式按钮点击与 IME 表单确认共用 `composing` 拦截；
+按钮仍显示可用，但 composition 尚未结束时点击被静默丢弃。发送路径也从未调用
+emoji drawer 的关闭方法。已只改生产聊天 composer：手点发送可提交，IME
+表单确认仍在 composition 期间受保护；开始提交时收起 emoji 面板。
+`test/v0.4-mobile-composer-polish.mjs` 覆盖两条交互，测试与 `node --check`
+通过。线上 `:17870/chat-composer.js` 已返回新脚本，手机冷启动后进入聊天页。
+未代用户发送业务聊天；带真实输入与系统键盘的设备交互待用户确认。
+
 ## 2026-09-26 — StackChan 语音快答与延迟 A/B
 
 仅 `source=stackchan-bridge` 且不含视觉、显式记忆请求或记忆跟进的机器人语音聊天启用 `voiceFastMode`，将本地 4B 请求的 reasoning effort 设为 `off` 并要求简短口语回复。手机聊天及其他来源不匹配该门控；视觉、记忆请求和记忆跟进保留原推理策略。策略单测和 StackChan 来源集成测试通过。
