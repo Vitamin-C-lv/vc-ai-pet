@@ -1,5 +1,12 @@
 # VC AI Pet — Project State
 
+## 2026-09-29 — 聊天 composer 与生产修复对齐
+
+截图暴露 IME composition 期间显式“发送”被拦截，以及发送时 emoji 抽屉不收起。
+此工作树的 Web UI composer 已允许显式按钮提交，同时保留 IME 表单确认保护，
+并在提交时关闭 emoji；定向测试通过。同样的小修复已应用到当前生产 checkout
+并由 `:17870/chat-composer.js` 提供；本工作树其它 WebView 视觉改动仍未部署。
+
 ## 2026-09-29 — Android 连接恢复与移动界面统一（设备部分验收）
 
 Android Companion 在同一进程重新连接时先解除旧的 Wi-Fi 进程绑定；
