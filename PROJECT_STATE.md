@@ -1,6 +1,6 @@
 # VC AI Pet — Project State
 
-## 2026-09-29 — Android 连接恢复与移动界面统一（待设备验收）
+## 2026-09-29 — Android 连接恢复与移动界面统一（设备部分验收）
 
 Android Companion 在同一进程重新连接时先解除旧的 Wi-Fi 进程绑定；
 已选页面发生主框架加载错误时也会重新进入自动探测。
@@ -15,10 +15,20 @@ Android Companion 在同一进程重新连接时先解除旧的 Wi-Fi 进程绑�
 Windows 临时构建副本位于 `D:\VC-AI-Pet\temp\codex-android-visual-unify`。
 `testDebugUnitTest assembleDebug lintDebug --no-daemon` 构建成功，36 个单测通过；
 `node test/v0.4-mobile-ui-navigation-redesign.mjs` 与 `node --check` 通过。
-用户已带走手机，**新 APK 未安装、改后界面未做设备截图验收**；
-WebView 页面源码也尚未切换到生产插件。先前 LAN 故障在旧 APK 上曾实测恢复，
-但 Windows 定时自愈任务因反复弹出可见命令行而被禁用，后续自动修复尚未恢复。
-Tailscale 远程入口仍待独立验收。
+新 APK 已在手机 `10AE4R29JZ000MH` 上经 `adb install -r` 覆盖安装；
+`firstInstallTime` 与连接偏好保留。Tailscale/蜂窝网络下，手机可 ping 通
+家中 PC 的 `100.69.220.26`，但旧 Windows PortProxy 配置虽存在却没有
+`100.69.220.26:17870` 监听，手机 TCP 探测超时，App 显示“暂时联系不上花花”。
+WSL 与 Windows localhost 的 `/api/pet/state` 均返回 200。
+
+已在 PC 配置后台 Tailscale Serve：尾网内 TCP `:17870` 转发到
+`127.0.0.1:17870`，并精确删除失效的 Tailscale `:17870` PortProxy 项；
+LAN `:17870`、StackChan `:17871` 与 Tailscale `:3080` 转发保留。
+手机 TCP 探测随后成功，冷启动进入 `pet_webview`，
+`lastSuccessfulEndpoint` 与 `pet_host` 更新为 `100.69.220.26:17870`，
+未见 AndroidRuntime fatal。未进行断网/重连切换回归，也未进行改后界面截图验收。
+WebView 页面源码尚未切换到生产插件。Windows LAN 定时自愈任务仍因
+反复弹出可见命令行而禁用，后续 LAN 自动修复尚未恢复。
 
 ## 2026-09-26 — StackChan 语音快答与延迟 A/B
 
