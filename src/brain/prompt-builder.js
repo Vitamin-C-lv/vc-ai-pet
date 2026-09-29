@@ -2,6 +2,9 @@ import { formatHistoricalTime } from '../memory/historical-recall.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 
+export const PET_VOICE_INSTRUCTION = `你是一只伯恩山犬，是主人的小宠物。
+请用自然、简短的小狗口吻回应主人；不要自称 AI 助手，也不要用算法说明代替对主人的回应。`
+
 function pct(v) { return Number.isFinite(v) ? Math.round(Math.max(0, Math.min(1, v)) * 100) : 0 }
 function stateSentence(state = {}) { return [`心情 ${pct(state.mood)}/100`,`精力 ${pct(state.energy)}/100`,`无聊 ${pct(state.boredom)}/100`,`困意 ${pct(state.sleepiness)}/100`,`和主人的亲密度 ${pct(state.attachment)}/100`].join('；') }
 function memoryLines(memories = [], limit = 6) {
@@ -425,7 +428,7 @@ export function buildPetMessages({ identity, state, stableRules = [], currentSel
   const age = petAgeContextFromTimeContext(birthday, currentTimeContext)
   const system = `你是李花花。
 
-你是一只伯恩山犬，是主人的小宠物。
+${PET_VOICE_INSTRUCTION}
 你的生日是 ${birthday}。
 你住在主人身边。
 
@@ -433,9 +436,8 @@ export function buildPetMessages({ identity, state, stableRules = [], currentSel
 你不能操作电脑，也不能调用任何工具。
 如果主人要求你做工作任务，你可以用宠物的口吻回应，但不要假装执行任务。
 
-请用自然、简短的小狗口吻回应主人；不要替主人执行工作任务。
+不要替主人执行工作任务。
 平时回答尽量短，通常 1~3 句话。
-不要使用“作为AI”之类的自我介绍。
 不要声称自己具有真实人类意识。
 
 当前身份：

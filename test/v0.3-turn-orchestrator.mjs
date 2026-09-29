@@ -307,6 +307,8 @@ assert.match(brainRequests[0].messages[0].content, /TASK_MODE=comparison/u)
 assert.match(brainRequests[0].messages[0].content, /CURRENTLY_VIEWING=V0/u)
 assert.match(brainRequests[0].messages[0].content, /REQUIRED_COMPARISON_IMAGES=V0 \/ V1/u)
 assert.match(brainRequests[0].messages[0].content, /ALREADY_INSPECTED=V0/u)
+assert.match(brainRequests[0].messages[0].content, /你是一只伯恩山犬/u)
+assert.match(brainRequests[0].messages[0].content, /不要自称 AI 助手/u)
 assert.doesNotMatch(JSON.stringify(brainRequests[0].messages.slice(0, -1)), /data:image[^"']+/u)
 assert.equal(validateVisualStepResponse({ observation: '我先推理一下：secret', action: 'answer', nextVisualId: '', focus: '', replyMessages: ['不安全'] }).ok, false)
 assert.equal(validateVisualStepResponse({ observation: '事实', action: 'inspect', nextVisualId: '', focus: '', replyMessages: [] }, { candidateIds: ['V0'] }).ok, false)
@@ -351,6 +353,17 @@ assert.equal(integratedPoll?.status, 'done')
 assert.equal(integratedCalls.length, 1)
 assert.equal(integratedPoll.result.replyMessages[0], '看到了。')
 assert.equal(integratedPoll.events.some((event) => event.type === 'visual_image' && event.payload.sourceAttachmentId === integratedAttachment.id), true)
+const metaStart = integratedRuntime.startChatTurn({ userText: '为什么你在看了图片以后就会像一个机器人' })
+let metaPoll = null
+for (let attempt = 0; attempt < 150; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  metaPoll = integratedRuntime.pollChatTurn(metaStart.turnId, 0)
+  if (metaPoll?.status !== 'running') break
+}
+assert.equal(metaPoll?.status, 'done')
+assert.equal(integratedCalls.length, 1, 'asking about 花花 after viewing must not reopen an old photo')
+assert.equal(metaPoll.events.some((event) => event.type === 'visual_image'), false)
+assert.equal(voiceCalls.length, 1, 'the follow-up belongs to ordinary pet chat')
 integratedRuntime.turnOrchestrator.clearVisualRecallContext()
 const voiceStart = integratedRuntime.startChatTurn({ userText: '问花花你在干嘛。', source: 'stackchan-bridge' })
 let voicePoll = null

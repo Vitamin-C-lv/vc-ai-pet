@@ -1,7 +1,6 @@
 import {
-  CJK_STOP_CHARACTERS,
   cleanVisualText,
-  overlapScore,
+  contentQueryTerms,
   visualKeywordTerms,
 } from '../vision/visual-keywords.js'
 import { isStackchanCameraMessage } from '../vision/visual-source.js'
@@ -10,7 +9,10 @@ export const RECENT_VISUAL_MAX_ATTACHMENTS = 10
 export const RECENT_VISUAL_WINDOW = '10_IMAGE_MESSAGES'
 
 const LATEST_IMAGE_REFERENCE_PATTERN = /(上一张|前一张|刚才那张|前面那张|最后一张|最新那张|最近那张)/u
-const STRONG_VISUAL_REFERENCE_PATTERN = /(图片|照片|图像|截图|图里|图中|这张图|这张图片|上一张|前一张|刚才那张|前面那张|再看一下|再看看|看看|重新看看|仔细看看|仔细看|看清楚|你再看|图片里面|照片里面|画面里|之前|前面|以前|那盆|那碗|那盘|那张|上次)/u
+// Mentioning a photo is not by itself a request to reopen one. Keep concrete
+// references and viewing requests here; historical recall has its own route.
+const STRONG_VISUAL_REFERENCE_PATTERN = /(图里|图中|图上|这张图|这张图片|那张图|那张照片|上一张|前一张|刚才那张|前面那张|再看一下|再看看|回看|看看|重新看看|仔细看看|仔细看|看清楚|你再看|图片里面|照片里面|图片上|照片上|画面里|那盆|那碗|那盘|那张)/u
+const EXPLICIT_VISUAL_SEARCH_PATTERN = /(?:^找(?!错)|帮我找|给我找|找一下|找出|搜索|检索|翻出|调出|发给我|给我看).*(?:图片|照片|截图|图像)/u
 const WEAK_DEICTIC_PATTERN = /(这|这个|这些|它|那个|刚才那个|里面那个)/u
 const FOLLOW_UP_PATTERN = /(吗|么|呢|？|\?|是不是|是否|真的吗|真的|什么|哪|怎么|多少|好不好|能不能|可以吗|看起来|看清|仔细|吃|喝|味道|叶子|颜色|画面|内容|是什么|怎么样|如何|像不像|对不对|有没有|好看|漂亮|可爱|不错|真实|真假|应该|感觉)/u
 const IMMEDIATE_TEMPORAL_PATTERN = /(刚才|刚刚|刚发的|刚给你看的|这碗|这盘|这个图里|刚才的面|刚才那个)/u
@@ -75,7 +77,7 @@ export function detectVisualIntent(userText, { hasCurrent = false, candidateCoun
   const weakImmediateReference = WEAK_DEICTIC_PATTERN.test(text) && FOLLOW_UP_PATTERN.test(text)
   if (hasCurrent && weakImmediateReference && !AMBIGUOUS_DEICTIC_PATTERN.test(text)) return 'single_inspection'
   if (IMMEDIATE_TEMPORAL_PATTERN.test(text) || BARE_IMMEDIATE_DEICTIC_PATTERN.test(text)) return candidateCount || hasCurrent ? 'temporal_followup' : 'ambiguous'
-  if (STRONG_VISUAL_REFERENCE_PATTERN.test(text)) return candidateCount ? 'historical_visual' : hasCurrent ? 'single_inspection' : 'none'
+  if (STRONG_VISUAL_REFERENCE_PATTERN.test(text) || EXPLICIT_VISUAL_SEARCH_PATTERN.test(text)) return candidateCount ? 'historical_visual' : hasCurrent ? 'single_inspection' : 'none'
   if (hasCurrent) return 'single_inspection'
   return 'none'
 }
@@ -101,12 +103,14 @@ export function buildVisualCandidatePool({ currentAttachment = null, userText = 
 }
 
 function newestByScore(query, candidates) {
-  if (candidates.length === 1) return candidates[0]
+  const queryTerms = contentQueryTerms(query).filter(({ term }) => term.length >= 2)
   let best = null
   let bestScore = -1
   let secondScore = -1
   for (const candidate of candidates) {
-    const score = overlapScore(query, candidate.userText)
+    const candidateTerms = visualKeywordTerms(candidate.userText)
+    const score = queryTerms.reduce((total, { term, weight }) =>
+      total + (candidateTerms.has(term) ? Math.min(weight, candidateTerms.get(term)) : 0), 0)
     if (score > bestScore) {
       secondScore = bestScore
       best = candidate
@@ -147,7 +151,7 @@ export class RecentVisualResolver {
     }
     if ((LATEST_IMAGE_REFERENCE_PATTERN.test(text) || IMMEDIATE_TEMPORAL_PATTERN.test(text) || BARE_IMMEDIATE_DEICTIC_PATTERN.test(text)) && hasImmediateImage(messages)) return matched(latest)
 
-    const strongReference = STRONG_VISUAL_REFERENCE_PATTERN.test(text)
+    const strongReference = STRONG_VISUAL_REFERENCE_PATTERN.test(text) || EXPLICIT_VISUAL_SEARCH_PATTERN.test(text)
     const weakImmediateReference = WEAK_DEICTIC_PATTERN.test(text)
       && FOLLOW_UP_PATTERN.test(text)
       && hasImmediateImage(messages)

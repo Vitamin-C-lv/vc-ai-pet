@@ -11,6 +11,7 @@ import {
   RECENT_VISUAL_WINDOW,
   RecentVisualResolver,
   collectRecentVisualCandidates,
+  detectVisualIntent,
 } from '../src/conversation/recent-visual-context.js'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
 
@@ -99,6 +100,18 @@ try {
     attachmentId: null,
     reason: 'no-recent-visual-candidate',
   })
+  const breakfastConversation = [
+    { role: 'user', text: '黑莓现在在纸箱子里玩', attachment: { id: 'cat-in-box' }, timestamp: 1 },
+    { role: 'user', text: '是这个早餐', attachment: { id: 'smile-toast' }, timestamp: 2 },
+    { role: 'assistant', text: '花花看到了笑脸吐司。', timestamp: 3 },
+  ]
+  const styleQuestion = '为什么你在看了图片以后就会像一个机器人'
+  assert.equal(detectVisualIntent(styleQuestion, { candidateCount: 2 }), 'none')
+  assert.equal(resolver.resolve(styleQuestion, breakfastConversation).matched, false)
+  assert.equal(resolver.resolve('你再看看在', breakfastConversation).matched, false, 'a shared single character must not select a photo')
+  assert.equal(resolver.resolve('你再仔细看看黑莓在纸箱子里玩', breakfastConversation).attachmentId, 'cat-in-box')
+  assert.equal(resolver.resolve('帮我找黑莓在纸箱子里玩的照片', breakfastConversation).attachmentId, 'cat-in-box')
+  assert.equal(resolver.resolve('你找错图片了', breakfastConversation).matched, false)
   const noImmediateImage = [
     { role: 'user', text: 'IMAGE_01', attachment: { id: attachments[0].id } },
     { role: 'assistant', text: '看到了。' },
