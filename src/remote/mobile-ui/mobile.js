@@ -744,7 +744,7 @@ function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
   return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true } = {}) {
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true, animate = false } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
@@ -790,6 +790,12 @@ function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, 
     node.append(meta)
   }
   messages.append(node)
+  if (animate && currentScreen === SCREEN.CHAT && bubble.animate && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    bubble.animate([
+      { opacity: 0, transform: 'translateY(6px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' })
+  }
   return node
 }
 
@@ -801,7 +807,7 @@ function isSameOriginAssetUrl(value) {
 }
 
 function line(role, text, attachment = null, reasoning = null) {
-  return renderMessage({ role, text, attachment, reasoning })
+  return renderMessage({ role, text, attachment, reasoning, animate: true })
 }
 
 const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_recall', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])

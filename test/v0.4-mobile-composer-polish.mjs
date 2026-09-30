@@ -102,7 +102,7 @@ const hiddenSendRule = redesignCss.match(/\.composer-action-button\[hidden\]\s*\
 assert.match(hiddenSendRule, /display:\s*none;/u, 'empty send is removed from layout')
 assert.doesNotMatch(hiddenSendRule, /visibility:\s*hidden/u, 'empty send does not retain a hidden slot')
 assert.doesNotMatch(hiddenSendRule, /pointer-events:\s*none/u, 'empty send rule does not replace display collapse')
-assert.match(redesignCss, /\.composer-action-button\s*\{[\s\S]*?flex:\s*0 0 58px;/u, 'visible send keeps its normal width')
+assert.match(redesignCss, /\.composer-action-button\s*\{[\s\S]*?flex:\s*0 0 var\(--vc-touch\);/u, 'circular send retains its full touch target')
 assert.doesNotMatch(redesignCss, /#chat-form\s*\{[\s\S]*?flex-wrap:\s*wrap/u, 'composer remains a single row')
 assert.ok(mobileCss.includes('#chat-view,\n.chat-view'), 'baseline chat padding owner is covered')
 assert.ok(mobileCss.includes('padding: 6px 12px 8px'), 'baseline chat padding is known')
