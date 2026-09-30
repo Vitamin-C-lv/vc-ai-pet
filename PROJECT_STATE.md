@@ -43,6 +43,14 @@ CUDA 上下文及其他活动，不能把分配值当作总显存占用。
 编码服务启动、依赖、GPU/CPU 回退与派生索引命令见
 `docs/visual-embedding-server.md`。新增测试入口 `test:visual-semantic`。
 
+正式部署已完成：代码 `27676d0` 已推送并快进到生产目录。独立编码单元
+`vc-ai-pet-visual-encoder.service` 为 enabled/active，实际报告 cuda:0/float16。
+派生索引命令写入 38 条、跳过 0 条，耗时 1,855 ms；只写视觉 DB 的
+新增派生表。仅重启承载花花的 `vc-ai-pet-dsh-ensure.service`，手机状态
+接口 `/api/pet/state` 成功响应，原有 Local Brain 健康检查正常。
+没有更换 APK、写入测试业务聊天或将公开测试照片放入生产图库。
+手机实际问答与网络切换不在这次主机验收中，留给主人人工确认。
+
 ## 2026-09-29 — 新上传图片误选上一张的修复
 
 主人发送早餐图并说「你看看这个，这个是我们的早饭」，花花却展示上一张串串图。
