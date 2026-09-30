@@ -25,6 +25,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.ViewCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -148,14 +149,33 @@ class MainActivity : ComponentActivity() {
     private fun installBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                val imeVisible = ViewCompat.getRootWindowInsets(window.decorView)
+                    ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                if (imeVisible) {
+                    WindowInsetsControllerCompat(window, window.decorView)
+                        .hide(WindowInsetsCompat.Type.ime())
+                    currentFocus?.clearFocus()
+                    if (petWebView.visibility == View.VISIBLE) {
+                        petWebView.evaluateJavascript("document.activeElement?.blur()", null)
+                    }
+                    return
+                }
                 if (connectionUiState == ConnectionUiState.ADVANCED_SETTINGS) {
                     showSplashFailure()
                     return
                 }
-                if (petWebView.visibility == View.VISIBLE && petWebView.canGoBack()) {
-                    petWebView.goBack()
-                } else {
-                    finish()
+                if (petWebView.visibility != View.VISIBLE) {
+                    moveTaskToBack(true)
+                    return
+                }
+                // Pet screens share one URL, so WebView history alone cannot navigate them.
+                petWebView.evaluateJavascript(
+                    "Boolean(globalThis.VcAiPetApp?.handleBack?.())",
+                ) { handled ->
+                    if (handled != "true") {
+                        if (petWebView.canGoBack()) petWebView.goBack()
+                        else moveTaskToBack(true)
+                    }
                 }
             }
         })

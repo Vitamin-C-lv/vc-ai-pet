@@ -8,6 +8,9 @@
   --vc-border: #e5d9cc;
   --vc-accent: #b77b54;
   --vc-touch: 44px;
+  --vc-motion-control: 140ms;
+  --vc-motion-enter: 180ms;
+  --vc-motion-ease-out: cubic-bezier(.2, .75, .3, 1);
 }
 
 .app-header[hidden],
@@ -400,6 +403,43 @@
   .home-action { min-height: 46px; }
 }
 
+button {
+  transition:
+    transform var(--vc-motion-control) var(--vc-motion-ease-out),
+    background-color var(--vc-motion-control) var(--vc-motion-ease-out);
+}
+
+@keyframes vc-motion-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vc-motion-rise-in {
+  from { transform: translateY(10px); }
+  to { transform: translateY(0); }
+}
+
+.emoji-drawer[data-open="true"]:not([hidden]),
+.image-preview:not([hidden]) {
+  animation: vc-motion-fade-in var(--vc-motion-enter) var(--vc-motion-ease-out) both;
+}
+
+.diagnostics-panel:not([hidden]) {
+  animation: vc-motion-fade-in var(--vc-motion-enter) var(--vc-motion-ease-out) both;
+}
+
+.diagnostics-panel:not([hidden]) .diagnostics-sheet {
+  animation: vc-motion-rise-in var(--vc-motion-enter) var(--vc-motion-ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .messages { scroll-behavior: auto; }
+  button,
+  .emoji-drawer[data-open="true"]:not([hidden]),
+  .diagnostics-panel:not([hidden]),
+  .diagnostics-panel:not([hidden]) .diagnostics-sheet,
+  .image-preview:not([hidden]) {
+    animation: none;
+    transition: none;
+  }
 }

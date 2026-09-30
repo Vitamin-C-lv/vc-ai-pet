@@ -338,8 +338,18 @@ async function loadInnerLife({ more = false } = {}) {
   }
 }
 
-function renderScreen(screen, params = {}) {
+let screenAnimation
+
+function renderScreen(screen, params = {}, { direction = 'forward' } = {}) {
   const nextScreen = VALID_SCREENS.has(screen) ? screen : SCREEN.HOME
+  const changed = nextScreen !== currentScreen
+  screenAnimation?.cancel()
+  screenAnimation = null
+  if (changed) {
+    emojiController?.close()
+    input?.blur()
+    setKeyboardOpen(false)
+  }
   currentScreen = nextScreen
   const views = [playView, houseView, chatView, innerLifeView, visualGalleryView, visualGalleryDetailView]
   views.filter(Boolean).forEach((view) => { view.hidden = true })
@@ -350,6 +360,12 @@ function renderScreen(screen, params = {}) {
           : nextScreen === SCREEN.GALLERY ? visualGalleryView
             : visualGalleryDetailView
   if (view) view.hidden = false
+  if (changed && view?.animate && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    screenAnimation = view.animate([
+      { opacity: .65, transform: `translateX(${direction === 'back' ? -12 : 16}px)` },
+      { opacity: 1, transform: 'translateX(0)' },
+    ], { duration: 210, easing: 'cubic-bezier(.2,.8,.2,1)' })
+  }
   if (appHeader) appHeader.hidden = nextScreen !== SCREEN.HOME
   petApp?.classList.toggle('chat-active', nextScreen === SCREEN.CHAT)
   if (petApp) petApp.dataset.screen = nextScreen
@@ -384,8 +400,28 @@ function navigateHome() {
 }
 
 function navigateBack(fallback = SCREEN.HOME) {
-  navigation?.back({ fallback })
+  return navigation?.back({ fallback }) ?? false
 }
+
+// Called by the Android system Back callback; no native JS bridge is needed.
+function handleSystemBack() {
+  if (diagnosticsPanel && !diagnosticsPanel.hidden) {
+    closeDiagnosticsPanel()
+    return true
+  }
+  if (keyboardOpen) {
+    input?.blur()
+    setKeyboardOpen(false)
+    return true
+  }
+  if (emojiController?.isOpen()) {
+    emojiController.close()
+    return true
+  }
+  return navigateBack(currentScreen === SCREEN.GALLERY_DETAIL ? SCREEN.GALLERY : SCREEN.HOME)
+}
+
+globalThis.VcAiPetApp = Object.freeze({ handleBack: handleSystemBack })
 
 function openInnerLife() {
   navigateTo(SCREEN.DREAMS)
@@ -1540,7 +1576,9 @@ function bindDom() {
         renderScreen(SCREEN.HOME)
       },
       back({ fallback = SCREEN.HOME } = {}) {
+        if (currentScreen === SCREEN.HOME && stack.length === 0) return false
         renderScreen(stack.pop() || fallback)
+        return true
       },
     }
   })()
