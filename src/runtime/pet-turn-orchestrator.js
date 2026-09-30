@@ -4,6 +4,7 @@ import { hasVisualContentDescription } from '../vision/visual-keywords.js'
 import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
 import { detectContextualVisualRecallFollowUp, VisualRecallContext } from './visual-recall-context.js'
+import { readConfirmedVisualNames, captionReportedNames } from '../memory/visual-naming-context.js'
 
 function buildPrimaryComparisonPair(pool, intent) {
   if (intent !== 'comparison' || !Array.isArray(pool)) return []
@@ -13,16 +14,17 @@ function buildPrimaryComparisonPair(pool, intent) {
 }
 
 export class PetTurnOrchestrator {
-  constructor({ runtime, resolver = new RecentVisualResolver(), longTermResolver = null, experienceStore = null, recallContext = null, now = () => Date.now() } = {}) {
+  constructor({ runtime, resolver = new RecentVisualResolver(), longTermResolver = null, experienceStore = null, semanticIndex = null, recallContext = null, now = () => Date.now() } = {}) {
     this.runtime = runtime
     this.resolver = resolver
     this.longTermResolver = longTermResolver
     this.experienceStore = experienceStore
+    this.semanticIndex = semanticIndex
     this.recallContext = recallContext ?? new VisualRecallContext({ now })
     this.now = now
   }
 
-  async runVisual({ turnId, emit, userText, attachment, followUp = null, source = null }) {
+  async runVisual({ turnId, emit, userText, attachment, followUp = null, source = null, toolRecall = null }) {
     const startedAt = this.now()
     const store = this.runtime.conversationStore
     if (attachment) this.recallContext.clear()
@@ -38,7 +40,7 @@ export class PetTurnOrchestrator {
     // A new upload is the subject unless the owner explicitly refers to an
     // earlier image or asks for a comparison.
     if (attachment && intent !== 'comparison' && !isExplicitPreviousVisualReference(userText)) pool = pool.filter((candidate) => candidate.relation === 'current')
-    emit('turn_started', { mode: 'visual' }); emit('thinking', {})
+    if (!toolRecall) { emit('turn_started', { mode: 'visual' }); emit('thinking', {}) }
     const historicalCandidateCount = pool.length - (attachment ? 1 : 0)
     const explicitPreviousReference = intent === 'temporal_followup' && isImmediatePreviousVisualReference(userText)
     const unresolvedHistoricalReference = intent === 'temporal_followup'
@@ -55,39 +57,29 @@ export class PetTurnOrchestrator {
         recordRecallContext: !attachment && (intent === 'ambiguous' || unresolvedHistoricalReference),
       })
     }
-    const longTermQuery = followUp?.query ?? userText
+    const longTermQuery = toolRecall?.query ?? followUp?.query ?? userText
+    const ownerMessageStored = toolRecall?.ownerMessageStored === true
     // D-022: an explicit long-term visual reference always reaches the long-term
     // resolver, even when the recent resolver produced a generic-boilerplate
     // match; only the recent-only historical path still defers to resolved.matched.
     const longTermIntent = !attachment
       ? (followUp ? { mode: 'long-term-visual' } : detectLongTermVisualIntent(userText))
       : null
-    const semanticRequest = !attachment && (longTermIntent || isExplicitVisualSearch(userText)
+    const semanticRequest = !attachment && (toolRecall || longTermIntent || isExplicitVisualSearch(userText)
       || (intent === 'historical_visual' && !isDirectRecentVisualReference(userText, messages)
         && !/(这张图|这张图片|这张照片|这个图|那张图|那张照片)/u.test(userText)))
-    if (semanticRequest && !hasVisualContentDescription(userText)) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt, recordRecallContext: true })
+    if (semanticRequest && !toolRecall && !hasVisualContentDescription(longTermQuery)) {
+      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt, ownerMessageStored, recordRecallContext: true })
     }
-    if (semanticRequest && this.experienceStore?.listExperiences && this.runtime.brain?.visualSearch) {
-      const experiences = await this.experienceStore.listExperiences({ limit: 100 })
-      const galleryPool = []
-      const seen = new Set()
-      for (const experience of experiences) {
-        const occurrences = experience.occurrenceCount > 1 && this.experienceStore.occurrenceFor
-          ? await this.experienceStore.occurrenceFor(experience.experienceId, { limit: 100 })
-          : [experience]
-        // Reuploads of one visual experience are the same candidate. Prefer
-        // the owner's latest occurrence so it remains the image shown on recall.
-        const item = occurrences.at(-1) ?? experience
-        if (!item?.attachmentId || seen.has(item.attachmentId)) continue
-        seen.add(item.attachmentId)
-        galleryPool.push({ visualId: `V${galleryPool.length}`, attachmentId: item.attachmentId,
-          relation: 'recalled', userText: item.userText, timestamp: item.occurredAt ?? item.lastOccurredAt })
+    if (semanticRequest && this.semanticIndex && this.runtime.brain?.visualSearch) {
+      const preamble = toolRecall?.preamble || '花花去图库里找找，再仔细看看有没有认错～'
+      if (!ownerMessageStored) {
+        await store.appendMessage({ role: 'user', text: userText, turnId })
       }
-      return this.#runSemanticVisual({ turnId, emit, userText, pool: galleryPool, startedAt, store })
-    }
-    if (semanticRequest && this.runtime.brain?.visualSearch) {
-      return this.#runSemanticVisual({ turnId, emit, userText, pool, startedAt, store })
+      await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
+      emit('assistant_message', { text: preamble })
+      return this.#runIndexedVisual({ turnId, emit, userText, query: longTermQuery,
+        recallGoal: toolRecall?.goal ?? 'find_photo', startedAt, store })
     }
     if (semanticRequest && !longTermIntent) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
@@ -182,42 +174,32 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #runSemanticVisual({ turnId, emit, userText, pool, startedAt, store }) {
-    const previews = []
-    for (const candidate of pool) {
-      try {
-        const stored = await store.readAttachmentDataUrl(candidate.attachmentId, { thumbnail: true })
-        if (stored?.dataUrl) previews.push({ visualId: candidate.visualId, image: { dataUrl: stored.dataUrl } })
-      } catch {
-        // Missing images cannot be searched or published.
-      }
+  async #runIndexedVisual({ turnId, emit, userText, query, recallGoal, startedAt, store }) {
+    let resolved
+    try { resolved = await this.semanticIndex.search(query, { limit: MAX_VISUAL_INSPECTIONS_PER_TURN, recallGoal }) } catch {
+      return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, unavailable: true })
     }
-    if (previews.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
-    let shortlist = previews
-    do {
-      const next = []
-      for (let index = 0; index < shortlist.length; index += 10) {
-        let search
-        try {
-          search = await this.runtime.brain.visualSearch({ userText, candidates: shortlist.slice(index, index + 10) })
-        } catch {
-          return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
-        }
-        if (!search?.ok) return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
-        const chosen = search.visualIds.slice(0, 2)
-        next.push(...chosen.map((visualId) => shortlist.find((item) => item.visualId === visualId)).filter(Boolean))
-      }
-      shortlist = next
-    } while (shortlist.length > MAX_VISUAL_INSPECTIONS_PER_TURN)
-    const ranked = shortlist.map(({ visualId }) => pool.find((candidate) => candidate.visualId === visualId)).filter(Boolean)
-    if (ranked.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
+    const { names } = readConfirmedVisualNames(this.runtime.memory, query)
+    const pool = (resolved?.candidates ?? []).slice(0, MAX_VISUAL_INSPECTIONS_PER_TURN)
+      .filter((candidate) => {
+        if (!names.length) return true
+        const caption = candidate.userText ?? ''
+        if (recallGoal === 'describe_subject') return names.some((name) => caption.includes(name))
+        const labels = captionReportedNames(caption)
+        return !labels.length || labels.some((label) => names.some((name) => label.startsWith(name)))
+      })
+      .map((candidate, index) => ({ ...candidate, visualId: `V${index}`, relation: 'recalled' }))
+    // The embedding model already screens thumbnails. A second VLM preview
+    // gate rejected clear matches in live tests; inspect the leading originals.
+    const ranked = pool.slice(0, 2)
+    if (ranked.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, unavailable: resolved?.status === 'index-pending' })
     return this.#runLongTermVisual({
-      turnId, emit, userText, startedAt, store,
+      turnId, emit, userText, startedAt, store, resolveQuery: query, recallGoal, ownerMessageStored: true,
       preResolved: { status: 'matched', winner: ranked[0], candidates: ranked },
     })
   }
 
-  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, preResolved = null, startedAt, store }) {
+  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, preResolved = null, startedAt, store, recallGoal = 'find_photo', ownerMessageStored = false }) {
     if (!preResolved && !followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
@@ -278,14 +260,14 @@ export class PetTurnOrchestrator {
       await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text: recallCaption })
       const text = '主人，花花记得以前好像见过，可是原图找不到了，没办法重新确认哦。'
       const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
-      await store.appendMessage({ role: 'user', text: userText, turnId })
+      if (!ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId })
       await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
       this.runtime.conversation.append(userText, text)
       emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
       return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
     }
 
-    await store.appendMessage({ role: 'user', text: userText, turnId })
+    if (!ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId })
     await this.#appendMemoryRecall({ turnId, emit, userText, store })
     const session = new VisualWorkingSession({
       turnId,
@@ -297,6 +279,7 @@ export class PetTurnOrchestrator {
       emit,
       now: this.now,
       experienceStore: this.experienceStore,
+      recallGoal,
     })
     const visualResult = await session.run('V0')
     if (!visualResult.ok) return visualResult
@@ -356,17 +339,20 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #finishLongTermNone({ turnId, emit, userText, startedAt }) {
-    const text = '花花暂时没有找到能确认的那张照片，主人能再说说特征吗？'
+  async #finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored = false, recallQuery = null, unavailable = false }) {
+    const text = unavailable ? '花花的图库检索刚刚没准备好，这次先不发图，等恢复后再帮主人找～'
+      : '花花暂时没有找到能确认的那张照片，主人能再说说特征吗？'
+    if (recallQuery) this.recallContext.record({ mode: 'visual_recall_ambiguous', query: recallQuery,
+      result: { status: 'none' }, clarificationRequested: true })
     const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
-    await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, turnId })
+    if (!ownerMessageStored) await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, turnId })
     await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
     this.runtime.conversation.append(userText, text)
     emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
     return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
   }
 
-  async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt, recordRecallContext = false }) {
+  async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt, recordRecallContext = false, ownerMessageStored = false }) {
     const text = '主人说的是哪一张呀？花花怕认错，能再说得具体一点吗？'
     const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
     if (recordRecallContext) {
@@ -377,7 +363,7 @@ export class PetTurnOrchestrator {
         clarificationRequested: true,
       })
     }
-    await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, attachment, turnId })
+    if (!ownerMessageStored) await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, attachment, turnId })
     await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
     this.runtime.conversation.append(attachment ? `[主人发送了一张图片] ${userText}` : userText, text)
     emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })

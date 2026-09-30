@@ -169,6 +169,9 @@ try {
   const semanticVerifyCalls = []
   const semanticEvents = []
   const semanticOrchestrator = new PetTurnOrchestrator({
+    semanticIndex: { async search() { return { candidates: [
+      { attachmentId: wrongRecent.id }, { attachmentId: rightRecent.id },
+    ] } } },
     runtime: { ...runtime, brain: {
       async visualSearch(request) {
         semanticSearchCalls.push(request)
@@ -182,7 +185,7 @@ try {
     emit(type, payload) { semanticEvents.push({ type, payload }) },
   })
   assert.equal(semanticResult.ok, true)
-  assert.deepEqual(semanticSearchCalls[0].candidates.map(({ image }) => image.dataUrl), [IMAGES[7], IMAGES[5]])
+  assert.equal(semanticSearchCalls.length, 0, 'semantic index replaces VLM gallery screening')
   assert.deepEqual(semanticVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[4], IMAGES[6]])
   assert.deepEqual(semanticEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [rightRecent.id])
   assert.deepEqual((await store.listForRecentVisualRecall(100)).filter((message) => message.turnId === 'recent-semantic-verify' && message.kind === 'media_ref').map((message) => message.sourceAttachmentId), [rightRecent.id])
@@ -197,6 +200,10 @@ try {
   const galleryVerifyCalls = []
   const galleryEvents = []
   const galleryOrchestrator = new PetTurnOrchestrator({
+    semanticIndex: { async search() { return { candidates: [
+      { experienceId: 'gallery-11', attachmentId: groupedTarget.id, userText: '是这个早餐' },
+      ...gallery.slice(0, 4),
+    ] } } },
     runtime: { ...runtime, brain: {
       async visualSearch(request) {
         gallerySearchCalls.push(request)
@@ -206,8 +213,7 @@ try {
       ...makeBrain(['match'], galleryVerifyCalls),
     } },
     experienceStore: {
-      async listExperiences() { return gallery },
-      async occurrenceFor() { return [gallery[11], { attachmentId: groupedTarget.id, userText: '是这个早餐', occurredAt: 13 }] },
+      async listExperiences() { assert.fail('query must not scan gallery images') },
     },
   })
   const galleryResult = await galleryOrchestrator.runVisual({
@@ -215,8 +221,9 @@ try {
     emit(type, payload) { galleryEvents.push({ type, payload }) },
   })
   assert.equal(galleryResult.ok, true)
-  assert.equal(gallerySearchCalls.length, 2, 'gallery previews are screened in small batches')
-  assert.deepEqual(galleryVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[8]])
+  assert.equal(gallerySearchCalls.length, 0, 'no VLM preview gate after semantic retrieval')
+  assert.equal(galleryVerifyCalls.length, 2, 'at most two semantic originals are inspected')
+  assert.deepEqual(galleryVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[8], IMAGES[0]])
   assert.deepEqual(galleryEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [groupedTarget.id])
   const searchCallsBeforeBareReference = gallerySearchCalls.length
   const bareEvents = []

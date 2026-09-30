@@ -14,6 +14,7 @@ import {
   parseImageDataUrl,
 } from './visual-fingerprint.js'
 import { isEmbodiedTransientAttachment, isStackchanCameraMessage } from './visual-source.js'
+import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 
 export const VISUAL_EXPERIENCE_DB_FILENAME = 'visual-experience.db'
 export const VISUAL_EVENT_KINDS = Object.freeze(['inspection', 'revisit', 'comparison', 'observation'])
@@ -53,6 +54,33 @@ function storedDuplicateKind(duplicateKind, perceptualGate) {
 
 function cleanText(value, maxLength = 1200) {
   return String(value ?? '').trim().slice(0, maxLength)
+}
+
+function encodeFloatVector(value, field, { optional = false } = {}) {
+  if (value === null || value === undefined) {
+    if (optional) return null
+    throw new TypeError(`PET_VISUAL_EXPERIENCE_${field.toUpperCase()}_INVALID`)
+  }
+  const vector = value instanceof Float32Array
+    ? value
+    : Array.isArray(value)
+      ? Float32Array.from(value)
+      : null
+  if (!vector || vector.length === 0 || vector.some((item) => !Number.isFinite(item))) {
+    throw new TypeError(`PET_VISUAL_EXPERIENCE_${field.toUpperCase()}_INVALID`)
+  }
+  const bytes = Buffer.allocUnsafe(vector.length * 4)
+  for (let index = 0; index < vector.length; index += 1) bytes.writeFloatLE(vector[index], index * 4)
+  return { bytes, length: vector.length }
+}
+
+function decodeFloatVector(value) {
+  if (value === null || value === undefined) return null
+  const bytes = Buffer.from(value)
+  if (bytes.length === 0 || bytes.length % 4 !== 0) return null
+  const vector = new Float32Array(bytes.length / 4)
+  for (let index = 0; index < vector.length; index += 1) vector[index] = bytes.readFloatLE(index * 4)
+  return vector
 }
 
 function cleanTerm(value) {
@@ -356,6 +384,17 @@ export class VisualExperienceStore {
             weight INTEGER NOT NULL,
             PRIMARY KEY (experience_id, source_kind, term)
           );
+          CREATE TABLE IF NOT EXISTS visual_embeddings (
+            experience_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            source_attachment_id TEXT NOT NULL,
+            source_user_text TEXT NOT NULL,
+            source_text TEXT,
+            image_vector BLOB NOT NULL,
+            text_vector BLOB,
+            indexed_at INTEGER NOT NULL,
+            PRIMARY KEY (experience_id, model)
+          );
           CREATE TABLE IF NOT EXISTS visual_sync_state (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -374,6 +413,7 @@ export class VisualExperienceStore {
           CREATE INDEX IF NOT EXISTS visual_occurrences_dhash_idx ON visual_occurrences(dhash);
           CREATE INDEX IF NOT EXISTS visual_experience_aliases_canonical_idx ON visual_experience_aliases(canonical_experience_id);
           CREATE INDEX IF NOT EXISTS visual_terms_term_idx ON visual_terms(term);
+          CREATE INDEX IF NOT EXISTS visual_embeddings_model_idx ON visual_embeddings(model);
           CREATE INDEX IF NOT EXISTS visual_events_experience_id_idx ON visual_events(experience_id);
         `)
         await chmod(this.dbPath, 0o600)
@@ -469,6 +509,79 @@ export class VisualExperienceStore {
       occurrence_count: Number(summary?.occurrence_count ?? 0),
       last_occurred_at: summary?.last_occurred_at ?? row.occurred_at,
     })
+  }
+
+  #semanticSourceSnapshots() {
+    const roots = this.db.prepare(`
+      SELECT * FROM visual_experiences e
+      WHERE NOT EXISTS (
+        SELECT 1 FROM visual_experience_aliases a WHERE a.alias_experience_id = e.experience_id
+      )
+      ORDER BY e.occurred_at ASC, e.experience_id ASC
+    `).all()
+    const canonicalById = new Map(roots.map((row) => [row.experience_id, row.experience_id]))
+    for (const alias of this.db.prepare(`
+      SELECT alias_experience_id, canonical_experience_id FROM visual_experience_aliases
+    `).all()) {
+      if (canonicalById.has(alias.canonical_experience_id)) {
+        canonicalById.set(alias.alias_experience_id, alias.canonical_experience_id)
+      }
+    }
+
+    const latestOccurrences = new Map()
+    const ownerCaptions = new Map()
+    const transientExperiences = new Set()
+    for (const root of roots) {
+      if (this.#isTransientAttachment(root.attachment_id)) transientExperiences.add(root.experience_id)
+    }
+    const occurrences = this.db.prepare(`
+      SELECT experience_id, attachment_id, user_text, occurred_at
+      FROM visual_occurrences
+      ORDER BY occurred_at DESC, occurrence_id DESC
+    `).all()
+    for (const occurrence of occurrences) {
+      const canonical = canonicalById.get(occurrence.experience_id)
+      if (!canonical) continue
+      if (!latestOccurrences.has(canonical)) latestOccurrences.set(canonical, occurrence)
+      const caption = cleanText(occurrence.user_text)
+      if (caption) {
+        if (!ownerCaptions.has(canonical)) ownerCaptions.set(canonical, [])
+        ownerCaptions.get(canonical).push(caption)
+      }
+      if (this.#isTransientAttachment(occurrence.attachment_id)) transientExperiences.add(canonical)
+    }
+
+    const firstObservations = new Map()
+    const observations = this.db.prepare(`
+      SELECT experience_id, summary
+      FROM visual_events
+      WHERE kind = 'observation' AND evidence = 'inferred' AND summary IS NOT NULL
+      ORDER BY occurred_at ASC, event_id ASC
+    `).all()
+    for (const observation of observations) {
+      const canonical = canonicalById.get(observation.experience_id)
+      if (!canonical || firstObservations.has(canonical)) continue
+      const summary = sanitizeSafeTraceText(observation.summary, 180)
+      if (summary) firstObservations.set(canonical, summary)
+    }
+
+    return roots
+      .filter((root) => !transientExperiences.has(root.experience_id))
+      .map((root) => {
+        const latest = latestOccurrences.get(root.experience_id)
+        const ownerTexts = [
+          root.user_text,
+          ...(ownerCaptions.get(root.experience_id) ?? []).reverse(),
+        ]
+        const userText = cleanText([...new Set(ownerTexts.map((caption) => cleanText(caption)).filter(Boolean))].join('\n'))
+        return {
+          experienceId: root.experience_id,
+          attachmentId: latest?.attachment_id ?? root.attachment_id,
+          userText,
+          sourceText: firstObservations.get(root.experience_id) ?? null,
+          occurredAt: Number(latest?.occurred_at ?? root.occurred_at),
+        }
+      })
   }
 
   async #fingerprintMessage(message, readAttachment) {
@@ -1065,6 +1178,113 @@ export class VisualExperienceStore {
     return [...unique.values()]
       .sort((left, right) => right.weight - left.weight || left.term.localeCompare(right.term))
       .slice(0, count)
+  }
+
+  async semanticIndexSources(model, { limit = 16, excludeExperienceIds = [] } = {}) {
+    await this.initialize()
+    const modelId = String(model ?? '').trim()
+    if (!modelId) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_MODEL_INVALID')
+    const count = boundedLimit(limit, 16, 500)
+    if (count === 0) return []
+    const excluded = new Set(excludeExperienceIds.map((id) => String(id ?? '').trim()).filter(Boolean))
+
+    const indexed = new Map(this.db.prepare(`
+      SELECT experience_id, source_attachment_id, source_user_text, text_vector
+      FROM visual_embeddings
+      WHERE model = ?
+    `).all(modelId).map((row) => [row.experience_id, row]))
+    return this.#semanticSourceSnapshots()
+      .filter((source) => {
+        if (excluded.has(source.experienceId)) return false
+        const row = indexed.get(source.experienceId)
+        return !row
+          || row.source_attachment_id !== source.attachmentId
+          || row.source_user_text !== source.userText
+          || (source.userText && !row.text_vector)
+      })
+      .slice(0, count)
+  }
+
+  async upsertSemanticEmbedding({ experienceId, model, attachmentId, userText = '', sourceText = null, imageVector, textVector = null } = {}) {
+    await this.initialize()
+    const experienceKey = String(experienceId ?? '').trim()
+    const modelId = String(model ?? '').trim()
+    const attachmentKey = String(attachmentId ?? '').trim()
+    if (!experienceKey) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_EXPERIENCE_ID_INVALID')
+    if (!modelId) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_MODEL_INVALID')
+    if (!attachmentKey) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_ATTACHMENT_ID_INVALID')
+    const canonical = this.#canonicalId(experienceKey)
+    if (!canonical || !this.#experienceRow(canonical)) throw new Error('PET_VISUAL_EXPERIENCE_NOT_FOUND')
+    if (this.#isTransientExperience(canonical)) return false
+
+    const image = encodeFloatVector(imageVector, 'image_vector')
+    const text = encodeFloatVector(textVector, 'text_vector', { optional: true })
+    if (text && image.length !== text.length) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_VECTOR_DIMENSION_MISMATCH')
+    const safeSourceText = sanitizeSafeTraceText(sourceText, 180) || null
+    this.db.prepare(`
+      INSERT INTO visual_embeddings(
+        experience_id, model, source_attachment_id, source_user_text, source_text,
+        image_vector, text_vector, indexed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(experience_id, model) DO UPDATE SET
+        source_attachment_id = excluded.source_attachment_id,
+        source_user_text = excluded.source_user_text,
+        source_text = excluded.source_text,
+        image_vector = excluded.image_vector,
+        text_vector = excluded.text_vector,
+        indexed_at = excluded.indexed_at
+    `).run(
+      canonical,
+      modelId,
+      attachmentKey,
+      cleanText(userText),
+      safeSourceText,
+      image.bytes,
+      text?.bytes ?? null,
+      timestamp(this.now(), Date.now()),
+    )
+    return true
+  }
+
+  async semanticEmbeddings(model) {
+    await this.initialize()
+    const modelId = String(model ?? '').trim()
+    if (!modelId) throw new TypeError('PET_VISUAL_EXPERIENCE_SEMANTIC_MODEL_INVALID')
+    const sources = new Map(this.#semanticSourceSnapshots().map((source) => [source.experienceId, source]))
+    const canonicalByAlias = new Map(this.db.prepare(`
+      SELECT alias_experience_id, canonical_experience_id FROM visual_experience_aliases
+    `).all().map((row) => [row.alias_experience_id, row.canonical_experience_id]))
+    const selected = new Map()
+    for (const row of this.db.prepare(`
+      SELECT experience_id, model, source_attachment_id, source_user_text,
+        image_vector, text_vector, indexed_at
+      FROM visual_embeddings
+      WHERE model = ?
+    `).all(modelId)) {
+      const canonical = canonicalByAlias.get(row.experience_id) ?? row.experience_id
+      const source = sources.get(canonical)
+      if (!source
+        || row.source_attachment_id !== source.attachmentId
+        || row.source_user_text !== source.userText) continue
+      const imageVector = decodeFloatVector(row.image_vector)
+      if (!imageVector) continue
+      const existing = selected.get(canonical)
+      const indexedAt = Number(row.indexed_at)
+      if (existing && existing.indexedAt >= indexedAt) continue
+      selected.set(canonical, {
+        experienceId: canonical,
+        model: modelId,
+        attachmentId: source.attachmentId,
+        userText: source.userText,
+        sourceText: source.sourceText,
+        occurredAt: source.occurredAt,
+        imageVector,
+        textVector: decodeFloatVector(row.text_vector),
+        indexedAt,
+      })
+    }
+    return [...selected.values()]
+      .sort((left, right) => right.occurredAt - left.occurredAt || left.experienceId.localeCompare(right.experienceId))
   }
 
   async eventFlagsFor(experienceIds = []) {

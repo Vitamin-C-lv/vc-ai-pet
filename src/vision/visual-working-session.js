@@ -30,9 +30,10 @@ function visualFailure({ reason = 'visual-step-failed', unavailable = false, req
 }
 
 export class VisualWorkingSession {
-  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null }) {
+  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null, recallGoal = 'find_photo' }) {
     this.turnId = turnId
     this.userText = String(userText ?? '')
+    this.recallGoal = recallGoal
     this.candidatePool = Array.isArray(candidatePool) ? candidatePool : []
     this.comparison = comparison === true
     const candidateIds = new Set(this.candidatePool.map((candidate) => candidate?.visualId).filter((visualId) => typeof visualId === 'string'))
@@ -238,6 +239,8 @@ export class VisualWorkingSession {
           requiredUniqueImages: this.requiredUniqueImages,
           forceAnswer: ordinal === MAX_VISUAL_INSPECTIONS_PER_TURN - 1,
           verifyRecall,
+          recallGoal: this.recallGoal,
+          ownerCaption: candidate.userText ?? '',
         })
       } catch (error) {
         return visualFailure({ reason: error?.code ?? 'visual-step-failed', unavailable: error?.retryable === true, requestId: error?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
@@ -257,6 +260,7 @@ export class VisualWorkingSession {
         if (step.match === 'match') {
           if (step.action !== 'answer' || step.nextVisualId || step.replyMessages.length === 0) return visualFailure({ reason: 'invalid-visual-recall-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
           verifiedMatches.push({ candidate, step, summary, safeFocus, publishImage })
+          if (this.recallGoal === 'describe_subject') break
         }
         visualId = this.candidatePool.find((item) => !this.inspections.some((inspected) => inspected.attachmentId === item.attachmentId))?.visualId ?? null
         continue

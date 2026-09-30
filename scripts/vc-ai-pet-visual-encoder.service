@@ -1,0 +1,19 @@
+[Unit]
+Description=VC-AI-PET local visual semantic encoder
+After=local-fs.target
+
+[Service]
+Type=simple
+User=vitamin_c
+Group=vitamin_c
+WorkingDirectory=/home/vitamin_c/projects/personal/vc-ai-pet
+ExecStart=/home/vitamin_c/.local/share/vc-ai-pet/visual-encoder/venv/bin/python scripts/visual-embedding-server.py
+Environment=HF_HUB_OFFLINE=1
+Environment=TOKENIZERS_PARALLELISM=false
+Restart=on-failure
+RestartSec=5
+Nice=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

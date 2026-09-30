@@ -36,7 +36,7 @@ export function apply(ctx, rawConfig = {}) {
     // keeps working unchanged.
     memoryPipeline: rawConfig?.memoryPipeline ?? null,
   })
-  const ready = runtime.initialize();
+  const ready = runtime.initialize().then(() => { runtime.visualSemanticIndex.start(); });
   const lanEnabled = rawConfig.lanUi?.enabled !== false;
   const lanPort = Number.isInteger(rawConfig.lanUi?.port) ? rawConfig.lanUi.port : 17870;
   const lanServer = lanEnabled

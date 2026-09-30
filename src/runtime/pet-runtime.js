@@ -37,6 +37,7 @@ import { normalizePetVisualConfig, resolvePetVisualState } from '../client/pet-v
 import { spriteForAnimation } from '../client/pet-animation.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input.js'
 import { VisualExperienceStore } from '../vision/visual-experience-store.js'
+import { VisualSemanticIndex } from '../vision/visual-semantic-index.js'
 import { visualTermsFor } from '../vision/visual-keywords.js'
 import { importLegacyObservations } from '../vision/legacy-observation-importer.js'
 import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
@@ -432,10 +433,13 @@ export class PetRuntime {
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
     this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger })
+    this.visualSemanticIndex = new VisualSemanticIndex({ experienceStore: this.visualExperience,
+      conversationStore: this.conversationStore, memory: this.memory, logger: this.logger })
     this.turnOrchestrator = new PetTurnOrchestrator({
       runtime: this,
       longTermResolver: this.longTermVisualResolver,
       experienceStore: this.visualExperience,
+      semanticIndex: this.visualSemanticIndex,
     })
     this.memoryGate = new MemoryGate({ memory: this.memory })
     // Consolidation is the "repeated experience becomes understanding" step. It
@@ -839,14 +843,14 @@ export class PetRuntime {
       || followUp?.retryOnNone === true
   }
 
-  async chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null } = {}) {
+  async chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null, emit = () => {} } = {}) {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
     // D-022: explicit long-term visual references take priority over the recent
     // resolver's generic-boilerplate overlapScore, so they always reach the
     // long-term resolver instead of being short-circuited to a wrong recent image.
     if (!currentVisionImage && this.conversationPersistenceReady && detectLongTermVisualIntent(ownerText)) {
-      return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null })
+      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, source })
     }
     const recalled = !currentVisionImage && this.conversationPersistenceReady
       ? await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
@@ -854,7 +858,7 @@ export class PetRuntime {
     if ((currentVisionImage || recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') && typeof this.brain?.visualStep === 'function') {
       let currentAttachment = attachment
       if (currentVisionImage && !currentAttachment) currentAttachment = await this.conversationStore.saveAttachment({ image: currentVisionImage })
-      return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: currentAttachment })
+      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: currentAttachment, source })
     }
     // Long-Term Visual stage (elliptical follow-up within an active recall
     // context). A normal topic shift needs a long-term candidate first;
@@ -863,11 +867,12 @@ export class PetRuntime {
     if (!currentVisionImage && this.conversationPersistenceReady) {
       const followUp = this.turnOrchestrator.planFollowUp(ownerText)
       if (followUp) {
-        const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
+        const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
+          : await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
         if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
-          return this.runVisualTurn({ turnId, emit: () => {}, userText: ownerText, attachment: null, followUp: { ...followUp, preResolve } })
+          return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, followUp: { ...followUp, preResolve }, source })
         }
-        this.turnOrchestrator.clearVisualRecallContext()
+        if (!this.brain?.visualSearch) this.turnOrchestrator.clearVisualRecallContext()
       }
     }
     this.chatInFlight += 1
@@ -941,9 +946,22 @@ export class PetRuntime {
         // the prompt builder can never cap it at some other hard-coded number.
         contextTurns: this.pipelineConfig.shortTermContextTurns,
         voiceFastMode,
+        allowVisualRecall: Boolean(this.visualSemanticIndex && !effectiveVisionImage && !voiceFastMode),
+        visualRecallContext: this.turnOrchestrator.recallContext.snapshot()?.query ?? null,
       })
 
       if (!result?.ok) return result
+
+      if (result.visualRecall) {
+        const followUp = this.turnOrchestrator.planFollowUp(ownerText)
+        const recalledResult = await this.runVisualTurn({ turnId, emit, userText: ownerText, source,
+          // The model chooses the tool. Search constraints come from the owner:
+          // live tests showed the planner inventing another cat's coat color.
+          toolRecall: { ...result.visualRecall, query: followUp?.query ?? ownerText,
+            preamble: result.text, ownerMessageStored: Boolean(ownerMessage) } })
+        return { ...recalledResult, visualTurn: true }
+      }
+      this.turnOrchestrator.clearVisualRecallContext()
 
       // Only the message persisted by this user turn may supply evidence.
       // Assistant output and visual observations never enter this write path.
@@ -1083,17 +1101,18 @@ export class PetRuntime {
     }
   }
 
-  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null } = {}) {
+  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null, toolRecall = null } = {}) {
     this.chatInFlight += 1
     try {
       // Self-healing incremental sync before resolution: any image message
       // appended outside the runtime path must still be visible to Long-Term
       // recall. Idempotent and checkpointed, no models involved.
       await this.syncVisualExperiences()
-      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment, followUp, source })
+      const result = await this.turnOrchestrator.runVisual({ turnId, emit, userText, attachment, followUp, source, toolRecall })
       // Incremental visual-experience sync after the turn's user message has
       // been appended to the archive; idempotent and checkpointed, no models.
       await this.syncVisualExperiences()
+      if (this.visualSemanticIndex?.active) void this.visualSemanticIndex.sync().catch(() => {})
       if (!result?.ok) return result
 
       // Vision is deliberately excluded from the model-candidate memory path:
@@ -1254,15 +1273,17 @@ export class PetRuntime {
       if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
       const followUp = this.turnOrchestrator.planFollowUp(userText)
       if (followUp) {
-        const preResolve = await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
+        const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
+          : await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
         if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
           return this.runVisualTurn({ turnId, emit, userText, attachment: null, followUp: { ...followUp, preResolve } })
         }
-        this.turnOrchestrator.clearVisualRecallContext()
+        if (!this.brain?.visualSearch) this.turnOrchestrator.clearVisualRecallContext()
       }
       emit('turn_started', { mode: 'text' }); emit('thinking', {})
-      const result = await this.chat(userText, null, null, { turnId, source })
+      const result = await this.chat(userText, null, null, { turnId, source, emit })
       if (!result?.ok) return result
+      if (result.visualTurn) return result
       const replies = Array.isArray(result.replyMessages) && result.replyMessages.length ? result.replyMessages : [result.text]
       for (const text of replies) emit('assistant_message', { text })
       emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
@@ -1748,6 +1769,7 @@ export class PetRuntime {
   }
 
   close() {
+    this.visualSemanticIndex?.stop()
     // Local Brain is now a shared external service. Pet owns no model process.
     this.conversation?.clear()
     this.conversationPersistenceReady = false

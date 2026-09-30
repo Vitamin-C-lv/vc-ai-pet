@@ -387,8 +387,9 @@ export class PetMemory {
     return { ...row, provenance: this.provenanceStore.set(row.id, provenance) }
   }
 
-  recall(query, k = 5, { bumpHits = true } = {}) {
-    const docs = RECALL_LEVELS.flatMap((level) => this.db.listSearchable(level))
+  recall(query, k = 5, { bumpHits = true, filter = null } = {}) {
+    let docs = RECALL_LEVELS.flatMap((level) => this.db.listSearchable(level))
+    if (typeof filter === 'function') docs = docs.map((row) => this.provenanceStore.decorate(row)).filter(filter)
     const hits = rankMemories(query, docs, { k })
     const byKey = new Map(docs.map((row) => [`${row.level}:${row.id}`, row]))
     const enrichedHits = hits.map((hit) => {

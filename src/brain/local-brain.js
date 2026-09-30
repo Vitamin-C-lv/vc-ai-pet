@@ -3,6 +3,7 @@ import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { buildPetMessages, PET_VOICE_INSTRUCTION } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
 import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
+import { readConfirmedVisualNames } from '../memory/visual-naming-context.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
@@ -35,6 +36,48 @@ const PET_VISUAL_SEARCH_RESPONSE_SCHEMA = Object.freeze({
   properties: { visualIds: { type: 'array', maxItems: 5, items: { type: 'string' } } },
   required: ['visualIds'],
 })
+
+const PET_CHAT_VISUAL_RECALL_RESPONSE_SCHEMA = Object.freeze({
+  ...PET_CHAT_RESPONSE_SCHEMA,
+  properties: {
+    ...PET_CHAT_RESPONSE_SCHEMA.properties,
+    visualRecall: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            tool: { type: 'string', enum: ['search_visual_memory'] },
+            query: { type: 'string', minLength: 1, maxLength: 240 },
+            goal: { type: 'string', enum: ['describe_subject', 'find_photo'] },
+          },
+          required: ['tool', 'query', 'goal'],
+        },
+        { type: 'null' },
+      ],
+    },
+  },
+  required: [...PET_CHAT_RESPONSE_SCHEMA.required, 'visualRecall'],
+})
+const VISUAL_RECALL_WAITING_REPLY = '花花去图库找找，再看一遍。'
+
+const VISUAL_RECALL_META_CUES = /(?:算法|原理|机制|流程|接口|代码|技术细节|(?:怎么|如何).{0,8}(?:检索|识别|读取|工作|实现|运作)|(?:视觉|图像|相册|图片|照片)?(?:检索|识别).{0,8}(?:算法|原理|机制|流程)|(?:会不会|能不能|可不可以).{0,8}(?:看|读|识别|检索).{0,8}(?:照片|图片|图像|相册)|(?:你|花花).{0,5}(?:会|能|可以).{0,4}(?:看|读|识别).{0,4}(?:照片|图片|图像))/iu
+
+function isVisualRecallMetaQuestion(userText) {
+  const text = String(userText ?? '').normalize('NFKC').trim()
+  return VISUAL_RECALL_META_CUES.test(text)
+    || /为什么.{0,12}(?:看|读)(?:了)?(?:图片|照片).{0,12}(?:像|变成).{0,4}(?:机器人|AI|助手)/iu.test(text)
+}
+
+function validateVisualRecallResponse(response, userText) {
+  const recall = response?.visualRecall
+  if (isVisualRecallMetaQuestion(userText) || !recall || typeof recall !== 'object' || Array.isArray(recall)) return null
+  if (Object.keys(recall).length !== 3 || !Object.hasOwn(recall, 'tool') || !Object.hasOwn(recall, 'query') || !Object.hasOwn(recall, 'goal')) return null
+  if (recall.tool !== 'search_visual_memory' || typeof recall.query !== 'string') return null
+  const query = recall.query.trim()
+  if (!query || query.length > 240 || !['describe_subject', 'find_photo'].includes(recall.goal)) return null
+  return { tool: 'search_visual_memory', query, goal: recall.goal }
+}
 
 // The visual profile reserves 2,048 tokens for Qwen's hidden reasoning. The
 // previous 768-token cap could therefore end with finish_reason=length before
@@ -246,7 +289,7 @@ export class LocalBrain {
     }
   }
 
-  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false, memoryReview = false, verifyRecall = false }) {
+  async visualStep({ userText, image, candidatePool = [], observations = [], comparison = false, comparisonPair = [], currentVisualId = '', inspections = [], requiredUniqueImages = 1, forceAnswer = false, memoryReview = false, verifyRecall = false, recallGoal = 'find_photo', ownerCaption = '' }) {
     const visionImage = normalizeVisionImage(image)
     if (!visionImage) throw new LocalBrainApiError('visual step requires an image', { code: 'PET_INVALID_VISION_IMAGE' })
     const candidates = Array.isArray(candidatePool) ? candidatePool : []
@@ -269,11 +312,21 @@ export class LocalBrain {
       const safeFocus = sanitizeSafeTraceText(focus, 120)
       return safeSummary ? `${visualId}: ${safeSummary}${safeFocus ? `（重点：${safeFocus}）` : ''}` : ''
     }).filter(Boolean).join('\n') || '- 暂无'
-    const namedFacts = verifyRecall ? (this.memory?.recall?.(String(userText ?? ''), 20, { bumpHits: false }) ?? [])
-      .filter((item) => item?.provenance?.evidence === 'confirmed' && /(叫|名字)/u.test(String(item.content ?? '')))
-      .slice(0, 2).map((item) => String(item.content).slice(0, 120)) : []
-    const nameContext = namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只解释名字，不证明照片里的场景。` : ''
-    const instruction = `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${verifyRecall ? '这是找回主人描述的旧照片。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系，给出 match 字段：只有全部明确吻合才填 "match"；明确不符填 "mismatch"；看不清或无法确定填 "uncertain"。主人给宠物或人物起的名字不能只靠照片直接读出：若已提供确认的称呼，就用它解释指代，仍须从原图核对物种、外观与场景；不要把名字误解为同名食物。不要根据候选排名、旧文字或既有观察猜测。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。' : memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+    const recallQuery = String(userText ?? '')
+    const namedFacts = verifyRecall
+      ? (readConfirmedVisualNames(this.memory, recallQuery).facts ?? [])
+        .slice(0, 2).map((fact) => String(fact).slice(0, 120))
+      : []
+    const nameContext = namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只说明主人确认的名字，不证明当前照片里的主体身份或场景。` : ''
+    const subjectRecall = verifyRecall && recallGoal === 'describe_subject'
+    const rawOwnerCaption = verifyRecall ? String(ownerCaption ?? '').slice(0, 500) : ''
+    const recallInstruction = subjectRecall
+      ? `这是“主体外观”回忆：主人想知道某个以前见过的主体长什么样。主人提供的原始图片说明：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}。先根据用户问题和主人确认的称呼确定目标名字。若原始图片说明明确给这张照片里的主体命名，且名字与目标相同，它可以建立这张照片与目标名字的对应关系；若说明明确给主体起了另一个名字，填 mismatch，即使原图也是猫也不能把它改认成目标。名字必须来自主人文字，不能从像素或外观推测。确认的称呼只能帮助解释名字，不能单独证明某张照片属于这个名字；没有明确的照片命名关联且无法确认身份时填 uncertain。照片与目标名字对应后，仍必须检查原图中可见的主体类别和外观：若说明称主体是猫，当前原图就必须清楚显示猫；原图清楚显示不同类别时填 mismatch，主体类别不清时填 uncertain。已完成的公开观察和模型推断不能建立身份或照片对应关系。只有当前原图直接显示已正确标注的主体且足以看清外观，才填 match。候选可以是任何正确标注且能回答主体外观问题的图片，不要求与唯一一张旧照片、背景或姿势完全相同。必须重新检查当前原图，不能根据候选排名或既有观察猜测。不要把名字误解为同名食物。match 时直接回答主人实际询问的外观特征（如毛色、花纹和看得见的特征），不要反问“这是不是黑莓”或让主人再确认身份；身份按主人提供的照片命名和确认称呼处理。只描述图中可见内容，不推断触感、健康状况或性格。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。`
+      : `这是找回主人描述的旧照片。主人提供的当前原始图片说明（仅主人文字，不是图像观察）：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系，给出 match 字段：只有全部明确吻合才填 "match"；明确不符填 "mismatch"；看不清或无法确定填 "uncertain"。主人给宠物或人物起的名字不能只靠照片像素读出：确认称呼只解释用户要找的名字，不证明这张照片里的主体身份或场景。不要把名字误解为同名食物。不要根据候选排名、旧文字或既有观察猜测。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。`
+    const recallConfirmationGuard = verifyRecall
+      ? '如果原始图片说明明确把当前图里的主体命名为与目标不同的名字，必须填 mismatch，即使物种或场景相同；没有写名字本身不构成 mismatch。确认的称呼只解释目标名字，不能证明当前图的主体身份。不要在 replyMessages 里询问主人来确认身份、是否是目标主体或是否符合找图要求。若身份、主体类别或关键场景不能从原图核实，按 uncertain 处理并令 replyMessages 为空；明确不符时按 mismatch 处理并令 replyMessages 为空。'
+      : ''
+    const instruction = `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${verifyRecall ? `${recallInstruction}${recallConfirmationGuard}` : memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
     const startedAt = monotonicNow()
     let requestId = null
@@ -304,9 +357,11 @@ export class LocalBrain {
     }
   }
 
-  async reply({ identity, state, userText, image = null, visualContext = null, recentMessages = [], contextTurns = undefined, voiceFastMode = false, now = Date.now() }) {
+  async reply({ identity, state, userText, image = null, visualContext = null, visualRecallContext = '', recentMessages = [], contextTurns = undefined, voiceFastMode = false, allowVisualRecall = false, now = Date.now() }) {
     const ownerText = String(userText ?? '')
     const visionImage = normalizeVisionImage(image)
+    const visualRecallEnabled = allowVisualRecall === true && image == null && !visionImage
+    const activeVisualRecallContext = visualRecallEnabled ? String(visualRecallContext ?? '').trim().slice(0, 500) : ''
     const fastVoiceReply = voiceFastMode === true && !visionImage
     const reasoningEffort = visionImage
       ? PET_REASONING_PROFILE.vision
@@ -367,9 +422,12 @@ export class LocalBrain {
 
     // Keep one inference per turn. The same structured response contains the
     // visible reply and at most one memory candidate.
+    const visualRecallInstruction = visualRecallEnabled
+      ? `\n\nvisualRecall 是本轮允许的本地照片记忆检索请求，不是电脑或网络操作；由本轮这一次回复直接决定，不要进行单独规划。它要查询的是图库中跨越当前对话窗口的旧图片，当前上下文没有图片不代表图库没有相关图片。若主人在问一个以前见过的个人主体长什么样、毛色或其他外观特征，必须先查图库再回答；不能仅因为当前没有看到图片或记忆上下文未提到图片，就说“没见过”“不记得”或让主人重发。比如“你知不知道我们家的猫黑莓长什么样子”和“你还记得黑莓的毛色吗”都应选择 visualRecall 对象，goal="describe_subject"，query 包含主体“黑莓”和主人问的外观特征。若主人要找回某张具体旧照片，选择 goal="find_photo"。tool 固定为 "search_visual_memory"；query 是不超过240字的自包含检索词，只根据主人当前原话、已确认的名字和明确相关的视觉回忆上下文写，不要编造场景。普通聊天、假设问题，以及询问记忆、检索、视觉能力或相关技术原理的元问题返回 null。若存在下面这条未解决的视觉回忆请求，主人本轮短句若明显是在补充、纠正或澄清它，才用它理解当前指代，并将此前主体与当前补充组合成自包含 query；只保留与视觉回忆有关的内容。若转到晚饭等无关话题、普通聊天或元问题，visualRecall 必须为 null。未解决的视觉回忆请求原文（仅作当前指代上下文）：${activeVisualRecallContext ? JSON.stringify(activeVisualRecallContext) : '- 无'}。若选择工具，reply 和 replyMessages 只能是简短的等待语（例如“${VISUAL_RECALL_WAITING_REPLY}”），不要给出任何猜测的外观或照片内容；memory.remember 必须为 false。`
+      : ''
     messages[0] = {
       ...messages[0],
-      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}${fastVoiceReply ? '\n\n这是实体机器人的日常语音对话。reply 请用自然、简短的中文口语，尽量一句话；必要时可以用两句，但要完整覆盖主人明确提出的要点，不要漏掉数量、步骤、选择或原因要求。不要输出推理过程。memory 和 beliefs 字段仍严格遵守 JSON Schema。' : ''}`,
+      content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}${visualRecallInstruction}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}${fastVoiceReply ? '\n\n这是实体机器人的日常语音对话。reply 请用自然、简短的中文口语，尽量一句话；必要时可以用两句，但要完整覆盖主人明确提出的要点，不要漏掉数量、步骤、选择或原因要求。不要输出推理过程。memory 和 beliefs 字段仍严格遵守 JSON Schema。' : ''}`,
     }
 
     const maxTokens = 768
@@ -418,7 +476,7 @@ export class LocalBrain {
         maxTokens,
         responseFormat: {
           type: 'json_object',
-          schema: PET_CHAT_RESPONSE_SCHEMA,
+          schema: visualRecallEnabled ? PET_CHAT_VISUAL_RECALL_RESPONSE_SCHEMA : PET_CHAT_RESPONSE_SCHEMA,
         },
       })
       const durationMs = elapsedMs(startedAt)
@@ -431,22 +489,26 @@ export class LocalBrain {
         })
       }
 
+      let rawResponse = null
+      try { rawResponse = JSON.parse(rawText) } catch { /* The normal reply parser keeps its plain-text fallback. */ }
       const parsed = parseStructuredChatResponse(rawText, promptText)
-      const evidenceReply = groundedBeliefReply(ownerText, beliefContext)
+      const visualRecall = visualRecallEnabled ? validateVisualRecallResponse(rawResponse, ownerText) : null
+      const evidenceReply = visualRecall ? null : groundedBeliefReply(ownerText, beliefContext)
 
       return {
         ok: true,
         unavailable: false,
-        text: evidenceReply ?? parsed.text,
-        replyMessages: evidenceReply ? [] : parsed.replyMessages,
+        text: visualRecall ? VISUAL_RECALL_WAITING_REPLY : evidenceReply ?? parsed.text,
+        replyMessages: visualRecall ? [VISUAL_RECALL_WAITING_REPLY] : evidenceReply ? [] : parsed.replyMessages,
+        visualRecall,
         reasoning: {
           effort: reasoningEffort,
           durationMs,
         },
-        memoryCandidate: parsed.memoryCandidate,
-        rawMemoryCandidate: parsed.rawMemoryCandidate,
+        memoryCandidate: visualRecall ? null : parsed.memoryCandidate,
+        rawMemoryCandidate: visualRecall ? null : parsed.rawMemoryCandidate,
         beliefCandidates: parsed.beliefCandidates ?? [],
-        memoryDecision: parsed.memoryDecision,
+        memoryDecision: visualRecall ? 'visual-recall-no-memory' : parsed.memoryDecision,
       }
     } catch (error) {
       if (visionImage) {
