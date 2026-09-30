@@ -203,6 +203,11 @@ try {
   assert.ok(protectedCandidates.candidates.some((candidate) => candidate.experienceId === 'synthetic-3'))
   assert.ok(protectedCandidates.candidates.some((candidate) => candidate.experienceId === 'synthetic-4'))
   console.log(`VISUAL_SEMANTIC_500X512_SEARCH_MS=${syntheticSearchMs}`)
+  syntheticRows[499].userText = '我们家的猫黑莓在凳子上'
+  syntheticIndex.memory = { recall() { return [{ content: '我们家的猫叫黑莓', provenance: { evidence: 'confirmed' } }] } }
+  const namedSubject = await syntheticIndex.search('黑莓长什么样子', { recallGoal: 'describe_subject' })
+  assert.equal(namedSubject.winner.experienceId, 'synthetic-499', 'confirmed subject identity is applied before top K, not after unrelated lookalikes fill it')
+  assert.equal(namedSubject.candidates.length, 1)
 
   const retryRoot = await mkdtemp(join(tmpdir(), 'vc-ai-pet-visual-semantic-retry-'))
   let retryStore = null

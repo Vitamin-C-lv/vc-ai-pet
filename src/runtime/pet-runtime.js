@@ -844,6 +844,7 @@ export class PetRuntime {
   }
 
   async chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null, emit = () => {} } = {}) {
+    const startedAt = Date.now()
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
     // D-022: explicit long-term visual references take priority over the recent
@@ -958,7 +959,7 @@ export class PetRuntime {
           // The model chooses the tool. Search constraints come from the owner:
           // live tests showed the planner inventing another cat's coat color.
           toolRecall: { ...result.visualRecall, query: followUp?.query ?? ownerText,
-            preamble: result.text, ownerMessageStored: Boolean(ownerMessage) } })
+            preamble: result.text, ownerMessageStored: Boolean(ownerMessage), startedAt } })
         return { ...recalledResult, visualTurn: true }
       }
       this.turnOrchestrator.clearVisualRecallContext()
@@ -1658,6 +1659,10 @@ export class PetRuntime {
    * the same picture cannot inflate the pet's memory of it.
    */
   async #recordVisualTurnExperience({ turnId = null, sessionKey = null, ownerText = '', visionFacts = null, attachmentId = null, memoryVeto = null } = {}) {
+    // Recalling an old photo is not a new owner upload. Its verified observation
+    // is recorded by the visual session; do not turn the question into a new
+    // confirmed "owner showed a photo" memory anchor.
+    if (!attachmentId) return null
     const observations = visionFacts?.observations ?? []
     // Only the turn's own attachment is authoritative; an observation's id is a
     // fallback for recall-only turns (where no new picture was uploaded).

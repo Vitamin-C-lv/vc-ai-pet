@@ -73,6 +73,7 @@ export class LocalBrainClient {
     maxTokens = 256,
     omitMaxTokens = false,
     responseFormat = undefined,
+    requestTimeoutMs = this.requestTimeoutMs,
   }) {
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new LocalBrainApiError('messages must be a non-empty array', {
@@ -100,7 +101,7 @@ export class LocalBrainClient {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        signal: timeoutSignal(this.requestTimeoutMs),
+        signal: timeoutSignal(Math.min(this.requestTimeoutMs, requestTimeoutMs)),
       })
     } catch (error) {
       throw new LocalBrainApiError('Local Brain service is unavailable', {

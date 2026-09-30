@@ -86,11 +86,16 @@ export class VisualSemanticIndex {
   }
 
   async search(query, { limit = 5, recallGoal = 'find_photo' } = {}) {
-    const { facts } = readConfirmedVisualNames(this.memory, query)
+    const { facts, names } = readConfirmedVisualNames(this.memory, query)
     const text = `${query}${facts.length ? `。称呼说明：${facts.join('；')}` : ''}`
     const { model, vectors: [vector] } = await this.client.embed([{ text }])
-    const rows = await this.store.semanticEmbeddings(model)
-    if (!rows.length) return { status: 'index-pending', candidates: [], model }
+    const indexedRows = await this.store.semanticEmbeddings(model)
+    if (!indexedRows.length) return { status: 'index-pending', candidates: [], model }
+    // A name is an owner-provided identity constraint. Apply it before top K:
+    // otherwise unlabelled lookalikes crowd every known subject photo out.
+    const rows = recallGoal === 'describe_subject' && names.length
+      ? indexedRows.filter((row) => names.some((name) => row.userText?.includes(name)))
+      : indexedRows
     const rank = (key) => rows.filter((row) => row[key])
       .map((row) => ({ row, similarity: similarity(vector, row[key]) }))
       .sort((a, b) => b.similarity - a.similarity)

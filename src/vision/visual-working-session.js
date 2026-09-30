@@ -163,6 +163,7 @@ export class VisualWorkingSession {
     let visualId = firstVisualId
     let final = null
     let verifiedAttachmentId = null
+    let reasoning = null
     const verifyRecall = this.recalledSession && !this.comparison
     const verifiedMatches = []
     while (visualId && this.inspections.length < MAX_VISUAL_INSPECTIONS_PER_TURN) {
@@ -246,6 +247,7 @@ export class VisualWorkingSession {
         return visualFailure({ reason: error?.code ?? 'visual-step-failed', unavailable: error?.retryable === true, requestId: error?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
       }
       if (!step?.ok) return visualFailure({ reason: step?.reason ?? 'local-brain-unavailable', unavailable: step?.unavailable === true, requestId: step?.requestId ?? null, stage: 'local-brain', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+      reasoning = step.reasoning ?? reasoning
       if (typeof step.observation !== 'string' || typeof step.action !== 'string' || !['inspect', 'answer'].includes(step.action) || typeof step.nextVisualId !== 'string' || step.nextVisualId.trim().length > 16 || typeof step.focus !== 'string' || step.focus.trim().length > 120 || !Array.isArray(step.replyMessages) || step.replyMessages.length > 3 || step.replyMessages.some((item) => typeof item !== 'string' || item.trim().length < 1 || item.trim().length > 300) || (verifyRecall && !['match', 'mismatch', 'uncertain'].includes(step.match))) {
         return visualFailure({ reason: 'invalid-visual-step', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, nextVisualId: step.nextVisualId, inspections: this.inspections })
       }
@@ -260,7 +262,9 @@ export class VisualWorkingSession {
         if (step.match === 'match') {
           if (step.action !== 'answer' || step.nextVisualId || step.replyMessages.length === 0) return visualFailure({ reason: 'invalid-visual-recall-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
           verifiedMatches.push({ candidate, step, summary, safeFocus, publishImage })
-          if (this.recallGoal === 'describe_subject') break
+          // A fully verified match answers the recall request. Inspect another
+          // candidate only after mismatch/uncertain, not after finding the photo.
+          break
         }
         visualId = this.candidatePool.find((item) => !this.inspections.some((inspected) => inspected.attachmentId === item.attachmentId))?.visualId ?? null
         continue
@@ -352,6 +356,7 @@ export class VisualWorkingSession {
       inspections: this.inspections,
       observations: this.observations,
       verifiedAttachmentId,
+      reasoning,
       prematureAnswersBlocked: this.prematureAnswersBlocked,
       prematureReplyMessagesDiscarded: this.prematureReplyMessagesDiscarded,
     }

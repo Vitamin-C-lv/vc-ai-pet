@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import { LocalBrain } from '../src/brain/local-brain.js'
 import { PET_CHAT_RESPONSE_SCHEMA } from '../src/brain/memory-candidate.js'
+import { PET_VOICE_INSTRUCTION } from '../src/brain/prompt-builder.js'
 
 const image = { dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn' }
 const state = { mood: .8, energy: .8, boredom: .1, sleepiness: .1, attachment: .8 }
@@ -78,6 +79,8 @@ assert.equal(selected.memoryCandidate, null, 'visual recall cannot create a memo
 assert.equal(selected.rawMemoryCandidate, null, 'visual recall does not hand a model candidate to MemoryGate')
 assert.equal(selected.memoryDecision, 'visual-recall-no-memory')
 assert.equal(requests.length, 1, 'tool selection shares the normal Local Brain inference')
+assert.equal(requests[0].reasoningEffort, 'off', 'tool-enabled phone chat skips hidden reasoning to choose the recall tool quickly')
+assert.equal(requests[0].maxTokens, 768, 'tool-enabled phone chat keeps the bounded structured reply allowance')
 
 const paraphrase = await ask(brain, '你还记得黑莓的毛色吗？', { allowVisualRecall: true })
 assert.deepEqual(paraphrase.visualRecall, recallValue({ query: '黑莓 毛色' }), 'the model can select a semantic query without matching a keyword allowlist')
@@ -116,6 +119,8 @@ assert.equal(responseMeta.visualRecall, null, 'filter the known meta question ab
 const ordinary = await ask(brain, '今天好困。', { allowVisualRecall: true })
 assert.equal(ordinary.visualRecall, null, 'ordinary chat returns no tool choice')
 assert.match(requests[10].messages[0].content, /普通聊天/u, 'ordinary chat is excluded by the model selection prompt')
+assert.equal(requests[10].reasoningEffort, 'off', 'tool-enabled planner calls use the short-reply reasoning profile')
+assert.equal(requests[10].maxTokens, 768)
 
 const relevantFollowup = await ask(brain, '那毛色呢？', {
   allowVisualRecall: true,
@@ -138,10 +143,14 @@ const disabled = await ask(brain, appearanceQuestion)
 assert.equal(disabled.visualRecall, null)
 assert.strictEqual(requests[13].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA, 'the base schema stays unchanged when disabled')
 assert.doesNotMatch(requests[13].messages[0].content, /visualRecall/u, 'the tool instructions stay disabled')
+assert.equal(requests[13].reasoningEffort, 'low', 'ordinary text chat keeps its existing profile')
+assert.equal(requests[13].maxTokens, 768)
 
 const imageTurn = await ask(brain, '这张猫的照片长什么样？', { image, allowVisualRecall: true })
 assert.equal(imageTurn.visualRecall, null, 'image input uses the normal vision path without a memory search')
 assert.strictEqual(requests[14].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA)
+assert.equal(requests[14].reasoningEffort, 'medium', 'ordinary user image chat keeps the vision profile')
+assert.equal(requests[14].maxTokens, 768)
 
 const verifyRequests = []
 const namedRecallCalls = []
@@ -184,23 +193,30 @@ await verifyBrain.visualStep({
   observations: [{ visualId: 'V0', summary: '之前的观察说画面里是黑莓。' }],
 })
 const subjectPrompt = verifyRequests[0].messages[0].content
+assert.equal(verifyRequests[0].reasoningEffort, 'low', 'named subject verification retains limited reasoning for identity interpretation')
+assert.equal(verifyRequests[0].maxTokens, 2048)
+assert.equal(verifyRequests[0].requestTimeoutMs, 30_000, 'recall verification has a bounded response deadline')
 assert.equal(namedRecallCalls[0].k, 2, 'confirmed naming retrieval asks only for the needed two facts')
 assert.equal(typeof namedRecallCalls[0].filter, 'function', 'confirmed-topic filtering runs before the memory top-K')
+assert.ok(subjectPrompt.includes(PET_VOICE_INSTRUCTION), 'the shorter verification prompt keeps the pet voice guidance')
 assert.match(subjectPrompt, /"我们家的猫黑莓在沙发上"/u)
 assert.match(subjectPrompt, /原始图片说明明确给这张照片里的主体命名/u)
 assert.match(subjectPrompt, /若说明明确给主体起了另一个名字，填 mismatch/u)
 assert.match(subjectPrompt, /名字必须来自主人文字，不能从像素或外观推测/u)
-assert.match(subjectPrompt, /已完成的公开观察和模型推断不能建立身份或照片对应关系/u)
-assert.match(subjectPrompt, /候选可以是任何正确标注/u)
-assert.match(subjectPrompt, /不要求与唯一一张旧照片/u)
-assert.match(subjectPrompt, /match 时直接回答主人实际询问的外观特征/u)
-assert.match(subjectPrompt, /不要反问“这是不是黑莓”或让主人再确认身份/u)
-assert.match(subjectPrompt, /不推断触感、健康状况或性格/u)
-assert.match(subjectPrompt, /不要在 replyMessages 里询问主人来确认身份/u)
-assert.match(subjectPrompt, /按 uncertain 处理并令 replyMessages 为空/u)
+assert.match(subjectPrompt, /模型推断不能建立身份或照片对应关系/u)
+assert.match(subjectPrompt, /任何由主人正确标注/u)
+assert.match(subjectPrompt, /不要求背景或姿势相同/u)
+assert.match(subjectPrompt, /match 时直接回答主人问的可见外观/u)
+assert.match(subjectPrompt, /不询问主人确认身份/u)
+assert.match(subjectPrompt, /不推断触感、健康或性格/u)
+assert.match(subjectPrompt, /若身份、主体类别、外观或关键场景无法从原图核实，填 uncertain/u)
+assert.doesNotMatch(subjectPrompt, /TASK_MODE=/u, 'verification does not carry irrelevant comparison mode boilerplate')
+assert.doesNotMatch(subjectPrompt, /候选图片目录/u, 'verification checks the single attached original, not a catalog')
+assert.doesNotMatch(subjectPrompt, /已完成的公开观察/u, 'verification does not include an observation ledger')
 assert.match(subjectPrompt, /我们家的猫叫黑莓/u, 'confirmed naming facts remain available')
 assert.doesNotMatch(subjectPrompt, /推测黑莓可能的身份线索/u, 'inferred naming distractors stay excluded before top-K')
 assert.deepEqual(verifyRequests[0].messages[1].content[1], { type: 'image_url', image_url: { url: image.dataUrl } }, 'subject recall inspects the original image')
+assert.strictEqual(verifyRequests[0].responseFormat.schema.properties.match.enum.join(','), 'match,mismatch,uncertain', 'recall decision schema remains unchanged')
 
 await verifyBrain.visualStep({
   userText: '以前那张黑莓在纸箱里的照片',
@@ -209,14 +225,33 @@ await verifyBrain.visualStep({
   ownerCaption: '这只猫叫小橘，在纸箱里',
 })
 const photoPrompt = verifyRequests[1].messages[0].content
+assert.equal(verifyRequests[1].reasoningEffort, 'off', 'specific photo verification disables hidden reasoning')
+assert.equal(verifyRequests[1].maxTokens, 768)
 assert.match(photoPrompt, /所有可见的主体、物体及场景关系/u)
 assert.match(photoPrompt, /只有全部明确吻合才填 "match"/u, 'find_photo keeps strict scene matching')
 assert.match(photoPrompt, /"这只猫叫小橘，在纸箱里"/u, 'find_photo receives the raw owner caption')
-assert.match(photoPrompt, /如果原始图片说明明确把当前图里的主体命名为与目标不同的名字，必须填 mismatch/u)
-assert.match(photoPrompt, /没有写名字本身不构成 mismatch/u, 'a missing owner label does not reject a scene match')
-assert.match(photoPrompt, /确认的称呼只解释目标名字，不能证明当前图的主体身份/u)
-assert.match(photoPrompt, /不要在 replyMessages 里询问主人来确认身份/u, 'strict recall never turns uncertainty into an identity question')
-assert.match(photoPrompt, /按 uncertain 处理并令 replyMessages 为空/u)
+assert.match(photoPrompt, /原始说明明确给主体标了另一个名字时必须填 mismatch/u)
+assert.match(photoPrompt, /没有名字本身不构成 mismatch/u, 'a missing owner label does not reject a scene match')
+assert.match(photoPrompt, /确认的称呼只解释目标名字，不能证明当前照片里的主体身份/u)
+assert.match(photoPrompt, /不要反问主人.*让主人确认身份/u, 'strict recall never turns uncertainty into an identity question')
+assert.match(photoPrompt, /mismatch 或 uncertain 时 replyMessages 必须为空/u)
 assert.doesNotMatch(photoPrompt, /不要求与唯一一张旧照片/u)
+
+const ordinaryVisionRequests = []
+const ordinaryVisionBrain = new LocalBrain({
+  client: {
+    async chat(request) {
+      ordinaryVisionRequests.push(request)
+      return { payload: { choices: [{ message: { content: JSON.stringify({
+        observation: '画面里有早餐。', action: 'answer', nextVisualId: '', focus: '食物', replyMessages: ['我看到了早餐。'],
+      }) } }] } }
+    },
+  },
+})
+await ordinaryVisionBrain.visualStep({ userText: '这张早餐有什么？', image })
+assert.equal(ordinaryVisionRequests[0].reasoningEffort, 'medium', 'ordinary visual inspection keeps the medium vision profile')
+assert.equal(ordinaryVisionRequests[0].maxTokens, 4096, 'ordinary visual inspection keeps its existing completion allowance')
+assert.equal(ordinaryVisionRequests[0].requestTimeoutMs, undefined, 'the new deadline is scoped to recall verification')
+assert.match(ordinaryVisionRequests[0].messages[0].content, /候选图片目录/u, 'ordinary inspection keeps its multi-image workflow prompt')
 
 console.log('VISUAL_RECALL_TOOL_BRAIN=PASS')

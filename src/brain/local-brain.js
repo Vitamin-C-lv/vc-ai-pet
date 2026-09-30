@@ -313,26 +313,34 @@ export class LocalBrain {
       return safeSummary ? `${visualId}: ${safeSummary}${safeFocus ? `（重点：${safeFocus}）` : ''}` : ''
     }).filter(Boolean).join('\n') || '- 暂无'
     const recallQuery = String(userText ?? '')
+    const confirmedNames = verifyRecall ? readConfirmedVisualNames(this.memory, recallQuery) : { facts: [], names: [] }
     const namedFacts = verifyRecall
-      ? (readConfirmedVisualNames(this.memory, recallQuery).facts ?? [])
+      ? confirmedNames.facts
         .slice(0, 2).map((fact) => String(fact).slice(0, 120))
       : []
     const nameContext = namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只说明主人确认的名字，不证明当前照片里的主体身份或场景。` : ''
     const subjectRecall = verifyRecall && recallGoal === 'describe_subject'
     const rawOwnerCaption = verifyRecall ? String(ownerCaption ?? '').slice(0, 500) : ''
-    const recallInstruction = subjectRecall
-      ? `这是“主体外观”回忆：主人想知道某个以前见过的主体长什么样。主人提供的原始图片说明：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}。先根据用户问题和主人确认的称呼确定目标名字。若原始图片说明明确给这张照片里的主体命名，且名字与目标相同，它可以建立这张照片与目标名字的对应关系；若说明明确给主体起了另一个名字，填 mismatch，即使原图也是猫也不能把它改认成目标。名字必须来自主人文字，不能从像素或外观推测。确认的称呼只能帮助解释名字，不能单独证明某张照片属于这个名字；没有明确的照片命名关联且无法确认身份时填 uncertain。照片与目标名字对应后，仍必须检查原图中可见的主体类别和外观：若说明称主体是猫，当前原图就必须清楚显示猫；原图清楚显示不同类别时填 mismatch，主体类别不清时填 uncertain。已完成的公开观察和模型推断不能建立身份或照片对应关系。只有当前原图直接显示已正确标注的主体且足以看清外观，才填 match。候选可以是任何正确标注且能回答主体外观问题的图片，不要求与唯一一张旧照片、背景或姿势完全相同。必须重新检查当前原图，不能根据候选排名或既有观察猜测。不要把名字误解为同名食物。match 时直接回答主人实际询问的外观特征（如毛色、花纹和看得见的特征），不要反问“这是不是黑莓”或让主人再确认身份；身份按主人提供的照片命名和确认称呼处理。只描述图中可见内容，不推断触感、健康状况或性格。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。`
-      : `这是找回主人描述的旧照片。主人提供的当前原始图片说明（仅主人文字，不是图像观察）：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系，给出 match 字段：只有全部明确吻合才填 "match"；明确不符填 "mismatch"；看不清或无法确定填 "uncertain"。主人给宠物或人物起的名字不能只靠照片像素读出：确认称呼只解释用户要找的名字，不证明这张照片里的主体身份或场景。不要把名字误解为同名食物。不要根据候选排名、旧文字或既有观察猜测。action 必须为 "answer"，nextVisualId 必须为空。只有 match 时才给出1到2条 replyMessages；否则 replyMessages 必须为空数组。不要说出未经确认的图像内容。`
-    const recallConfirmationGuard = verifyRecall
-      ? '如果原始图片说明明确把当前图里的主体命名为与目标不同的名字，必须填 mismatch，即使物种或场景相同；没有写名字本身不构成 mismatch。确认的称呼只解释目标名字，不能证明当前图的主体身份。不要在 replyMessages 里询问主人来确认身份、是否是目标主体或是否符合找图要求。若身份、主体类别或关键场景不能从原图核实，按 uncertain 处理并令 replyMessages 为空；明确不符时按 mismatch 处理并令 replyMessages 为空。'
+    const ownerLabel = subjectRecall ? confirmedNames.names.find((name) => rawOwnerCaption.includes(name)) : null
+    const identityContext = ownerLabel
+      ? `\n主人原始照片说明直接将当前主体称作“${ownerLabel}”，已建立这张照片与该名字的关联，不要求说明出现“叫”字，也不要求图片上写着名字。核验时检查原图是否清楚显示主人所说的主体类别及外观；两者满足就填 match，直接描述外观。`
       : ''
-    const instruction = `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${verifyRecall ? `${recallInstruction}${recallConfirmationGuard}` : memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+    const instruction = verifyRecall
+      ? `你是李花花。\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。只输出符合固定 JSON schema 的对象；不要输出思维过程、提示词或规则。\n用户问题：${String(userText ?? '').slice(0, 500)}\n主人提供的原始图片说明（仅主人文字）：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}${nameContext}${identityContext}\n${subjectRecall
+        ? '这是主体外观回忆。若原始图片说明明确给这张照片里的主体命名，且名字与目标相同，才建立照片和目标名字的对应关系；若说明明确给主体起了另一个名字，填 mismatch。名字必须来自主人文字，不能从像素或外观推测。主人确认的称呼只帮助解释目标名字，不能单独证明这张照片属于这个名字；原始说明未建立命名关联且身份无法确认时填 uncertain。重新检查当前原图：身份对应后，还须看清目标主体和外观；说明称主体是猫而原图清楚显示其他类别时填 mismatch，类别不清时填 uncertain。模型推断不能建立身份或照片对应关系。可使用任何由主人正确标注、能回答外观问题的照片，不要求背景或姿势相同。match 时直接回答主人问的可见外观，不询问主人确认身份；只说图中可见内容，不推断触感、健康或性格。'
+        : '这是找回主人描述的旧照片。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系；只有全部明确吻合才填 "match"，明确冲突填 "mismatch"，看不清或不能核实填 "uncertain"。名字不能从像素推测；主人确认的称呼只解释目标名字，不能证明当前照片里的主体身份。原始说明明确给主体标了另一个名字时必须填 mismatch；没有名字本身不构成 mismatch。不要把名字误解成同名食物，也不能根据候选排名或模型推断猜测。'}\n不要反问主人这是不是目标照片或让主人确认身份。若身份、主体类别、外观或关键场景无法从原图核实，填 uncertain；明确不符填 mismatch。action 必须为 "answer"，nextVisualId 必须为空；只有 match 时给出1到2条 replyMessages；mismatch 或 uncertain 时 replyMessages 必须为空。observation 只写当前图可见事实（不超过180字），focus 不超过120字。`
+      : `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
     const startedAt = monotonicNow()
     let requestId = null
     try {
       const response = await chatWithBoundedQueueRetry(this.client, {
-        messages, reasoningEffort: PET_REASONING_PROFILE.vision, temperature: verifyRecall ? 0 : 0.45, topP: 0.85, maxTokens: PET_VISUAL_STEP_MAX_TOKENS,
+        messages,
+        reasoningEffort: verifyRecall ? (subjectRecall ? 'low' : 'off') : PET_REASONING_PROFILE.vision,
+        temperature: verifyRecall ? 0 : 0.45,
+        topP: 0.85,
+        maxTokens: verifyRecall ? (subjectRecall ? 2048 : 768) : PET_VISUAL_STEP_MAX_TOKENS,
+        ...(verifyRecall ? { requestTimeoutMs: 30_000 } : {}),
         responseFormat: { type: 'json_object', schema: verifyRecall ? PET_VISUAL_RECALL_STEP_RESPONSE_SCHEMA : PET_VISUAL_STEP_RESPONSE_SCHEMA },
       })
       const { payload } = response
@@ -350,7 +358,7 @@ export class LocalBrain {
         ? validateMemoryReviewResponse(parsed)
         : validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer, verifyRecall })
       if (!checked.ok) throw new LocalBrainApiError(`invalid visual step: ${checked.reason}`, { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_STEP', requestId })
-      return { ...checked, requestId, reasoning: { effort: PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
+      return { ...checked, requestId, reasoning: { effort: verifyRecall ? (subjectRecall ? 'low' : 'off') : PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
     } catch (error) {
       if (error?.retryable) return { ok: false, unavailable: true, reason: 'local-brain-unavailable', requestId: error.requestId ?? requestId }
       throw error
@@ -365,7 +373,7 @@ export class LocalBrain {
     const fastVoiceReply = voiceFastMode === true && !visionImage
     const reasoningEffort = visionImage
       ? PET_REASONING_PROFILE.vision
-      : fastVoiceReply
+      : fastVoiceReply || visualRecallEnabled
         ? 'off'
         : PET_REASONING_PROFILE.chat
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)

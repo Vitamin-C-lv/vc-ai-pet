@@ -27,6 +27,8 @@ try {
   let indexUnavailable = false
   let candidateCaption = '我们家的猫黑莓在纸箱里'
   let conflictOnly = false
+  let modelFailure = false
+  const beforeRecallAnchors = runtime.memory.db.listSearchable('fact').filter((row) => row.content.startsWith('主人给花花看过')).length
   runtime.brain = {
     async reply({ allowVisualRecall }) {
       assert.equal(allowVisualRecall, true)
@@ -41,6 +43,7 @@ try {
       return { ok: true, visualIds: ['V0', 'V1'] }
     },
     async visualStep(request) {
+      if (modelFailure) throw Object.assign(new Error('invalid response'), { code: 'PET_LOCAL_BRAIN_BAD_RESPONSE' })
       order.push('original')
       inspectCount++
       assert.equal(request.verifyRecall, true)
@@ -79,6 +82,8 @@ try {
   const messages = (await runtime.conversationStore.list(100)).filter((row) => row.turnId === result.turnId)
   assert.equal(messages.filter(({ role }) => role === 'user').length, 1)
   assert.equal(messages.filter(({ kind }) => kind === 'media_ref').length, 1)
+  assert.equal(result.events.some(({ type }) => type === 'memory_recall'), false, 'photo recall does not display unrelated text-memory summaries')
+  assert.equal(runtime.memory.db.listSearchable('fact').filter((row) => row.content.startsWith('主人给花花看过')).length, beforeRecallAnchors, 'recall questions cannot become confirmed photo-upload memories')
   conflictOnly = true
   const beforeConflict = inspectCount
   const conflict = await turn('你知不知道我们家的猫黑莓，长什么样子？')
@@ -101,6 +106,20 @@ try {
   match = 'match'
   const recovered = await turn('你知不知道我们家的猫黑莓，长什么样子？')
   assert.equal(recovered.events.some(({ type }) => type === 'visual_image'), true)
+  modelFailure = true
+  const failedStart = runtime.startChatTurn({ userText: '你知不知道我们家的猫黑莓，长什么样子？' })
+  let failed
+  for (let i = 0; i < 1000; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    failed = runtime.pollChatTurn(failedStart.turnId)
+    if (failed.status !== 'running') break
+  }
+  assert.equal(failed.status, 'error')
+  assert.equal(failed.events.some(({ type }) => type === 'visual_image'), false)
+  assert.ok(failed.events.some(({ type, payload }) => type === 'assistant_message' && /没能完成照片核对/u.test(payload.text)))
+  assert.ok(failed.events.some(({ type, payload }) => type === 'turn_failed' && payload.code === 'PET_LOCAL_BRAIN_BAD_RESPONSE'))
+  const failedMessages = (await runtime.conversationStore.list(100)).filter((row) => row.turnId === failedStart.turnId)
+  assert.ok(failedMessages.some((row) => row.kind === 'final' && /没能完成照片核对/u.test(row.text)), 'failure survives app history reload')
   console.log('VISUAL_RECALL_TOOL_RUNTIME=PASS')
 } finally {
   runtime.close()

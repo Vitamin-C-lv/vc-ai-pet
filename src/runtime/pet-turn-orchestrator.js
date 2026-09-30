@@ -25,7 +25,7 @@ export class PetTurnOrchestrator {
   }
 
   async runVisual({ turnId, emit, userText, attachment, followUp = null, source = null, toolRecall = null }) {
-    const startedAt = this.now()
+    const startedAt = toolRecall?.startedAt ?? this.now()
     const store = this.runtime.conversationStore
     if (attachment) this.recallContext.clear()
     const messages = typeof store.listForRecentVisualRecall === 'function'
@@ -268,7 +268,7 @@ export class PetTurnOrchestrator {
     }
 
     if (!ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId })
-    await this.#appendMemoryRecall({ turnId, emit, userText, store })
+    if (!preResolved) await this.#appendMemoryRecall({ turnId, emit, userText, store })
     const session = new VisualWorkingSession({
       turnId,
       userText: resolveQuery,
@@ -282,7 +282,14 @@ export class PetTurnOrchestrator {
       recallGoal,
     })
     const visualResult = await session.run('V0')
-    if (!visualResult.ok) return visualResult
+    if (!visualResult.ok) {
+      const text = '花花这次没能完成照片核对，先不发图。主人可以再试一次，花花会重新找。'
+      await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text })
+      this.runtime.conversation.append(userText, text)
+      emit('assistant_message', { text })
+      this.runtime.logger?.warn?.(`vc-ai-pet: photo recall failed code=${visualResult.reason} stage=${visualResult.diagnostic?.stage ?? 'unknown'}`)
+      return visualResult
+    }
     if (visualResult.verifiedAttachmentId) {
       if (followUp?.clarification === true) this.recallContext.record({ mode: 'long_term_visual_recall', query: resolveQuery, result, clarificationRequested: false, uses: contextUses })
       else this.recallContext.clear()
@@ -296,7 +303,7 @@ export class PetTurnOrchestrator {
     const store = this.runtime.conversationStore
     const replyMessages = result.final.replyMessages?.length ? result.final.replyMessages : ['花花看到了，不过还不太确定。']
     const durationMs = Math.max(0, this.now() - startedAt)
-    const reasoning = { effort: 'medium', durationMs, visualInspections: result.inspections.length, visualUniqueImages: new Set(result.inspections.map((item) => item.attachmentId)).size }
+    const reasoning = { effort: result.reasoning?.effort ?? 'medium', durationMs, visualInspections: result.inspections.length, visualUniqueImages: new Set(result.inspections.map((item) => item.attachmentId)).size }
     for (const [index, text] of replyMessages.entries()) {
       emit('assistant_message', { text })
       await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning: index === replyMessages.length - 1 ? reasoning : null })

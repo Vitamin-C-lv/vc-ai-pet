@@ -18,6 +18,21 @@ function jsonResponse(status, payload, extraHeaders = {}) {
 }
 
 {
+  const client = new LocalBrainClient({
+    fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
+      const keepAlive = setTimeout(() => reject(new Error('deadline did not abort')), 1000)
+      assert.equal(Object.hasOwn(JSON.parse(init.body), 'requestTimeoutMs'), false)
+      init.signal.addEventListener('abort', () => {
+        clearTimeout(keepAlive)
+        reject(init.signal.reason)
+      }, { once: true })
+    }),
+  })
+  await assert.rejects(() => client.chat({ messages: [{ role: 'user', content: 'photo check' }], requestTimeoutMs: 20 }),
+    (error) => error.code === 'PET_LOCAL_BRAIN_TRANSPORT_ERROR' && error.retryable)
+}
+
+{
   const calls = []
   const client = new LocalBrainClient({
     fetchImpl: async (url, init) => {

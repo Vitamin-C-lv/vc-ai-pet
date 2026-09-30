@@ -64,6 +64,10 @@ Runtime indexing processes new or changed photos in the background; image bytes
 are not read during vector search. Image and original owner-caption vectors are
 ranked separately and fused into at most five candidates. The leading two
 eligible originals are checked by the existing local VLM before any photo is
-sent. Named subject recall additionally checks the original owner labels so a
+sent, stopping at the first fully verified match. Specific-photo verification
+uses reasoning off and a 768-token completion cap; named-subject appearance
+verification retains low reasoning and a 2,048-token cap. Each verification has
+a 30-second request deadline, and failure persists a user-facing ending without
+publishing a candidate. Named subject recall additionally checks the original owner labels before top K so a
 different named pet cannot be relabelled by the model. No hidden reasoning is
 published or used as confirmed memory.

@@ -120,14 +120,15 @@ try {
     .map((message) => message.sourceAttachmentId), [imageB.id])
 
   const duplicateMatchEvents = []
+  const duplicateMatchCalls = []
   const duplicateMatch = await createSession({
     store, candidates: rankedCandidates, matches: ['match', 'match'],
-    turnId: 'recall-verify-not-unique', events: duplicateMatchEvents, calls: [],
+    turnId: 'recall-verify-first-match', events: duplicateMatchEvents, calls: duplicateMatchCalls,
   }).run('V0')
   assert.equal(duplicateMatch.ok, true)
-  assert.equal(duplicateMatch.verifiedAttachmentId, null)
-  assert.equal(duplicateMatchEvents.some(({ type }) => type === 'visual_image'), false)
-  assert.match(duplicateMatch.final.replyMessages[0], /先不发图/u)
+  assert.equal(duplicateMatch.verifiedAttachmentId, imageA.id)
+  assert.equal(duplicateMatchCalls.length, 1, 'stop once a photo meets every requested condition')
+  assert.equal(duplicateMatchEvents.some(({ type }) => type === 'visual_image'), true)
 
   // The long-term resolver's runner-up must reach the visual session. The
   // previous orchestrator discarded it and substituted recent-chat images.
@@ -155,7 +156,7 @@ try {
     emit(type, payload) { routedEvents.push({ type, payload }); return { seq: routedEvents.length, at: routedEvents.length } },
   })
   assert.equal(routed.ok, true)
-  assert.equal(routedCalls.length, MAX_VISUAL_INSPECTIONS_PER_TURN)
+  assert.equal(routedCalls.length, 2)
   assert.deepEqual(routedEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [imageB.id])
   assert.deepEqual((await store.listForRecentVisualRecall(100))
     .filter((message) => message.turnId === 'recall-verify-routed' && message.kind === 'media_ref')
@@ -222,8 +223,8 @@ try {
   })
   assert.equal(galleryResult.ok, true)
   assert.equal(gallerySearchCalls.length, 0, 'no VLM preview gate after semantic retrieval')
-  assert.equal(galleryVerifyCalls.length, 2, 'at most two semantic originals are inspected')
-  assert.deepEqual(galleryVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[8], IMAGES[0]])
+  assert.equal(galleryVerifyCalls.length, 1, 'a confirmed first photo needs no second model call')
+  assert.deepEqual(galleryVerifyCalls.map(({ image }) => image.dataUrl), [IMAGES[8]])
   assert.deepEqual(galleryEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [groupedTarget.id])
   const searchCallsBeforeBareReference = gallerySearchCalls.length
   const bareEvents = []
