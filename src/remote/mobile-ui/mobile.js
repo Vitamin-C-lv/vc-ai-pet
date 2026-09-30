@@ -400,10 +400,6 @@ function navigateHome() {
 }
 
 function navigateBack(fallback = SCREEN.HOME) {
-  if (currentScreen === SCREEN.GALLERY) {
-    navigateHome()
-    return true
-  }
   return navigation?.back({ fallback }) ?? false
 }
 

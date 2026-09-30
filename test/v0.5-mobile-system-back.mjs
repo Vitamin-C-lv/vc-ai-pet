@@ -73,11 +73,11 @@ assert.equal(state.handleSystemBack(), false)
 
 const pageBack = mobileJs.slice(mobileJs.indexOf('function navigateBack('), mobileJs.indexOf('// Called by the Android'))
 state.currentScreen = 'gallery'
-state.navigateHome = () => calls.push('home')
-state.navigation = { back: () => { throw new Error('Gallery should return straight home') } }
+state.navigateHome = () => { throw new Error('Back should follow the entry path') }
+state.navigation = { back: () => { calls.push('previous'); return true } }
 vm.runInContext(pageBack, state)
 calls.length = 0
 assert.equal(state.handleSystemBack(), true)
-assert.deepEqual(calls, ['home'])
+assert.deepEqual(calls, ['previous'])
 console.log('SYSTEM_BACK_TRANSIENT_UI_AND_PAGE_STACK=PASS')
 console.log('PHOTO_PARAMS_RESTORED_AND_MOTION_DIRECTION=PASS')
