@@ -17,7 +17,7 @@ export const CONVERSATION_ARCHIVE_FILENAME = 'conversation-archive.db'
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const MESSAGE_KINDS = new Set(['dialogue', 'activity', 'media_ref', 'final'])
-const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'visual_recall', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
+const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'visual_recall', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed', 'visual_owner_caption'])
 const MESSAGE_PROVENANCE = new Set(['confirmed', 'inferred'])
 const IMAGE_EXTENSION_BY_MIME = Object.freeze({
   'image/webp': 'webp',

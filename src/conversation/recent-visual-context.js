@@ -22,6 +22,41 @@ const COMPARISON_PATTERN = /(两张|这两个|这两幅|比较|区别|不同|哪
 const STANDALONE_PREVIOUS_PATTERN = /^(?:前一张|上一张)$/u
 const AMBIGUOUS_DEICTIC_PATTERN = /(之前那个|前面那个|那个怎么样)/u
 
+export function isVisualIdentityStatement(userText) {
+  const text = cleanText(userText)
+  return /(?:就是|名字(?:是|叫|为)|名为|叫|是(?:我们|我|你们|你)家的)/u.test(text)
+    && (STRONG_VISUAL_REFERENCE_PATTERN.test(text) || IMMEDIATE_TEMPORAL_PATTERN.test(text) || WEAK_DEICTIC_PATTERN.test(text))
+    && !/(?:是不是|是否|可能|也许|好像|如果|假如|吗|么|[？?])/u.test(text)
+    && (!/(?:不是|不叫)/u.test(text) || /(?:而是|就是|[，,]\s*是)/u.test(text))
+}
+
+// Follow the image actually displayed in the conversation, including recalled
+// images. Only identity statements and the resulting clarification may bridge
+// an intervening text turn; ordinary topics end this association.
+function activeVisualAttachment(messages) {
+  const source = Array.isArray(messages) ? messages : []
+  let end = source.length
+  for (let bridges = 0; bridges <= 2; bridges++) {
+    let start = end - 1
+    while (start >= 0 && source[start]?.role !== 'user') start--
+    if (start < 0) return null
+    const owner = source[start]
+    if (isStackchanCameraMessage(owner)) return null
+    const shown = [...new Set(source.slice(start + 1, end)
+      .filter((message) => message.role === 'assistant' && message.kind === 'media_ref')
+      .map((message) => message.sourceAttachmentId ?? attachmentIdFromMessage(message)).filter(Boolean))]
+    if (shown.length > 1) return null
+    if (shown.length === 1) return shown[0]
+    if (attachmentIdFromMessage(owner)) return attachmentIdFromMessage(owner)
+    if (owner.activityType === 'visual_owner_caption' && owner.sourceAttachmentId) return owner.sourceAttachmentId
+    const clarification = source.slice(start + 1, end).some((message) => message.role === 'assistant'
+      && message.text === '主人说的是哪一张呀？花花怕认错，能再说得具体一点吗？')
+    if (!clarification || !isVisualIdentityStatement(owner.text)) return null
+    end = start
+  }
+  return null
+}
+
 const cleanText = cleanVisualText
 
 function attachmentIdFromMessage(message) {
@@ -60,6 +95,12 @@ export function collectRecentVisualCandidates(messages = [], maxAttachments = RE
       messageIndex: index,
     })
   })
+  for (const message of source) {
+    if (message?.role !== 'user' || message.activityType !== 'visual_owner_caption' || !message.sourceAttachmentId) continue
+    for (const candidate of candidates) {
+      if (candidate.attachmentId === message.sourceAttachmentId) candidate.userText += `\n${cleanText(message.text)}`
+    }
+  }
   return candidates.sort((left, right) => left.timestamp - right.timestamp || left.messageIndex - right.messageIndex).slice(-limit)
 }
 
@@ -158,6 +199,12 @@ export class RecentVisualResolver {
     if (!text || candidates.length === 0) return matched(null)
 
     const latest = candidates.at(-1)
+    if (isVisualIdentityStatement(text)) {
+      const activeId = activeVisualAttachment(messages)
+      const active = candidates.find((candidate) => candidate.attachmentId === activeId)
+      if (active) return { matched: true, attachmentId: active.attachmentId, reason: 'active-visual-reference' }
+      return { matched: false, attachmentId: null, reason: 'ambiguous-visual-reference' }
+    }
     if (COMPARISON_PATTERN.test(text) && !STANDALONE_PREVIOUS_PATTERN.test(text)) {
       return candidates.length >= 2
         ? { matched: false, attachmentId: null, reason: 'ambiguous-visual-reference' }

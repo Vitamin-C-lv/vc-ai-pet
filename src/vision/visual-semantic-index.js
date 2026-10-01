@@ -1,5 +1,5 @@
 import { VisualEmbeddingClient } from './visual-embedding-client.js'
-import { readConfirmedVisualNames } from '../memory/visual-naming-context.js'
+import { readConfirmedVisualNames, captionMatchesNamedSubject } from '../memory/visual-naming-context.js'
 
 function similarity(query, vector) {
   if (!vector || query.length !== vector.length) return -1
@@ -94,7 +94,7 @@ export class VisualSemanticIndex {
     // A name is an owner-provided identity constraint. Apply it before top K:
     // otherwise unlabelled lookalikes crowd every known subject photo out.
     const rows = recallGoal === 'describe_subject' && names.length
-      ? indexedRows.filter((row) => names.some((name) => row.userText?.includes(name)))
+      ? indexedRows.filter((row) => captionMatchesNamedSubject(row.userText, names))
       : indexedRows
     const rank = (key) => rows.filter((row) => row[key])
       .map((row) => ({ row, similarity: similarity(vector, row[key]) }))

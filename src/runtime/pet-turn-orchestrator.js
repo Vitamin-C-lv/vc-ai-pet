@@ -1,10 +1,10 @@
-import { buildVisualCandidatePool, detectVisualIntent, isDirectRecentVisualReference, isExplicitPreviousVisualReference, isExplicitVisualSearch, isImmediatePreviousVisualReference, RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { buildVisualCandidatePool, detectVisualIntent, isDirectRecentVisualReference, isExplicitPreviousVisualReference, isExplicitVisualSearch, isImmediatePreviousVisualReference, isVisualIdentityStatement, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
 import { hasVisualContentDescription } from '../vision/visual-keywords.js'
 import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../vision/visual-working-session.js'
 import { sanitizeSafeTraceText } from './pet-turn-events.js'
 import { detectContextualVisualRecallFollowUp, VisualRecallContext } from './visual-recall-context.js'
-import { readConfirmedVisualNames, captionReportedNames } from '../memory/visual-naming-context.js'
+import { readConfirmedVisualNames, captionIdentityLabels, captionMatchesNamedSubject } from '../memory/visual-naming-context.js'
 
 function buildPrimaryComparisonPair(pool, intent) {
   if (intent !== 'comparison' || !Array.isArray(pool)) return []
@@ -35,6 +35,9 @@ export class PetTurnOrchestrator {
         : []
     let pool = buildVisualCandidatePool({ currentAttachment: attachment, userText, messages })
     const resolved = await this.resolver.resolve(userText, messages)
+    const ownerCorrection = !attachment && isVisualIdentityStatement(userText)
+      && resolved?.matched && resolved.reason === 'active-visual-reference'
+    if (ownerCorrection) pool = pool.filter((candidate) => candidate.attachmentId === resolved.attachmentId)
     const intent = detectVisualIntent(userText, { hasCurrent: Boolean(attachment), candidateCount: pool.length - (attachment ? 1 : 0) })
     const comparisonPair = buildPrimaryComparisonPair(pool, intent)
     // A new upload is the subject unless the owner explicitly refers to an
@@ -107,7 +110,12 @@ export class PetTurnOrchestrator {
       : attachment || intent === 'comparison'
         ? pool[0]?.visualId
         : resolvedVisual ?? pool[0]?.visualId
-    await store.appendMessage({ role: 'user', text: userText, attachment, turnId, source })
+    await store.appendMessage({ role: 'user', text: userText, attachment, turnId, source,
+      ...(ownerCorrection ? { sourceAttachmentId: resolved.attachmentId, activityType: 'visual_owner_caption' } : {}) })
+    if (ownerCorrection) {
+      pool[0].userText += `\n${userText}`
+      this.recallContext.clear()
+    }
     // The current upload must become an occurrence before VisualWorkingSession
     // records its inspection/observation event. This is still archive-only and
     // zero-model; the outer runVisualTurn performs the idempotent follow-up sync.
@@ -184,8 +192,8 @@ export class PetTurnOrchestrator {
       .filter((candidate) => {
         if (!names.length) return true
         const caption = candidate.userText ?? ''
-        if (recallGoal === 'describe_subject') return names.some((name) => caption.includes(name))
-        const labels = captionReportedNames(caption)
+        if (recallGoal === 'describe_subject') return captionMatchesNamedSubject(caption, names)
+        const labels = captionIdentityLabels(caption)
         return !labels.length || labels.some((label) => names.some((name) => label.startsWith(name)))
       })
       .map((candidate, index) => ({ ...candidate, visualId: `V${index}`, relation: 'recalled' }))

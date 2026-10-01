@@ -10,6 +10,7 @@
     "test:mobile-composer-polish": "node test/v0.4-mobile-composer-polish.mjs",
     "test:mobile-viewport": "node test/v0.5-mobile-viewport.mjs",
     "test:emoji-keyboard-switch": "node test/v0.5-emoji-keyboard-switch.mjs",
+    "test:visual-owner-correction": "node test/v0.5-visual-owner-correction.mjs && node test/v0.5-visual-owner-caption-store.mjs",
     "test:mobile-submission-recovery": "node test/v0.4-mobile-submission-recovery.mjs",
     "test:chat-start-idempotency": "node test/v0.5-chat-start-idempotency.mjs && node test/v0.5-mobile-reload-recovery.mjs",
     "test:visual-memory": "node test/v0.4-visual-experience-store.mjs && node test/v0.4-long-term-visual-recall.mjs && node test/v0.4-visual-memory-orchestrator.mjs && node test/v0.4-visual-recall-verify-before-show.mjs && node test/v0.4-visual-dream-context.mjs && node test/v0.4-visual-mobile-rendering.mjs && node test/v0.4-contextual-visual-recall-followup.mjs && node test/v0.4-visual-memory-acceptance.mjs",

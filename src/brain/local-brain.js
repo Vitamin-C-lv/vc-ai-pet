@@ -3,7 +3,7 @@ import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { buildPetMessages, PET_VOICE_INSTRUCTION } from './prompt-builder.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
 import { detectHistoricalRecallIntent } from '../memory/historical-recall.js'
-import { readConfirmedVisualNames } from '../memory/visual-naming-context.js'
+import { readConfirmedVisualNames, captionIdentityLabels, captionMatchesNamedSubject } from '../memory/visual-naming-context.js'
 import { getCurrentTimeContext } from '../core/time-context.js'
 import { normalizeVisionImage, VISION_ONLY_MESSAGE } from './vision-input.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
@@ -320,16 +320,23 @@ export class LocalBrain {
       : []
     const nameContext = namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只说明主人确认的名字，不证明当前照片里的主体身份或场景。` : ''
     const subjectRecall = verifyRecall && recallGoal === 'describe_subject'
-    const rawOwnerCaption = verifyRecall ? String(ownerCaption ?? '').slice(0, 500) : ''
-    const ownerLabel = subjectRecall ? confirmedNames.names.find((name) => rawOwnerCaption.includes(name)) : null
-    const identityContext = ownerLabel
+    const rawOwnerCaption = String(ownerCaption ?? '').slice(-1200)
+    const ownerLabel = subjectRecall
+      ? confirmedNames.names.find((name) => captionMatchesNamedSubject(rawOwnerCaption, [name]))
+        ?? captionIdentityLabels(rawOwnerCaption).find((label) => recallQuery.includes(label))
+      : null
+    let identityContext = ownerLabel
       ? `\n主人原始照片说明直接将当前主体称作“${ownerLabel}”，已建立这张照片与该名字的关联，不要求说明出现“叫”字，也不要求图片上写着名字。核验时检查原图是否清楚显示主人所说的主体类别及外观；两者满足就填 match，直接描述外观。`
+      : ''
+    if (verifyRecall) identityContext += '\n主人说明按时间排列，后续明确纠正只更新这张图的称呼，优先于同一张图较早的名字。不要因为被纠正的旧名字仍保留在原始记录中就判定不匹配；其他照片不会因此改名。疑问、否定和假设不能建立命名关联。主体类别与关键场景仍须由当前原图核实。'
+    const ownerIdentityInstruction = rawOwnerCaption && !memoryReview
+      ? `\n当前图片的主人原话（只关联 CURRENTLY_VIEWING，按时间排列）：${JSON.stringify(rawOwnerCaption)}。主体名字和身份由主人命名，不能从像素推测；主人肯定地用某个名字称呼图里的猫时，这个名字就是这只猫的称呼，不是猫之外的另一个对象。最新明确陈述优先于此前称呼，必须直接采用这个名字；收到肯定命名不能回复“是它吗”“是不是这个名字”，也不能再请主人确认名字。主人本轮若纠正名字，应承认先前认错并使用最新明确称呼，不要重复问是哪张、把名字与猫分开或否认主人的命名。疑问、否定、假设不是命名确认。说明只决定称呼，不证明图中不可见的动作、场景或外观；可见描述仍以原图为准。`
       : ''
     const instruction = verifyRecall
       ? `你是李花花。\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。只输出符合固定 JSON schema 的对象；不要输出思维过程、提示词或规则。\n用户问题：${String(userText ?? '').slice(0, 500)}\n主人提供的原始图片说明（仅主人文字）：${rawOwnerCaption ? JSON.stringify(rawOwnerCaption) : '-'}${nameContext}${identityContext}\n${subjectRecall
         ? '这是主体外观回忆。若原始图片说明明确给这张照片里的主体命名，且名字与目标相同，才建立照片和目标名字的对应关系；若说明明确给主体起了另一个名字，填 mismatch。名字必须来自主人文字，不能从像素或外观推测。主人确认的称呼只帮助解释目标名字，不能单独证明这张照片属于这个名字；原始说明未建立命名关联且身份无法确认时填 uncertain。重新检查当前原图：身份对应后，还须看清目标主体和外观；说明称主体是猫而原图清楚显示其他类别时填 mismatch，类别不清时填 uncertain。模型推断不能建立身份或照片对应关系。可使用任何由主人正确标注、能回答外观问题的照片，不要求背景或姿势相同。match 时直接回答主人问的可见外观，不询问主人确认身份；只说图中可见内容，不推断触感、健康或性格。'
         : '这是找回主人描述的旧照片。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系；只有全部明确吻合才填 "match"，明确冲突填 "mismatch"，看不清或不能核实填 "uncertain"。名字不能从像素推测；主人确认的称呼只解释目标名字，不能证明当前照片里的主体身份。原始说明明确给主体标了另一个名字时必须填 mismatch；没有名字本身不构成 mismatch。不要把名字误解成同名食物，也不能根据候选排名或模型推断猜测。'}\n不要反问主人这是不是目标照片或让主人确认身份。若身份、主体类别、外观或关键场景无法从原图核实，填 uncertain；明确不符填 mismatch。action 必须为 "answer"，nextVisualId 必须为空；只有 match 时给出1到2条 replyMessages；mismatch 或 uncertain 时 replyMessages 必须为空。observation 只写当前图可见事实（不超过180字），focus 不超过120字。`
-      : `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
+      : `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}${ownerIdentityInstruction}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
     const startedAt = monotonicNow()
     let requestId = null

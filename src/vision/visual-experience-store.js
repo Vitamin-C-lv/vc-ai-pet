@@ -17,7 +17,7 @@ import { isEmbodiedTransientAttachment, isStackchanCameraMessage } from './visua
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 
 export const VISUAL_EXPERIENCE_DB_FILENAME = 'visual-experience.db'
-export const VISUAL_EVENT_KINDS = Object.freeze(['inspection', 'revisit', 'comparison', 'observation'])
+export const VISUAL_EVENT_KINDS = Object.freeze(['inspection', 'revisit', 'comparison', 'observation', 'owner_caption'])
 export const VISUAL_BACKFILL_CURSOR_KEY = 'backfill_sequence'
 
 const EVENT_KINDS = new Set(VISUAL_EVENT_KINDS)
@@ -530,12 +530,13 @@ export class VisualExperienceStore {
 
     const latestOccurrences = new Map()
     const ownerCaptions = new Map()
+    const rawOwnerCaptionEvents = new Map()
     const transientExperiences = new Set()
     for (const root of roots) {
       if (this.#isTransientAttachment(root.attachment_id)) transientExperiences.add(root.experience_id)
     }
     const occurrences = this.db.prepare(`
-      SELECT experience_id, attachment_id, user_text, occurred_at
+      SELECT experience_id, attachment_id, user_text, occurred_at, source_message_id
       FROM visual_occurrences
       ORDER BY occurred_at DESC, occurrence_id DESC
     `).all()
@@ -546,9 +547,23 @@ export class VisualExperienceStore {
       const caption = cleanText(occurrence.user_text)
       if (caption) {
         if (!ownerCaptions.has(canonical)) ownerCaptions.set(canonical, [])
-        ownerCaptions.get(canonical).push(caption)
+        ownerCaptions.get(canonical).push({ text: caption, occurredAt: Number(occurrence.occurred_at), sourceRef: occurrence.source_message_id })
       }
       if (this.#isTransientAttachment(occurrence.attachment_id)) transientExperiences.add(canonical)
+    }
+
+    const ownerCaptionRows = this.db.prepare(`
+      SELECT experience_id, event_id, summary, occurred_at
+      FROM visual_events
+      WHERE kind = 'owner_caption' AND evidence = 'raw' AND summary IS NOT NULL
+      ORDER BY occurred_at ASC, event_id ASC
+    `).all()
+    for (const event of ownerCaptionRows) {
+      const canonical = canonicalById.get(event.experience_id)
+      const text = cleanText(event.summary)
+      if (!canonical || !text) continue
+      if (!rawOwnerCaptionEvents.has(canonical)) rawOwnerCaptionEvents.set(canonical, [])
+      rawOwnerCaptionEvents.get(canonical).push({ text, occurredAt: Number(event.occurred_at), sourceRef: event.event_id })
     }
 
     const firstObservations = new Map()
@@ -570,10 +585,13 @@ export class VisualExperienceStore {
       .map((root) => {
         const latest = latestOccurrences.get(root.experience_id)
         const ownerTexts = [
-          root.user_text,
-          ...(ownerCaptions.get(root.experience_id) ?? []).reverse(),
+          { text: cleanText(root.user_text), occurredAt: Number(root.occurred_at), sourceRef: root.source_message_id },
+          ...(ownerCaptions.get(root.experience_id) ?? []),
+          ...(rawOwnerCaptionEvents.get(root.experience_id) ?? []),
         ]
-        const userText = cleanText([...new Set(ownerTexts.map((caption) => cleanText(caption)).filter(Boolean))].join('\n'))
+          .filter((caption) => caption.text)
+          .sort((left, right) => left.occurredAt - right.occurredAt || String(left.sourceRef).localeCompare(String(right.sourceRef)))
+        const userText = cleanText([...new Set(ownerTexts.map((caption) => caption.text))].join('\n'))
         return {
           experienceId: root.experience_id,
           attachmentId: latest?.attachment_id ?? root.attachment_id,
@@ -724,6 +742,57 @@ export class VisualExperienceStore {
   }
 
   async #syncMessage(message, { archiveSequence = null, tokenizeText = null, readAttachment = null } = {}) {
+    if (message?.role === 'user'
+      && message?.activityType === 'visual_owner_caption'
+      && !message?.attachment) {
+      const sourceMessageId = String(message.id ?? '').trim()
+      const sourceAttachmentId = String(message.sourceAttachmentId ?? '').trim()
+      const summary = cleanText(message.text)
+      if (!sourceMessageId || !sourceAttachmentId || !summary) {
+        return { created: false, createdExperience: false, createdOccurrence: false, experienceId: null, duplicateKind: null }
+      }
+
+      const experience = await this.findExperienceByAttachmentId(sourceAttachmentId)
+      if (!experience) {
+        return { created: false, createdExperience: false, createdOccurrence: false, experienceId: null, duplicateKind: null }
+      }
+
+      const existingEvent = this.db.prepare('SELECT event_id FROM visual_events WHERE event_id = ?').get(sourceMessageId)
+      await this.recordEvent({
+        experienceId: experience.experienceId,
+        turnId: message.turnId ?? null,
+        kind: 'owner_caption',
+        occurredAt: message.timestamp ?? this.now(),
+        summary,
+        evidence: 'raw',
+        eventId: sourceMessageId,
+      })
+      if (tokenizeText) {
+        const terms = await tokenizeText(summary, {
+          boost: 3,
+          sourceKind: 'user_text',
+          sourceRef: sourceMessageId,
+        })
+        await this.indexTerms(experience.experienceId, Array.isArray(terms) ? terms : [], {
+          sourceKind: 'user_text',
+          sourceRef: sourceMessageId,
+        })
+      }
+      if (archiveSequence !== null) {
+        const sequence = nonNegativeInteger(archiveSequence)
+        if (sequence !== null && sequence > this.#cursor()) this.#writeCursor(sequence)
+      }
+      return {
+        created: false,
+        createdExperience: false,
+        createdOccurrence: false,
+        createdEvent: !existingEvent,
+        experienceId: experience.experienceId,
+        duplicateKind: 'OWNER_CAPTION',
+        eventId: sourceMessageId,
+      }
+    }
+
     if (message?.role !== 'user' || !message?.attachment?.id) {
       return { created: false, createdExperience: false, createdOccurrence: false, experienceId: null, duplicateKind: null }
     }

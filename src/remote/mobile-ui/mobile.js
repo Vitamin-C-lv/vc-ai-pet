@@ -503,6 +503,7 @@ async function loadGalleryList({ more = false } = {}) {
 }
 
 function galleryEventLabel(event) {
+  if (event.kind === 'owner_caption') return '主人补充 · 主人原话'
   if (event.kind === 'observation') return '花花的观察 · 视觉推测'
   if (event.kind === 'comparison') return '花花做了对照 · 视觉推测'
   if (event.kind === 'revisit') return '花花又看了看'
