@@ -10,7 +10,7 @@ export const PET_REASONING_PROFILE = Object.freeze({
   chat: 'low',
   vision: 'medium',
   dream: 'high',
-  reflection: 'off',
+  reflection: 'low',
 })
 
 export function shouldUseFastVoiceMode({

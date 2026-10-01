@@ -133,8 +133,9 @@ const summaryResult = await summaryBrain.summarizeVisualRecall({
 })
 assert.equal(summaryResult.ok, true)
 assert.equal(summaryResult.replyMessages.length, 1)
-assert.equal(summaryResult.reasoning.effort, 'off')
-assert.equal(summaryRequests[0].reasoningEffort, 'off')
+assert.equal(summaryResult.reasoning.effort, 'medium')
+assert.equal(summaryRequests[0].reasoningEffort, 'medium')
+assert.equal(summaryRequests[0].maxTokens, 1792)
 assert.equal(summaryRequests[0].reasoningStage, 'visual-summary')
 assert.equal(summaryRequests[0].responseFormat.schema.properties.replyMessages.maxItems, 1)
 const summaryPrompt = summaryRequests[0].messages[0].content

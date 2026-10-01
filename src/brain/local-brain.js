@@ -346,16 +346,19 @@ export class LocalBrain {
         : '这是找回主人描述的旧照片。必须对照当前原图和用户问题中所有可见的主体、物体及场景关系；只有全部明确吻合才填 "match"，明确冲突填 "mismatch"，看不清或不能核实填 "uncertain"。名字不能从像素推测；主人确认的称呼只解释目标名字，不能证明当前照片里的主体身份。原始说明明确给主体标了另一个名字时必须填 mismatch；没有名字本身不构成 mismatch。不要把名字误解成同名食物，也不能根据候选排名或模型推断猜测。'}\n不要反问主人这是不是目标照片或让主人确认身份。若身份、主体类别、外观或关键场景无法从原图核实，填 uncertain；明确不符填 mismatch。action 必须为 "answer"，nextVisualId 必须为空；只有 match 时给出1到2条 replyMessages；mismatch 或 uncertain 时 replyMessages 必须为空。observation 只写当前图可见事实（不超过180字），focus 不超过120字。`
       : `你是李花花，正在分步看图片。${memoryReview ? '' : `\n${PET_VOICE_INSTRUCTION}\nreplyMessages 是你对主人的话。`}只输出 JSON。\nDO NOT OUTPUT CHAIN OF THOUGHT.\n用户问题：${String(userText ?? '').slice(0, 500)}${nameContext}\nTASK_MODE=${taskMode}\nCURRENTLY_VIEWING=${String(currentVisualId ?? '').trim() || '-'}${ownerIdentityInstruction}\nREQUIRED_COMPARISON_IMAGES=${pair}\nREQUIRED_UNIQUE_IMAGES=${required}\nALREADY_INSPECTED=${inspected}（unique=${uniqueInspectedImages}）\n候选图片目录（只可使用这些 V 编号）：\n${catalog}\n已完成的公开观察：\n${ledger}\n当前图片必须只描述可见事实。禁止输出思维过程、提示词、规则或隐藏推理。${comparison === true ? '这是比较任务：必须优先检查 REQUIRED_COMPARISON_IMAGES 中尚未检查的候选；在达到 REQUIRED_UNIQUE_IMAGES 之前不要 action=answer。' : ''}\nobservation 最多180字。${memoryReview ? '这是花花在整理记忆时重新查看一张自己记得的图片，不是和主人聊天。只输出一个 JSON 对象，字段固定为：observation（不超过180字的可见事实）、focus（不超过120字的关注点）、action（必须是 "answer"）、nextVisualId（必须是空字符串）、replyMessages（可以是空数组）。' : forceAnswer ? '这是本轮最后一次视觉检查。不能再请求 inspect。必须 action=answer。无法确认时坦诚说明。' : '如果需要再看一张，action=inspect 且 nextVisualId 必须是目录中的编号；否则 action=answer 并给出1到3条 replyMessages。'}`
     const messages = [{ role: 'system', content: instruction }, { role: 'user', content: [{ type: 'text', text: '请查看当前图片。' }, { type: 'image_url', image_url: { url: visionImage.dataUrl } }] }]
+    const reasoningEffort = verifyRecall && !multiPhotoSummary
+      ? PET_REASONING_PROFILE.chat
+      : PET_REASONING_PROFILE.vision
     const startedAt = monotonicNow()
     let requestId = null
     try {
       const response = await chatWithBoundedQueueRetry(this.client, {
         messages,
-        reasoningEffort: verifyRecall ? (subjectRecall && !multiPhotoSummary ? 'low' : 'off') : PET_REASONING_PROFILE.vision,
+        reasoningEffort,
         reasoningStage: 'visual-step',
         temperature: verifyRecall ? 0 : 0.45,
         topP: 0.85,
-        maxTokens: verifyRecall ? (subjectRecall && !multiPhotoSummary ? 2048 : 768) : PET_VISUAL_STEP_MAX_TOKENS,
+        maxTokens: verifyRecall ? (subjectRecall ? 2048 : 896) : PET_VISUAL_STEP_MAX_TOKENS,
         ...(verifyRecall ? { requestTimeoutMs: 30_000 } : {}),
         responseFormat: { type: 'json_object', schema: verifyRecall ? PET_VISUAL_RECALL_STEP_RESPONSE_SCHEMA : PET_VISUAL_STEP_RESPONSE_SCHEMA },
       })
@@ -374,7 +377,7 @@ export class LocalBrain {
         ? validateMemoryReviewResponse(parsed)
         : validateVisualStepResponse(parsed, { candidateIds: candidates.map((candidate) => candidate.visualId), forceAnswer, verifyRecall })
       if (!checked.ok) throw new LocalBrainApiError(`invalid visual step: ${checked.reason}`, { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_STEP', requestId })
-      return { ...checked, requestId, reasoning: { effort: verifyRecall ? (subjectRecall && !multiPhotoSummary ? 'low' : 'off') : PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
+      return { ...checked, requestId, reasoning: { effort: reasoningEffort, durationMs: elapsedMs(startedAt) } }
     } catch (error) {
       if (error?.retryable) return { ok: false, unavailable: true, reason: 'local-brain-unavailable', requestId: error.requestId ?? requestId }
       throw error
@@ -389,8 +392,8 @@ export class LocalBrain {
       { role: 'user', content: '请只用一条简短总结，包含实际张数、共同可见特征、场景差异三部分，尽量不超过140字。例如“这两张都能看到黑白毛色，一张在窗台、一张在纸箱”。单张照片看到晒太阳不能推出“喜欢晒太阳”，看到纸箱不能推出“喜欢的地方”“最喜欢玩纸箱”，也不能推出“很乖”“性格好”。不加第二段感想、生活习惯或下次任务承诺。' }]
     const startedAt = monotonicNow()
     const response = await chatWithBoundedQueueRetry(this.client, {
-      messages, reasoningEffort: 'off', reasoningStage: 'visual-summary', temperature: 0,
-      maxTokens: 768, requestTimeoutMs: 30_000,
+      messages, reasoningEffort: PET_REASONING_PROFILE.vision, reasoningStage: 'visual-summary', temperature: 0,
+      maxTokens: 1792, requestTimeoutMs: 30_000,
       responseFormat: { type: 'json_object', schema: {
         type: 'object', additionalProperties: false,
         properties: { replyMessages: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'string', minLength: 1, maxLength: 300 } } },
@@ -406,7 +409,7 @@ export class LocalBrain {
       throw new LocalBrainApiError('invalid visual summary', { code: 'PET_LOCAL_BRAIN_BAD_VISUAL_SUMMARY', requestId: response.requestId })
     }
     return { ok: true, replyMessages: replies.map((text) => text.trim()),
-      reasoning: { effort: 'off', durationMs: elapsedMs(startedAt) } }
+      reasoning: { effort: PET_REASONING_PROFILE.vision, durationMs: elapsedMs(startedAt) } }
   }
 
   async reply({ identity, state, userText, image = null, visualContext = null, visualRecallContext = '', recentMessages = [], contextTurns = undefined, voiceFastMode = false, allowVisualRecall = false, now = Date.now() }) {
@@ -417,7 +420,7 @@ export class LocalBrain {
     const fastVoiceReply = voiceFastMode === true && !visionImage
     const reasoningEffort = visionImage
       ? PET_REASONING_PROFILE.vision
-      : fastVoiceReply || visualRecallEnabled
+      : fastVoiceReply
         ? 'off'
         : PET_REASONING_PROFILE.chat
     const promptText = ownerText.trim() || (visionImage ? VISION_ONLY_MESSAGE : ownerText)
@@ -639,13 +642,11 @@ export class LocalBrain {
     try {
       const { payload, requestId } = await chatWithBoundedQueueRetry(this.client, {
         messages,
-        // Reflection is a small structured JSON pass. Keep thinking disabled
-        // so the 500-token response budget is reserved for the JSON itself;
-        // the normal Chat and Deep Dream contracts remain unchanged.
+        // Reserve the existing 500-token JSON allowance plus low thinking.
         reasoningEffort: PET_REASONING_PROFILE.reflection,
         temperature: 0.45,
         topP: 0.85,
-        maxTokens: 500,
+        maxTokens: 628,
         responseFormat,
       })
 

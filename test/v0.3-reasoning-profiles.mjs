@@ -48,7 +48,7 @@ assert.deepEqual(PET_REASONING_PROFILE, {
   chat: 'low',
   vision: 'medium',
   dream: 'high',
-  reflection: 'off',
+  reflection: 'low',
 })
 assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge' }), true)
 assert.equal(shouldUseFastVoiceMode({ source: 'web-chat' }), false)
@@ -184,7 +184,8 @@ assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', memoryFollowUp
   assert.equal(result.ok, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].reasoningEffort, PET_REASONING_PROFILE.reflection)
-  console.log('REFLECTION_REASONING_OFF=PASS')
+  assert.equal(calls[0].maxTokens, 628)
+  console.log('REFLECTION_REASONING_LOW=PASS')
 }
 
 {

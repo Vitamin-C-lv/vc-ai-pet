@@ -79,7 +79,7 @@ assert.equal(selected.memoryCandidate, null, 'visual recall cannot create a memo
 assert.equal(selected.rawMemoryCandidate, null, 'visual recall does not hand a model candidate to MemoryGate')
 assert.equal(selected.memoryDecision, 'visual-recall-no-memory')
 assert.equal(requests.length, 1, 'tool selection shares the normal Local Brain inference')
-assert.equal(requests[0].reasoningEffort, 'off', 'tool-enabled phone chat skips hidden reasoning to choose the recall tool quickly')
+assert.equal(requests[0].reasoningEffort, 'low', 'tool-enabled phone chat keeps enough reasoning for recall-tool selection')
 assert.equal(requests[0].maxTokens, 768, 'tool-enabled phone chat keeps the bounded structured reply allowance')
 
 const paraphrase = await ask(brain, '你还记得黑莓的毛色吗？', { allowVisualRecall: true })
@@ -119,7 +119,7 @@ assert.equal(responseMeta.visualRecall, null, 'filter the known meta question ab
 const ordinary = await ask(brain, '今天好困。', { allowVisualRecall: true })
 assert.equal(ordinary.visualRecall, null, 'ordinary chat returns no tool choice')
 assert.match(requests[10].messages[0].content, /普通聊天/u, 'ordinary chat is excluded by the model selection prompt')
-assert.equal(requests[10].reasoningEffort, 'off', 'tool-enabled planner calls use the short-reply reasoning profile')
+assert.equal(requests[10].reasoningEffort, 'low', 'tool-enabled planner calls use the text-chat reasoning profile')
 assert.equal(requests[10].maxTokens, 768)
 
 const relevantFollowup = await ask(brain, '那毛色呢？', {
@@ -225,10 +225,21 @@ await verifyBrain.visualStep({
   ownerCaption: '这只猫叫小橘，在纸箱里',
 })
 const photoPrompt = verifyRequests[1].messages[0].content
-assert.equal(verifyRequests[1].reasoningEffort, 'off', 'specific photo verification disables hidden reasoning')
-assert.equal(verifyRequests[1].maxTokens, 768)
+assert.equal(verifyRequests[1].reasoningEffort, 'low', 'single-photo recall verification uses the text-chat reasoning profile')
+assert.equal(verifyRequests[1].maxTokens, 896)
 assert.match(photoPrompt, /所有可见的主体、物体及场景关系/u)
 assert.match(photoPrompt, /只有全部明确吻合才填 "match"/u, 'find_photo keeps strict scene matching')
+
+await verifyBrain.visualStep({
+  userText: '多看几张照片后总结黑莓的样子',
+  recallQuery: '黑莓',
+  image,
+  verifyRecall: true,
+  recallGoal: 'summarize_photos',
+  ownerCaption: '黑莓在纸箱里',
+})
+assert.equal(verifyRequests[2].reasoningEffort, 'medium', 'each multi-photo summary inspection uses vision reasoning')
+assert.equal(verifyRequests[2].maxTokens, 2048)
 assert.match(photoPrompt, /"这只猫叫小橘，在纸箱里"/u, 'find_photo receives the raw owner caption')
 assert.match(photoPrompt, /原始说明明确给主体标了另一个名字时必须填 mismatch/u)
 assert.match(photoPrompt, /没有名字本身不构成 mismatch/u, 'a missing owner label does not reject a scene match')
