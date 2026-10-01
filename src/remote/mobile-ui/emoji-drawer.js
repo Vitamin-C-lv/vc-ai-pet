@@ -37,7 +37,6 @@
     const next = start + insertedEmoji.length
     textarea.setSelectionRange?.(next, next)
     if (typeof global.Event === 'function') textarea.dispatchEvent(new global.Event('input', { bubbles: true }))
-    textarea.focus?.({ preventScroll: true })
     return true
   }
 
@@ -67,10 +66,14 @@
       drawer.dataset.open = String(open)
       drawer.hidden = !open
       button.setAttribute('aria-expanded', String(open))
+      if (open) input.blur?.()
       onToggle(open)
     }
 
     button.addEventListener('click', () => setOpen(!open))
+    input.addEventListener('focus', () => {
+      if (open) setOpen(false)
+    })
     grid?.addEventListener('click', (event) => {
       const option = event.target.closest?.('[data-emoji]')
       if (!option) return

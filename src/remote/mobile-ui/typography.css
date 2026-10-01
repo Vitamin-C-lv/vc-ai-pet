@@ -1,0 +1,66 @@
+/* Three related roles: rounded titles, personal dialogue, quiet interface text. */
+@font-face {
+  font-family: "Huahua Title";
+  src: url('/fonts/huahua-title-v1.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Huahua Text";
+  src: url('/fonts/huahua-text-v1.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Huahua UI";
+  src: url('/fonts/huahua-ui-v1.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --vc-font-ui: "Huahua UI", -apple-system, BlinkMacSystemFont, "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+  --vc-font-title: "Huahua Title", var(--vc-font-ui);
+  --vc-font-text: "Huahua Text", "Kaiti SC", KaiTi, var(--vc-font-ui);
+  font-family: var(--vc-font-ui);
+}
+h1,
+h2,
+h3,
+.inner-life-card-heading strong,
+#visual-gallery-view .visual-gallery-intro h3,
+#visual-gallery-detail-view h3 {
+  font-family: var(--vc-font-title);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+#chat-view .message:not(.activity-line):not(.media-ref-line) .message-text {
+  font-family: var(--vc-font-text);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.65;
+}
+#chat-input,
+.inner-life-summary,
+.inner-life-insight,
+#visual-gallery-view .visual-gallery-card-owner,
+#visual-gallery-detail-view #visual-gallery-owner-text,
+#visual-gallery-detail-view .visual-gallery-occurrence span,
+#visual-gallery-detail-view .visual-gallery-event p {
+  font-family: var(--vc-font-text);
+  font-weight: 400;
+}
+#chat-input { font-size: 17px; line-height: 1.35; }
+#chat-view .activity-line .message-text,
+#chat-view .thinking-copy,
+#chat-view .thinking-meta,
+.image-status,
+.diagnostics-status { font-family: var(--vc-font-ui); }
+.emoji-item {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+@media (max-width: 380px) {
+  #chat-view .message:not(.activity-line):not(.media-ref-line) .message-text { font-size: 17px; }
+}

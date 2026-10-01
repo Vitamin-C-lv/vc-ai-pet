@@ -356,8 +356,9 @@
 }
 
 .emoji-drawer {
+  --emoji-gap: 8px;
   display: none;
-  max-height: min(calc(var(--app-viewport-height, 100dvh) * .38), 300px);
+  max-height: min(calc(var(--app-viewport-height, 100dvh) * .38), calc(4 * 44px + 3 * var(--emoji-gap) + 17px));
   margin: 0 0 10px;
   padding: 12px 2px 4px;
   overflow-y: auto;
@@ -371,7 +372,7 @@
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--emoji-gap);
 }
 
 .emoji-item {
@@ -526,7 +527,8 @@
   #chat-view .message-text { font-size: 16px; }
   #chat-view .activity-line .message-text { font-size: 13px; }
   #chat-input { padding-left: 11px; padding-right: 11px; }
-  .emoji-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .emoji-drawer { --emoji-gap: 6px; }
+  .emoji-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 
 @media (max-height: 620px) {

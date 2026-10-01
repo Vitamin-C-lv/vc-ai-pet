@@ -23,6 +23,7 @@ const CONTENT_TYPES = Object.freeze({
   '.png': 'image/png',
   '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
 })
 const CONVERSATION_ASSET_CONTENT_TYPES = Object.freeze({
   '.jpg': 'image/jpeg',
@@ -324,7 +325,7 @@ async function serveStatic(pathname, assetRoot, res) {
     const bytes = await readFile(file)
     res.writeHead(200, {
       'content-type': CONTENT_TYPES[extension],
-      'cache-control': extension === '.png' ? 'public, max-age=3600' : 'no-cache',
+      'cache-control': extension === '.woff2' ? 'public, max-age=31536000, immutable' : extension === '.png' ? 'public, max-age=3600' : 'no-cache',
       'x-content-type-options': 'nosniff',
     })
     res.end(bytes)
