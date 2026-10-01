@@ -233,7 +233,7 @@ async function chatWithBoundedQueueRetry(client, request) {
 }
 
 export class LocalBrain {
-  constructor({ config = {}, memory, client = null, timeProvider = getCurrentTimeContext, logger = null }) {
+  constructor({ config = {}, memory, client = null, timeProvider = getCurrentTimeContext, logger = null, reasoningDebugStore = null }) {
     this.config = validateLocalBrainConfig(config)
     this.memory = memory
     this.timeProvider = typeof timeProvider === 'function' ? timeProvider : getCurrentTimeContext
@@ -242,6 +242,7 @@ export class LocalBrain {
       baseUrl: this.config.baseUrl,
       healthTimeoutMs: this.config.healthTimeoutMs,
       requestTimeoutMs: this.config.requestTimeoutMs,
+      onResponse: (response) => reasoningDebugStore?.capture?.(response),
     })
   }
 
@@ -266,6 +267,7 @@ export class LocalBrain {
           { role: 'user', content },
         ],
         reasoningEffort: PET_REASONING_PROFILE.vision,
+        reasoningStage: 'visual-search',
         temperature: 0,
         maxTokens: PET_VISUAL_STEP_MAX_TOKENS,
         responseFormat: { type: 'json_object', schema: PET_VISUAL_SEARCH_RESPONSE_SCHEMA },
@@ -344,6 +346,7 @@ export class LocalBrain {
       const response = await chatWithBoundedQueueRetry(this.client, {
         messages,
         reasoningEffort: verifyRecall ? (subjectRecall ? 'low' : 'off') : PET_REASONING_PROFILE.vision,
+        reasoningStage: 'visual-step',
         temperature: verifyRecall ? 0 : 0.45,
         topP: 0.85,
         maxTokens: verifyRecall ? (subjectRecall ? 2048 : 768) : PET_VISUAL_STEP_MAX_TOKENS,
@@ -482,6 +485,7 @@ export class LocalBrain {
       const { payload } = await chatWithBoundedQueueRetry(this.client, {
         messages,
         reasoningEffort,
+        reasoningStage: 'reply',
         temperature: 0.72,
         topP: 0.9,
         // The relay's completion allowance includes Qwen thinking tokens and

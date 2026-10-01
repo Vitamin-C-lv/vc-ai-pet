@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const [html, mobileJs, mobileCss, composerJs, overlay, petCss, submissionJs] = await Promise.all([
+const [html, mobileJs, mobileCss, composerJs, overlay, petCss, submissionJs, indicatorJs, indicatorCss] = await Promise.all([
   readFile(join(root, 'src/remote/mobile-ui/index.html'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.js'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/mobile.css'), 'utf8'),
@@ -13,15 +13,17 @@ const [html, mobileJs, mobileCss, composerJs, overlay, petCss, submissionJs] = a
   readFile(join(root, 'src/client/pet-overlay.js'), 'utf8'),
   readFile(join(root, 'src/client/pet.css'), 'utf8'),
   readFile(join(root, 'src/remote/mobile-ui/submission-state.js'), 'utf8'),
+  readFile(join(root, 'src/remote/mobile-ui/thinking-indicator.js'), 'utf8'),
+  readFile(join(root, 'src/remote/mobile-ui/thinking-indicator.css'), 'utf8'),
 ])
 
 assert.match(html, /id="messages"/u)
 assert.match(mobileJs, /function appendThinkingMessage/u)
-assert.match(mobileJs, /className = 'message pet-line thinking-message'/u)
-assert.match(mobileJs, /className = 'message-bubble thinking-bubble'/u)
-assert.match(mobileJs, /setAttribute\('role', 'status'\)/u)
-assert.match(mobileJs, /setAttribute\('aria-live', 'polite'\)/u)
-assert.match(mobileJs, /vision \? '花花认真看看' : '花花想一想'/u)
+assert.match(html, /id="chat-thinking-footer"/u)
+assert.match(mobileJs, /thinkingIndicator\?\.start\(\{ vision \}\)/u)
+assert.match(indicatorJs, /setAttribute\('role', 'status'\)/u)
+assert.match(indicatorJs, /setAttribute\('aria-live', 'polite'\)/u)
+assert.match(indicatorJs, /vision \? '花花认真看看' : '花花想一想'/u)
 assert.match(mobileJs, /state\.thinkingMessage = appendThinkingMessage\(\{ vision: Boolean\(state\.pendingImage\) \}\)/u)
 assert.match(mobileJs, /removeThinkingMessage\(state\.thinkingMessage\)/u)
 assert.match(mobileJs, /runTurnProgress,/u)
@@ -45,6 +47,8 @@ assert.match(mobileCss, /\.thinking-dots span:nth-child\(3\)\s*\{\s*animation-de
 assert.match(mobileCss, /@keyframes thinking-dot-bounce/su)
 assert.match(mobileCss, /translateY\(-4px\)/u)
 assert.match(mobileCss, /@media \(prefers-reduced-motion: reduce\)/u)
+assert.match(indicatorCss, /\.thinking-indicator\[hidden\]\s*\{ display: none !important/u)
+assert.match(indicatorCss, /@media \(prefers-reduced-motion: reduce\)/u)
 
 assert.match(overlay, /className: 'vc-pet-chat-thinking'/u)
 assert.match(overlay, /role: 'status'/u)

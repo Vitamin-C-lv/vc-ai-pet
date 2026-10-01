@@ -1,5 +1,56 @@
 # VC AI Pet — Project State
 
+## 2026-10-01 — 聊天底部思考动画与可选模型推理调试
+
+按主人本轮明确要求，移动端聊天在消息区与输入栏之间增加轻量思考状态：
+小爪印和三颗跳动的点，从发送开始一直保留到整轮完成。图库检索、原图
+核验、回复前的中间消息不会提前结束动画；失败与连接恢复沿既有发送
+控制器收起／重新显示。动画不获取焦点，隐藏不占高，尊重减少动态效果。
+
+主页增加低调的「设置」入口，「开发调试」默认折叠，「查看模型推理」
+默认关闭。显式开启后，聊天中的耗时成为可点按钮，按该消息 turnId
+展开本地模型实际返回的推理文本，多次模型调用逐项显示；再次点击收起。
+展开后仅滚动消息区，把推理卡带入可视范围，不移动根页面。
+关闭会收起详情并禁用耗时点击。设置保存在 Pet sandbox，重开 App／
+重启服务后仍保留，已保存的最近 32 轮调试记录可以继续读取。
+
+独立 ReasoningDebugStore 用 AsyncLocalStorage 关联整轮 text／visual
+调用，只接收现有 Local Brain API 的 reasoning_content／reasoning 独立
+字段，不解析最终正文来生成推理，不提高 effort，不增加模型调用。
+默认关闭的轮次不创建调试上下文；普通后台 Dream／Reflection 不记录。
+无推理字段的成功调用保留空文本与阶段 metadata，页面明确提示未返回；
+开启前的旧轮次不能补回。实际多次视觉核验归属同一个 turn，不覆盖前项。
+
+设置与记录单独保存于 sandbox/runtime/reasoning-debug.json，串行临时
+文件＋rename 替换，不进入普通 conversation history／poll／turn events，
+不进入 Memory／Dream／语义索引与前端诊断日志。原有 reasoning 仍仅为
+耗时等白名单 metadata。关闭时专用读取接口返回 403；开启时无记录返回
+unavailable。可选调试文件损坏恢复默认关闭，写入失败不会覆盖正常回复
+或原始模型错误；设置保存失败保留原开关值。
+
+一次隔离真实 Local Brain 测试（合成加法题、low、512 max_tokens）确认
+实际 message 字段为 role/content/reasoning_content，返回 634 字符独立
+推理，保存后重开读取一致，调用耗时 2.938 秒。测试仅写
+/tmp/pet-chat-reasoning-debug-eval，不写生产聊天／Memory；未安装模型。
+浏览器脚本复用 D:/VC-AI-Pet/temp/chat-elegance-preview，静态前端与
+所有聊天／调试 API 使用隔离 fixture。手机端按主人要求由主人手工验收，
+本轮不连接 ADB。此次修改为服务端 UI／Runtime，无 Android shell 变更。
+
+新增 test:chat-developer-debug 覆盖指示器生命周期、默认关闭／持久化／
+运行中读取／并行 turn 归属／写入失败、settings 与专用 trace API、
+普通回复及同一视觉回忆轮的 reply＋visual-step 聚合，格式错误正文的
+独立推理捕获，普通 history／poll 的隔离。上述定向测试通过。现有
+耗时持久化、模型推理 profile、发送与刷新恢复、表情／键盘切换、导航、
+视觉 turn orchestrator 与原图核验后发图回归通过。旧 profile 测试的
+未 initialize runtime fixture 补齐既有 recallContext 依赖，生产路由不改。
+
+隔离浏览器验收通过：393×852／320px 布局无横溢、减少动态效果停动画、
+视觉中间回复与图片出现后 footer 仍显示、成功／失败收起且不抢焦点、
+settings 的系统返回关面板并留在主页、默认关闭时不请求原文、纯文本
+显示／空推理／旧轮无记录、关闭清理详情。实际点击自动将推理卡完整
+带入消息视口，验收脚本无手动滚动，根 scrollY 仍为 0。三张 UI 截图
+位于复用浏览器 staging，均为合成聊天 fixture，无生产 API 请求。
+
 ## 2026-10-01 — 当前照片身份纠正与主人命名关联修复
 
 先只读核对主人截图相关的生产聊天：上传原话为「你看黑莓在晒太阳诶」，

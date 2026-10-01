@@ -36,6 +36,8 @@ let diagnosticsCopyButton
 let diagnosticsClearButton
 let diagnosticsCloseButton
 let homeSpriteAnimator
+let thinkingIndicator
+let reasoningDebug
 
 const MAX_LONG_EDGE = 1920
 const THUMBNAIL_MAX_EDGE = 256
@@ -404,6 +406,10 @@ function navigateBack(fallback = SCREEN.HOME) {
 
 // Called by the Android system Back callback; no native JS bridge is needed.
 function handleSystemBack() {
+  if (reasoningDebug?.isOpen()) {
+    reasoningDebug.close()
+    return true
+  }
   if (diagnosticsPanel && !diagnosticsPanel.hidden) {
     closeDiagnosticsPanel()
     return true
@@ -744,7 +750,7 @@ function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
   return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, showAttachment = true, animate = false } = {}) {
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, turnId = null, showAttachment = true, animate = false } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
@@ -784,9 +790,7 @@ function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, 
   node.append(bubble)
   const durationText = petMessage ? formatThinkingDuration(reasoning?.durationMs) : ''
   if (durationText) {
-    const meta = document.createElement('div')
-    meta.className = 'thinking-meta'
-    meta.textContent = `🐾 ${durationText}`
+    const meta = createThinkingMeta(durationText, turnId)
     node.append(meta)
   }
   messages.append(node)
@@ -806,8 +810,18 @@ function isSameOriginAssetUrl(value) {
   } catch { return false }
 }
 
-function line(role, text, attachment = null, reasoning = null) {
-  return renderMessage({ role, text, attachment, reasoning, animate: true })
+function createThinkingMeta(durationText, turnId) {
+  const meta = document.createElement('button')
+  meta.type = 'button'
+  meta.className = 'thinking-meta'
+  meta.textContent = `🐾 ${durationText}`
+  meta.disabled = true
+  reasoningDebug?.decorate(meta, turnId)
+  return meta
+}
+
+function line(role, text, attachment = null, reasoning = null, turnId = null) {
+  return renderMessage({ role, text, attachment, reasoning, turnId, animate: true })
 }
 
 const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_recall', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
@@ -819,16 +833,19 @@ function renderTurnEvent(event, state = null) {
     presentation.mode = payload.mode === 'visual' ? 'visual' : 'text'
     return null
   }
-  if (event?.type === 'thinking' || event?.type === 'turn_failed') return null
-  if (event?.type === 'visual_recall') return renderVisualActivity({ type: event.type, source: payload, state: presentation })
+  if (event?.type === 'thinking') return null
+  if (event?.type === 'turn_failed') { thinkingIndicator?.stop(); return null }
+  if (event?.type === 'visual_recall') {
+    thinkingIndicator?.setStage('花花在图库里找找')
+    return renderVisualActivity({ type: event.type, source: payload, state: presentation })
+  }
   if (event?.type === 'visual_selected') {
-    removeThinkingMessage(document.querySelector('.thinking-message'))
     const node = renderVisualActivity({ type: event.type, source: payload, state: presentation })
     if (node && payload.relation === 'recalled') node.classList.add('vm-recalled')
     return node
   }
   if (event?.type === 'visual_image') {
-    removeThinkingMessage(document.querySelector('.thinking-message'))
+    thinkingIndicator?.setStage('花花再仔细看看')
     presentation.mode = 'visual'
     const sourceAttachmentId = typeof payload.sourceAttachmentId === 'string' ? payload.sourceAttachmentId : ''
     const count = presentation.mediaImageCounts.get(sourceAttachmentId) ?? 0
@@ -841,49 +858,27 @@ function renderTurnEvent(event, state = null) {
     if (presentation.mode === 'visual') return null
     return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
   }
-  if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning)
+  if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning, event.turnId)
   if (event?.type === 'turn_completed') {
-    removeThinkingMessage(document.querySelector('.thinking-message'))
+    thinkingIndicator?.stop()
     const node = document.createElement('article')
     node.className = 'message pet-line turn-completed'
-    const meta = document.createElement('div')
-    meta.className = 'thinking-meta'
-    meta.textContent = `🐾 ${formatThinkingDuration(payload.reasoning?.durationMs ?? payload.durationMs)}`
+    const meta = createThinkingMeta(formatThinkingDuration(payload.reasoning?.durationMs ?? payload.durationMs), event.turnId)
     node.append(meta); messages.append(node); return node
   }
   return null
 }
 
 function appendThinkingMessage({ vision = false } = {}) {
-  const node = document.createElement('article')
-  node.className = 'message pet-line thinking-message'
-  node.setAttribute('role', 'status')
-  node.setAttribute('aria-live', 'polite')
-
-  const bubble = document.createElement('div')
-  bubble.className = 'message-bubble thinking-bubble'
-
-  const mark = document.createElement('span')
-  mark.className = 'thinking-mark'
-  mark.setAttribute('aria-hidden', 'true')
-  mark.textContent = '🐾'
-
-  const copy = document.createElement('span')
-  copy.className = 'thinking-copy'
-  copy.textContent = vision ? '花花认真看看' : '花花想一想'
-
-  const dots = document.createElement('span')
-  dots.className = 'thinking-dots'
-  dots.setAttribute('aria-hidden', 'true')
-  for (let index = 0; index < 3; index += 1) dots.append(document.createElement('span'))
-
-  bubble.append(mark, copy, dots)
-  node.append(bubble)
-  messages.append(node)
-  return node
+  thinkingIndicator?.start({ vision })
+  return document.querySelector('#chat-thinking-footer')
 }
 
 function removeThinkingMessage(node) {
+  if (node?.id === 'chat-thinking-footer') {
+    thinkingIndicator?.stop()
+    return
+  }
   removeMessageNode(node)
 }
 
@@ -1381,9 +1376,7 @@ function createMobileSubmissionController() {
     },
     onResume: (state) => {
       clearSubmissionStatus()
-      if (!state.thinkingMessage?.parentNode) {
-        state.thinkingMessage = appendThinkingMessage({ vision: Boolean(state.pendingImage) })
-      }
+      state.thinkingMessage = appendThinkingMessage({ vision: Boolean(state.pendingImage) })
       activeTurnId = state.turnId
       scrollMessagesToBottom()
     },
@@ -1550,6 +1543,16 @@ function bindDom() {
   energy = document.querySelector('#energy')
   connection = document.querySelector('#connection')
   messages = document.querySelector('#messages')
+  thinkingIndicator = globalThis.VcAiPetThinkingIndicator?.create({ container: document.querySelector('#chat-thinking-footer') })
+  reasoningDebug = globalThis.VcAiPetReasoningDebug?.create({
+    panel: document.querySelector('#home-settings-panel'),
+    openButton: document.querySelector('#home-settings-open'),
+    closeButton: document.querySelector('#home-settings-close'),
+    toggle: document.querySelector('#reasoning-debug-toggle'),
+    status: document.querySelector('#home-settings-status'),
+    messages,
+  })
+  void reasoningDebug?.loadSettings()
   form = document.querySelector('#chat-form')
   input = document.querySelector('#chat-input')
   sendButton = document.querySelector('#send-button')

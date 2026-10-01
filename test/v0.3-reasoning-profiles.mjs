@@ -216,6 +216,7 @@ assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', memoryFollowUp
   runtime.identity = LI_HUAHUA_IDENTITY
   runtime.state = state()
   runtime.memoryGate = { consider: () => ({ status: 'skipped' }) }
+  runtime.turnOrchestrator = { recallContext: { snapshot: () => null }, clearVisualRecallContext() {} }
   runtime.brain = {
     reply: async () => ({
       ok: true,

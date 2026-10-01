@@ -7,6 +7,7 @@ import { MemoryGate } from '../memory/memory-gate.js'
 import { containsSensitiveMemoryText, detectExplicitMemoryRequest, userOptedOutOfMemory } from '../brain/memory-candidate.js'
 import { containsNonAssertion } from '../memory/current-belief.js'
 import { LocalBrain } from '../brain/local-brain.js'
+import { ReasoningDebugStore } from '../brain/reasoning-debug-store.js'
 import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
@@ -314,6 +315,7 @@ export class PetRuntime {
     this.pipelineConfig = resolveMemoryPipelineConfig({ config: memoryPipeline, env })
     this.conversation = new RecentConversation({ maxTurns: this.pipelineConfig.shortTermContextTurns })
     this.conversationStore = new ConversationStore(this.sandbox.root)
+    this.reasoningDebugStore = new ReasoningDebugStore({ sandboxRoot: this.sandbox.root })
     this.recentVisualResolver = new RecentVisualResolver()
     this.visualExperience = new VisualExperienceStore(this.sandbox.root)
     this.longTermVisualResolver = new LongTermVisualResolver({ experienceStore: this.visualExperience })
@@ -376,6 +378,7 @@ export class PetRuntime {
   async initialize() {
     assertPetPolicy()
     await this.sandbox.initialize()
+    await this.reasoningDebugStore.initialize()
     await this.conversationStore.initialize()
     await this.visualExperience.initialize()
     await this.refreshTransientVisualSources()
@@ -432,7 +435,7 @@ export class PetRuntime {
     this.memory.migrateIdentity(this.identity)
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
-    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger })
+    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger, reasoningDebugStore: this.reasoningDebugStore })
     this.visualSemanticIndex = new VisualSemanticIndex({ experienceStore: this.visualExperience,
       conversationStore: this.conversationStore, memory: this.memory, logger: this.logger })
     this.turnOrchestrator = new PetTurnOrchestrator({
@@ -843,7 +846,12 @@ export class PetRuntime {
       || followUp?.retryOnNone === true
   }
 
-  async chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null, emit = () => {} } = {}) {
+  chat(userText, image = null, attachment = null, options = {}) {
+    const turnId = options.turnId ?? createTurnId()
+    return this.reasoningDebugStore.run(turnId, () => this.#chat(userText, image, attachment, { ...options, turnId }))
+  }
+
+  async #chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null, emit = () => {} } = {}) {
     const startedAt = Date.now()
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
@@ -1102,7 +1110,12 @@ export class PetRuntime {
     }
   }
 
-  async runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null, toolRecall = null } = {}) {
+  runVisualTurn(options = {}) {
+    const turnId = options.turnId ?? createTurnId()
+    return this.reasoningDebugStore.run(turnId, () => this.#runVisualTurn({ ...options, turnId }))
+  }
+
+  async #runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null, toolRecall = null } = {}) {
     this.chatInFlight += 1
     try {
       // Self-healing incremental sync before resolution: any image message
@@ -1252,7 +1265,7 @@ export class PetRuntime {
   }
 
   startChatTurn({ userText, image = null, attachment = null, attachmentId = null, source = null } = {}) {
-    return this.turnManager.start(async ({ turnId, emit }) => {
+    return this.turnManager.start(({ turnId, emit }) => this.reasoningDebugStore.run(turnId, async () => {
       let normalized = normalizeVisionImage(image)
       if (!normalized && attachmentId) {
         const stored = await this.conversationAsset(attachmentId)
@@ -1289,10 +1302,16 @@ export class PetRuntime {
       for (const text of replies) emit('assistant_message', { text })
       emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
       return result
-    }, { publish: source !== 'stackchan-bridge' })
+    }), { publish: source !== 'stackchan-bridge' })
   }
 
   pollChatTurn(turnId, after = 0) { return this.turnManager.poll(turnId, after) }
+
+  getDeveloperSettings() { return this.reasoningDebugStore.getSettings() }
+
+  setDeveloperReasoningDebugEnabled(enabled) { return this.reasoningDebugStore.setEnabled(enabled) }
+
+  getDeveloperReasoningTrace(turnId) { return this.reasoningDebugStore.getTrace(turnId) }
 
   pollTurnEvents(after = 0) { return this.turnEventFeed.after(after) }
 

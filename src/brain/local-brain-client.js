@@ -35,6 +35,7 @@ export class LocalBrainClient {
     healthTimeoutMs = 1_500,
     requestTimeoutMs = 180_000,
     fetchImpl = globalThis.fetch,
+    onResponse = null,
   } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('PET_LOCAL_BRAIN_FETCH_UNAVAILABLE')
 
@@ -45,6 +46,7 @@ export class LocalBrainClient {
     this.healthTimeoutMs = healthTimeoutMs
     this.requestTimeoutMs = requestTimeoutMs
     this.fetchImpl = fetchImpl
+    this.onResponse = typeof onResponse === 'function' ? onResponse : null
   }
 
   _url(path) {
@@ -74,6 +76,8 @@ export class LocalBrainClient {
     omitMaxTokens = false,
     responseFormat = undefined,
     requestTimeoutMs = this.requestTimeoutMs,
+    reasoningStage = null,
+    onResponse = this.onResponse,
   }) {
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new LocalBrainApiError('messages must be a non-empty array', {
@@ -95,6 +99,7 @@ export class LocalBrainClient {
     if (!omitMaxTokens && maxTokens !== undefined) body.max_tokens = maxTokens
     if (responseFormat !== undefined) body.response_format = responseFormat
 
+    const startedAt = performance.now()
     let response
     try {
       response = await this.fetchImpl(this._url('/v1/chat/completions'), {
@@ -136,6 +141,19 @@ export class LocalBrainClient {
       })
     }
 
+    if (typeof reasoningStage === 'string' && typeof onResponse === 'function') {
+      try {
+        onResponse({
+          payload,
+          reasoningEffort,
+          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          requestId,
+          stage: reasoningStage,
+        })
+      } catch {
+        // Optional developer tracing must not interrupt a normal chat turn.
+      }
+    }
     return { payload, requestId }
   }
 }

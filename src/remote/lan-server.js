@@ -109,6 +109,31 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         const presentation = runtime.presentationSnapshot(visualConfig)
         return sendJson(res, 200, presentation)
       }
+      if (req.method === 'GET' && url.pathname === '/api/pet/developer/settings') {
+        if (typeof runtime.getDeveloperSettings !== 'function') return sendJson(res, 503, { error: 'developer-settings-unavailable' })
+        return sendJson(res, 200, await runtime.getDeveloperSettings())
+      }
+      if (req.method === 'POST' && url.pathname === '/api/pet/developer/settings') {
+        if (typeof runtime.setDeveloperReasoningDebugEnabled !== 'function') return sendJson(res, 503, { error: 'developer-settings-unavailable' })
+        const body = await readJsonBody(req, 1024)
+        if (typeof body?.reasoningDebugEnabled !== 'boolean') return sendJson(res, 400, { error: 'invalid-developer-settings' })
+        const settings = await runtime.setDeveloperReasoningDebugEnabled(body.reasoningDebugEnabled)
+        return sendJson(res, 200, { ok: true, ...settings })
+      }
+      const reasoningTracePrefix = '/api/pet/developer/reasoning/'
+      if (req.method === 'GET' && url.pathname.startsWith(reasoningTracePrefix)) {
+        if (typeof runtime.getDeveloperSettings !== 'function' || typeof runtime.getDeveloperReasoningTrace !== 'function') {
+          return sendJson(res, 503, { error: 'reasoning-debug-unavailable' })
+        }
+        let turnId
+        try { turnId = decodeURIComponent(url.pathname.slice(reasoningTracePrefix.length)) } catch { return sendJson(res, 404, { error: 'turn-not-found' }) }
+        if (!/^[a-z0-9-]{1,80}$/iu.test(turnId)) return sendJson(res, 404, { error: 'turn-not-found' })
+        const settings = await runtime.getDeveloperSettings()
+        if (settings?.reasoningDebugEnabled !== true) return sendJson(res, 403, { error: 'reasoning-debug-disabled' })
+        const trace = await runtime.getDeveloperReasoningTrace(turnId)
+        if (trace?.status === 'disabled') return sendJson(res, 403, { error: 'reasoning-debug-disabled' })
+        return sendJson(res, 200, trace ?? { status: 'unavailable', calls: [] })
+      }
       if (req.method === 'GET' && url.pathname === '/api/pet/turn-events') {
         const after = url.searchParams.get('after') ?? '0'
         if (!/^\d{1,12}$/u.test(after) || typeof runtime.pollTurnEvents !== 'function') {
