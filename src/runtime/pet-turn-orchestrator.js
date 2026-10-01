@@ -50,7 +50,7 @@ export class PetTurnOrchestrator {
       && historicalCandidateCount > 0
       && !resolved?.matched
       && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
-    if (intent === 'ambiguous' || unresolvedHistoricalReference || (intent === 'comparison' && comparisonPair.length < 2)) {
+    if (!toolRecall && (intent === 'ambiguous' || unresolvedHistoricalReference || (intent === 'comparison' && comparisonPair.length < 2))) {
       return this.#finishAmbiguous({
         turnId,
         emit,
@@ -82,7 +82,7 @@ export class PetTurnOrchestrator {
       await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
       emit('assistant_message', { text: preamble })
       return this.#runIndexedVisual({ turnId, emit, userText, query: longTermQuery,
-        recallGoal: toolRecall?.goal ?? 'find_photo', startedAt, store })
+        recallGoal: toolRecall?.goal ?? 'find_photo', photoCount: toolRecall?.photoCount, startedAt, store })
     }
     if (semanticRequest && !longTermIntent) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
@@ -182,7 +182,7 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #runIndexedVisual({ turnId, emit, userText, query, recallGoal, startedAt, store }) {
+  async #runIndexedVisual({ turnId, emit, userText, query, recallGoal, photoCount, startedAt, store }) {
     let resolved
     try { resolved = await this.semanticIndex.search(query, { limit: MAX_VISUAL_INSPECTIONS_PER_TURN, recallGoal }) } catch {
       return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, unavailable: true })
@@ -192,22 +192,22 @@ export class PetTurnOrchestrator {
       .filter((candidate) => {
         if (!names.length) return true
         const caption = candidate.userText ?? ''
-        if (recallGoal === 'describe_subject') return captionMatchesNamedSubject(caption, names)
+        if (['describe_subject', 'summarize_photos'].includes(recallGoal)) return captionMatchesNamedSubject(caption, names)
         const labels = captionIdentityLabels(caption)
         return !labels.length || labels.some((label) => names.some((name) => label.startsWith(name)))
       })
       .map((candidate, index) => ({ ...candidate, visualId: `V${index}`, relation: 'recalled' }))
     // The embedding model already screens thumbnails. A second VLM preview
     // gate rejected clear matches in live tests; inspect the leading originals.
-    const ranked = pool.slice(0, 2)
+    const ranked = pool.slice(0, recallGoal === 'summarize_photos' ? MAX_VISUAL_INSPECTIONS_PER_TURN : 2)
     if (ranked.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, unavailable: resolved?.status === 'index-pending' })
     return this.#runLongTermVisual({
-      turnId, emit, userText, startedAt, store, resolveQuery: query, recallGoal, ownerMessageStored: true,
+      turnId, emit, userText, startedAt, store, resolveQuery: query, recallGoal, photoCount, ownerMessageStored: true,
       preResolved: { status: 'matched', winner: ranked[0], candidates: ranked },
     })
   }
 
-  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, preResolved = null, startedAt, store, recallGoal = 'find_photo', ownerMessageStored = false }) {
+  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, preResolved = null, startedAt, store, recallGoal = 'find_photo', photoCount, ownerMessageStored = false }) {
     if (!preResolved && !followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
       return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
     }
@@ -279,7 +279,8 @@ export class PetTurnOrchestrator {
     if (!preResolved) await this.#appendMemoryRecall({ turnId, emit, userText, store })
     const session = new VisualWorkingSession({
       turnId,
-      userText: resolveQuery,
+      userText,
+      recallQuery: resolveQuery,
       candidatePool: recalledPool,
       comparison: false,
       conversationStore: store,
@@ -288,6 +289,7 @@ export class PetTurnOrchestrator {
       now: this.now,
       experienceStore: this.experienceStore,
       recallGoal,
+      photoCount,
     })
     const visualResult = await session.run('V0')
     if (!visualResult.ok) {

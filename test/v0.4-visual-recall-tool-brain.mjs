@@ -91,7 +91,7 @@ assert.equal(schema.properties.visualRecall.anyOf[1].type, 'null')
 const recallObjectSchema = schema.properties.visualRecall.anyOf[0]
 assert.equal(recallObjectSchema.properties.tool.enum[0], 'search_visual_memory')
 assert.equal(recallObjectSchema.properties.query.maxLength, 240)
-assert.deepEqual(recallObjectSchema.properties.goal.enum, ['describe_subject', 'find_photo'])
+assert.deepEqual(recallObjectSchema.properties.goal.enum, ['describe_subject', 'find_photo', 'summarize_photos'])
 assert.equal(schema.required.includes('visualRecall'), true, 'the enabled schema asks the model to return a tool choice or null')
 const selectedPrompt = requests[0].messages[0].content
 assert.match(selectedPrompt, /以前见过的个人主体长什么样/u)

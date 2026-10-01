@@ -19,6 +19,13 @@ const IMMEDIATE_TEMPORAL_PATTERN = /(刚才|刚刚|刚发的|刚给你看的|这
 const IMMEDIATE_PREVIOUS_PATTERN = /(刚才|刚刚|刚发的|刚给你看的|刚才的面|刚才那个)/u
 const BARE_IMMEDIATE_DEICTIC_PATTERN = /^(?:这个|这张|它|这个图)$/u
 const COMPARISON_PATTERN = /(两张|这两个|这两幅|比较|区别|不同|哪里不一样|找不同|对比|相比|上一张和这张|这张和上一张|前一张和这张|这张和前一张)/u
+// These requests need the model's task/quantity decision before the recent
+// single-image shortcut. This only selects a route; retrieval remains semantic.
+export function needsVisualRecallTaskPlan(userText) {
+  const text = String(userText ?? '')
+  return /(?:图库|相册|图片|照片)/u.test(text)
+    && /(?:总结|归纳|综合|几张|多张|多看|[两二三四五六七八九十\d]+张)/u.test(text)
+}
 const STANDALONE_PREVIOUS_PATTERN = /^(?:前一张|上一张)$/u
 const AMBIGUOUS_DEICTIC_PATTERN = /(之前那个|前面那个|那个怎么样)/u
 

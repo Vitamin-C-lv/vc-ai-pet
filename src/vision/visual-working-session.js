@@ -30,10 +30,13 @@ function visualFailure({ reason = 'visual-step-failed', unavailable = false, req
 }
 
 export class VisualWorkingSession {
-  constructor({ turnId, userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null, recallGoal = 'find_photo' }) {
+  constructor({ turnId, userText, recallQuery = userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null, recallGoal = 'find_photo', photoCount = 3 }) {
     this.turnId = turnId
     this.userText = String(userText ?? '')
+    this.recallQuery = String(recallQuery ?? '')
     this.recallGoal = recallGoal
+    this.multiPhotoSummary = recallGoal === 'summarize_photos'
+    this.requestedImages = this.multiPhotoSummary ? Math.min(MAX_VISUAL_INSPECTIONS_PER_TURN, Math.max(2, Number(photoCount) || 3)) : 1
     this.candidatePool = Array.isArray(candidatePool) ? candidatePool : []
     this.comparison = comparison === true
     const candidateIds = new Set(this.candidatePool.map((candidate) => candidate?.visualId).filter((visualId) => typeof visualId === 'string'))
@@ -230,6 +233,7 @@ export class VisualWorkingSession {
       try {
         step = await this.brain.visualStep({
           userText: this.userText,
+          recallQuery: this.recallQuery,
           image,
           candidatePool: this.candidatePool,
           observations: this.observations,
@@ -262,9 +266,11 @@ export class VisualWorkingSession {
         if (step.match === 'match') {
           if (step.action !== 'answer' || step.nextVisualId || step.replyMessages.length === 0) return visualFailure({ reason: 'invalid-visual-recall-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
           verifiedMatches.push({ candidate, step, summary, safeFocus, publishImage })
-          // A fully verified match answers the recall request. Inspect another
-          // candidate only after mismatch/uncertain, not after finding the photo.
-          break
+          if (!this.multiPhotoSummary) break
+          if (!summary) return visualFailure({ reason: 'missing-visual-summary-observation', stage: 'structured-output', candidate, inspections: this.inspections })
+          await this.#recordVisualEvents(candidate, summary, safeFocus)
+          this.observations.push({ visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary })
+          if (verifiedMatches.length >= this.requestedImages) break
         }
         visualId = this.candidatePool.find((item) => !this.inspections.some((inspected) => inspected.attachmentId === item.attachmentId))?.visualId ?? null
         continue
@@ -331,22 +337,42 @@ export class VisualWorkingSession {
       }
       visualId = step.nextVisualId
     }
-    if (verifyRecall && verifiedMatches.length === 1) {
-      const { candidate, step, summary, safeFocus, publishImage } = verifiedMatches[0]
-      try {
-        if (!await publishImage()) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', candidate, inspections: this.inspections })
-      } catch (error) {
-        return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', unavailable: error?.retryable === true, stage: 'asset', candidate, inspections: this.inspections })
+    if (verifyRecall && verifiedMatches.length > 0) {
+      if (this.multiPhotoSummary) {
+        let summaryResult
+        try {
+          summaryResult = await this.brain.summarizeVisualRecall({ userText: this.userText, recallQuery: this.recallQuery,
+            observations: this.observations.map((observation) => ({ ...observation,
+              ownerCaption: verifiedMatches.find(({ candidate }) => candidate.attachmentId === observation.attachmentId).candidate.userText ?? '' })),
+            requestedImages: this.requestedImages,
+            inspectionLimitReached: this.inspections.length >= MAX_VISUAL_INSPECTIONS_PER_TURN })
+        } catch (error) {
+          return visualFailure({ reason: error?.code ?? 'visual-summary-failed', unavailable: error?.retryable === true,
+            requestId: error?.requestId, stage: 'summary', inspections: this.inspections })
+        }
+        if (!summaryResult?.ok) return visualFailure({ reason: summaryResult?.reason ?? 'visual-summary-failed', stage: 'summary', inspections: this.inspections })
+        final = { replyMessages: summaryResult.replyMessages.slice() }
+        if (verifiedMatches.length < this.requestedImages) {
+          final.replyMessages[0] = `这次只确认了${verifiedMatches.length}张符合要求的照片，还不足${this.requestedImages}张，花花先根据这些照片总结。${final.replyMessages[0]}`.slice(0, 300)
+        }
+        reasoning = summaryResult.reasoning ?? reasoning
       }
-      verifiedAttachmentId = candidate.attachmentId
-      await this.#recordVisualEvents(candidate, summary, safeFocus)
-      if (summary) {
-        this.observations.push({ visualId: candidate.visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary })
-        const traceText = '👀 花花重新看了看'
-        const observationEvent = this.emit('visual_observation', { relation: candidate.relation, comparison: false, summary: traceText, focus: safeFocus })
-        await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', relation: candidate.relation, activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })
+      for (const { candidate, step, summary, safeFocus, publishImage } of verifiedMatches) {
+        try {
+          if (!await publishImage()) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', candidate, inspections: this.inspections })
+        } catch (error) {
+          return visualFailure({ reason: error?.code ?? 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', unavailable: error?.retryable === true, stage: 'asset', candidate, inspections: this.inspections })
+        }
+        verifiedAttachmentId ??= candidate.attachmentId
+        if (!this.multiPhotoSummary) await this.#recordVisualEvents(candidate, summary, safeFocus)
+        if (summary) {
+          if (!this.multiPhotoSummary) this.observations.push({ visualId: candidate.visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary })
+          const traceText = '👀 花花重新看了看'
+          const observationEvent = this.emit('visual_observation', { relation: candidate.relation, comparison: false, summary: traceText, focus: safeFocus })
+          await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', relation: candidate.relation, activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })
+        }
+        if (!this.multiPhotoSummary) final = { ...step, replyMessages: step.replyMessages.slice(0, 2) }
       }
-      final = { ...step, replyMessages: step.replyMessages.slice(0, 2) }
     }
     const capped = this.inspections.length >= MAX_VISUAL_INSPECTIONS_PER_TURN && !final
     return {
@@ -356,6 +382,7 @@ export class VisualWorkingSession {
       inspections: this.inspections,
       observations: this.observations,
       verifiedAttachmentId,
+      verifiedAttachmentIds: verifiedMatches.map(({ candidate }) => candidate.attachmentId),
       reasoning,
       prematureAnswersBlocked: this.prematureAnswersBlocked,
       prematureReplyMessagesDiscarded: this.prematureReplyMessagesDiscarded,

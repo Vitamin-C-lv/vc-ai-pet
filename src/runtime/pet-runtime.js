@@ -12,7 +12,7 @@ import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
-import { isDirectRecentVisualReference, isExplicitVisualSearch, RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { isDirectRecentVisualReference, isExplicitVisualSearch, needsVisualRecallTaskPlan, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { selectContextTurns } from '../conversation/context-budget.js'
 import { resolveMemoryPipelineConfig } from '../memory/memory-pipeline-config.js'
 import { ExplicitMemoryController } from '../memory/explicit-memory-controller.js'
@@ -855,13 +855,14 @@ export class PetRuntime {
     const startedAt = Date.now()
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
+    const needsRecallPlan = !currentVisionImage && this.visualSemanticIndex && needsVisualRecallTaskPlan(ownerText)
     // D-022: explicit long-term visual references take priority over the recent
     // resolver's generic-boilerplate overlapScore, so they always reach the
     // long-term resolver instead of being short-circuited to a wrong recent image.
-    if (!currentVisionImage && this.conversationPersistenceReady && detectLongTermVisualIntent(ownerText)) {
+    if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady && detectLongTermVisualIntent(ownerText)) {
       return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, source })
     }
-    const recalled = !currentVisionImage && this.conversationPersistenceReady
+    const recalled = !needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady
       ? await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
       : null
     if ((currentVisionImage || recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') && typeof this.brain?.visualStep === 'function') {
@@ -873,7 +874,7 @@ export class PetRuntime {
     // context). A normal topic shift needs a long-term candidate first;
     // clarification and subject-correction turns are retrieval retries even
     // when the retry currently has no candidate.
-    if (!currentVisionImage && this.conversationPersistenceReady) {
+    if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady) {
       const followUp = this.turnOrchestrator.planFollowUp(ownerText)
       if (followUp) {
         const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
@@ -1281,11 +1282,12 @@ export class PetRuntime {
       // D-022: explicit long-term visual references take priority over the recent
       // resolver's generic-boilerplate overlapScore, so they reach the long-term
       // resolver instead of being short-circuited to a wrong recent image.
-      if (detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      if (isExplicitVisualSearch(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      const recalled = await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
+      const needsRecallPlan = this.visualSemanticIndex && needsVisualRecallTaskPlan(userText)
+      if (!needsRecallPlan && detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      if (!needsRecallPlan && isExplicitVisualSearch(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
+      const recalled = !needsRecallPlan && await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
       if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      const followUp = this.turnOrchestrator.planFollowUp(userText)
+      const followUp = !needsRecallPlan && this.turnOrchestrator.planFollowUp(userText)
       if (followUp) {
         const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
           : await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })

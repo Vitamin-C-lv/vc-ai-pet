@@ -93,7 +93,8 @@ export class VisualSemanticIndex {
     if (!indexedRows.length) return { status: 'index-pending', candidates: [], model }
     // A name is an owner-provided identity constraint. Apply it before top K:
     // otherwise unlabelled lookalikes crowd every known subject photo out.
-    const rows = recallGoal === 'describe_subject' && names.length
+    const subjectRecall = ['describe_subject', 'summarize_photos'].includes(recallGoal)
+    const rows = subjectRecall && names.length
       ? indexedRows.filter((row) => captionMatchesNamedSubject(row.userText, names))
       : indexedRows
     const rank = (key) => rows.filter((row) => row[key])
@@ -118,7 +119,7 @@ export class VisualSemanticIndex {
       if (selected.size >= limit) break
       selected.set(row.experienceId, row)
     }
-    const leading = recallGoal === 'describe_subject'
+    const leading = subjectRecall
       ? [captionRank[0]?.row, imageRank[0]?.row] : [imageRank[0]?.row, captionRank[0]?.row]
     const ordered = new Map()
     for (const row of [...leading, ...fused]) {

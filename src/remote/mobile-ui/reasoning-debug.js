@@ -3,7 +3,7 @@
 function createReasoningDebug({ panel, openButton, closeButton, toggle, status, messages }) {
   let enabled = false
   let disclosureSequence = 0
-  const stageLabels = { reply: '聊天回复', 'visual-search': '图库检索', 'visual-step': '图像检查' }
+  const stageLabels = { reply: '聊天回复', 'visual-search': '图库检索', 'visual-step': '图像检查', 'visual-summary': '多图总结' }
 
   async function request(path, options = {}) {
     const response = await fetch(path, { ...options, cache: 'no-store', signal: AbortSignal.timeout(8000) })
