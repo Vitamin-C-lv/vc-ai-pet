@@ -85,7 +85,7 @@ export class VisualSemanticIndex {
     return { indexed: prepared.length, scanned: sources.length, skipped: sources.length - prepared.length, model }
   }
 
-  async search(query, { limit = 5, recallGoal = 'find_photo' } = {}) {
+  async search(query, { limit = 5, recallGoal = 'find_photo', excludedAttachmentIds = [] } = {}) {
     const { facts, names } = readConfirmedVisualNames(this.memory, query)
     const text = `${query}${facts.length ? `。称呼说明：${facts.join('；')}` : ''}`
     const { model, vectors: [vector] } = await this.client.embed([{ text }])
@@ -94,9 +94,9 @@ export class VisualSemanticIndex {
     // A name is an owner-provided identity constraint. Apply it before top K:
     // otherwise unlabelled lookalikes crowd every known subject photo out.
     const subjectRecall = ['describe_subject', 'summarize_photos'].includes(recallGoal)
-    const rows = subjectRecall && names.length
-      ? indexedRows.filter((row) => captionMatchesNamedSubject(row.userText, names))
-      : indexedRows
+    const excluded = new Set(excludedAttachmentIds)
+    const rows = indexedRows.filter((row) => !excluded.has(row.attachmentId)
+      && (!subjectRecall || !names.length || captionMatchesNamedSubject(row.userText, names)))
     const rank = (key) => rows.filter((row) => row[key])
       .map((row) => ({ row, similarity: similarity(vector, row[key]) }))
       .sort((a, b) => b.similarity - a.similarity)

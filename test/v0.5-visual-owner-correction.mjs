@@ -97,6 +97,7 @@ try {
           nextVisualId: '',
           focus: '小猫',
           replyMessages: ['花花重新看过这张照片了。'],
+          match: 'match',
         }
       },
     },
@@ -118,6 +119,7 @@ try {
   assert.equal(firstTurn.ok, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].image.dataUrl, imageA, 'the older image currently on screen is re-inspected')
+  assert.equal(calls[0].verifyRecall, true, 'an old photo is verified before being shown again')
   assert.match(calls[0].ownerCaption, /不不不这个图上的猫猫就是黑莓/u)
   assert.doesNotMatch(calls[0].ownerCaption, /花花觉得这只猫可能不是黑莓/u, 'assistant guess is excluded from owner evidence')
 

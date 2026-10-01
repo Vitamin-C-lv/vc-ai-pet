@@ -167,7 +167,10 @@ export class VisualWorkingSession {
     let final = null
     let verifiedAttachmentId = null
     let reasoning = null
-    const verifyRecall = this.recalledSession && !this.comparison
+    // Every old-photo candidate must pass the same gate, including "previous"
+    // candidates from the recent resolver. A current upload is already shown.
+    const verifyRecall = !this.comparison && this.candidatePool.length > 0
+      && this.candidatePool.every((candidate) => candidate.relation !== 'current')
     const verifiedMatches = []
     while (visualId && this.inspections.length < MAX_VISUAL_INSPECTIONS_PER_TURN) {
       const candidate = this.candidatePool.find((item) => item.visualId === visualId)
@@ -194,7 +197,7 @@ export class VisualWorkingSession {
       const publishImage = async () => {
         const publicAttachment = this.conversationStore.publicAttachment(metadata)
         if (!publicAttachment) return false
-        if (verifyRecall) {
+        if (verifyRecall && candidate.relation === 'recalled') {
           const recallCaption = '🐾 花花重新确认了以前的一张照片'
           const recallEvent = this.emit('visual_recall', { sourceAttachmentId: candidate.attachmentId, caption: recallCaption })
           await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: candidate.attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId: this.turnId, text: recallCaption })

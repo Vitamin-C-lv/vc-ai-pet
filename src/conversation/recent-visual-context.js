@@ -31,10 +31,22 @@ const AMBIGUOUS_DEICTIC_PATTERN = /(之前那个|前面那个|那个怎么样)/u
 
 export function isVisualIdentityStatement(userText) {
   const text = cleanText(userText)
+  if (detectVisualRecallCorrection(text)) return false
+  // A conversational "就是那个机器人" does not name a displayed photo.
+  // Require an image anchor or explicit naming, rather than a bare "那个".
+  if (!STRONG_VISUAL_REFERENCE_PATTERN.test(text) && !IMMEDIATE_TEMPORAL_PATTERN.test(text)
+    && !/(?:名字|名为|叫|是(?:我们|我|你们|你)家的)/u.test(text)) return false
   return /(?:就是|名字(?:是|叫|为)|名为|叫|是(?:我们|我|你们|你)家的)/u.test(text)
     && (STRONG_VISUAL_REFERENCE_PATTERN.test(text) || IMMEDIATE_TEMPORAL_PATTERN.test(text) || WEAK_DEICTIC_PATTERN.test(text))
     && !/(?:是不是|是否|可能|也许|好像|如果|假如|吗|么|[？?])/u.test(text)
     && (!/(?:不是|不叫)/u.test(text) || /(?:而是|就是|[，,]\s*是)/u.test(text))
+}
+
+export function detectVisualRecallCorrection(userText) {
+  const text = cleanText(userText)
+  if (!/(?:图片|照片|图).{0,8}(?:找错|发错|不对)|(?:找错|发错).{0,8}(?:图片|照片|图)|不是(?:这|那)张|不是[^，,。]{0,30}(?:这|那)张(?:图|照片)/u.test(text)) return null
+  const target = text.match(/(?:而是|我说的是|我指的是|[，,]\s*是)\s*([^，,。！？!?]+)[。！？!?]*$/u)?.[1]?.trim()
+  return { query: target || null }
 }
 
 // Follow the image actually displayed in the conversation, including recalled
@@ -149,7 +161,7 @@ export function isDirectRecentVisualReference(userText, messages = []) {
 }
 
 export function isExplicitVisualSearch(userText) {
-  return EXPLICIT_VISUAL_SEARCH_PATTERN.test(cleanText(userText))
+  return EXPLICIT_VISUAL_SEARCH_PATTERN.test(cleanText(userText)) || Boolean(detectVisualRecallCorrection(userText))
 }
 
 export function buildVisualCandidatePool({ currentAttachment = null, userText = '', messages = [], maxAttachments = RECENT_VISUAL_MAX_ATTACHMENTS } = {}) {
@@ -202,6 +214,7 @@ export class RecentVisualResolver {
       userText = userText.userText ?? userText.text ?? ''
     }
     const text = cleanText(userText)
+    if (detectVisualRecallCorrection(text)) return matched(null)
     const candidates = collectRecentVisualCandidates(messages, this.maxAttachments)
     if (!text || candidates.length === 0) return matched(null)
 

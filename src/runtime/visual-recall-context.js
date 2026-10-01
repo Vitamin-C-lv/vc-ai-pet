@@ -125,7 +125,7 @@ export class VisualRecallContext {
     this.state = null
   }
 
-  record({ mode, query, result, subjectCorrection = null, clarificationRequested = null, uses = 0 } = {}) {
+  record({ mode, query, result, subjectCorrection = null, clarificationRequested = null, uses = 0, excludedAttachmentIds = [] } = {}) {
     const normalizedQuery = normalizedText(query)
     if (!normalizedQuery || !['long_term_visual_recall', 'visual_recall_ambiguous'].includes(mode)) {
       this.clear()
@@ -145,6 +145,7 @@ export class VisualRecallContext {
       lastVisualResolverRequestedClarification: requested,
       lastAttemptedHistoricalVisualRecall: true,
       currentSubjectCorrection: normalizedCorrection || null,
+      excludedAttachmentIds: [...new Set(excludedAttachmentIds)].slice(-5),
     }
     return this.snapshot()
   }

@@ -12,7 +12,7 @@ import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
-import { isDirectRecentVisualReference, isExplicitVisualSearch, needsVisualRecallTaskPlan, RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { detectVisualRecallCorrection, isDirectRecentVisualReference, isExplicitVisualSearch, needsVisualRecallTaskPlan, RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { selectContextTurns } from '../conversation/context-budget.js'
 import { resolveMemoryPipelineConfig } from '../memory/memory-pipeline-config.js'
 import { ExplicitMemoryController } from '../memory/explicit-memory-controller.js'
@@ -856,6 +856,9 @@ export class PetRuntime {
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
     const needsRecallPlan = !currentVisionImage && this.visualSemanticIndex && needsVisualRecallTaskPlan(ownerText)
+    if (!currentVisionImage && this.conversationPersistenceReady && detectVisualRecallCorrection(ownerText)) {
+      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, source })
+    }
     // D-022: explicit long-term visual references take priority over the recent
     // resolver's generic-boilerplate overlapScore, so they always reach the
     // long-term resolver instead of being short-circuited to a wrong recent image.
