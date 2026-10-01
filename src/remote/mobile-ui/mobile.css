@@ -145,37 +145,37 @@
 html {
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
+  position: fixed;
+  inset: 0;
   width: 100%;
-  height: 100vh;
-  min-height: 100vh;
-  height: 100dvh;
-  min-height: 100svh;
+  height: 100%;
   margin: 0;
   overflow: hidden;
-  background: radial-gradient(circle at 50% 0, #fffdf8, #f5eee3 58%);
+  overscroll-behavior: none;
+  background: radial-gradient(circle at 50% 0, #fffdfa, #fff6ec 58%);
 }
 
 /* Full-screen app shell. The legacy class remains supported while the
    shell-specific .pet-app class is adopted by the split-view DOM. */
 .pet-app,
 .pet-page {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   width: min(100%, 540px);
   height: 100vh;
-  min-height: 100vh;
   height: 100dvh;
-  min-height: 100svh;
+  min-height: 0;
   margin: 0 auto;
   padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.pet-app.keyboard-open {
-  min-height: 0;
 }
 
 .app-header,

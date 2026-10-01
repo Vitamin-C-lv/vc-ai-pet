@@ -165,7 +165,7 @@ try {
   const mobile = await readFile(new URL('../src/remote/mobile-ui/mobile.js', import.meta.url), 'utf8')
   assert.match(mobile, /查看这次花花想明白了什么/u)
   assert.match(mobile, /这次没有形成新的理解/u)
-  assert.match(mobile, /花花的观察 · INFERRED/u)
+  assert.match(mobile, /花花的观察 · 视觉推测/u)
   assert.match(mobile, /originalUrl/u)
   assert.doesNotMatch(mobile, /visualGallery.*innerHTML/u)
 

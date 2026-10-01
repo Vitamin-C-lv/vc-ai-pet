@@ -8,6 +8,7 @@
     "visual:semantic:index": "node scripts/build-visual-semantic-index.mjs",
     "test:long-life": "node test/v0.4-raw-history.mjs && node test/v0.4-derived-evidence.mjs && node test/v0.4-long-life.mjs && node test/v0.4-inner-life-ui.mjs",
     "test:mobile-composer-polish": "node test/v0.4-mobile-composer-polish.mjs",
+    "test:mobile-viewport": "node test/v0.5-mobile-viewport.mjs",
     "test:mobile-submission-recovery": "node test/v0.4-mobile-submission-recovery.mjs",
     "test:chat-start-idempotency": "node test/v0.5-chat-start-idempotency.mjs && node test/v0.5-mobile-reload-recovery.mjs",
     "test:visual-memory": "node test/v0.4-visual-experience-store.mjs && node test/v0.4-long-term-visual-recall.mjs && node test/v0.4-visual-memory-orchestrator.mjs && node test/v0.4-visual-recall-verify-before-show.mjs && node test/v0.4-visual-dream-context.mjs && node test/v0.4-visual-mobile-rendering.mjs && node test/v0.4-contextual-visual-recall-followup.mjs && node test/v0.4-visual-memory-acceptance.mjs",

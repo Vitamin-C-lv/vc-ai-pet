@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-    <meta name="theme-color" content="#f5eee3">
+    <meta name="theme-color" content="#fff6ec">
     <title>李花花</title>
     <link rel="stylesheet" href="/mobile.css">
     <link rel="stylesheet" href="/mobile-redesign.css">
+    <link rel="stylesheet" href="/gallery.css">
   </head>
   <body>
     <main class="pet-app">
@@ -94,14 +95,20 @@
             <button id="visual-gallery-back" class="icon-button" type="button" aria-label="返回">
               <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
             </button>
+            <h2>花花的图库</h2>
             <button id="visual-gallery-home" class="icon-button" type="button" aria-label="回到主页">
               <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
             </button>
-            <h2>🖼️ 花花的图库</h2>
-            <button id="visual-gallery-refresh" type="button">刷新</button>
           </header>
           <div class="visual-gallery-scroll">
-            <p class="visual-gallery-subtitle">主人和花花一起看过的照片</p>
+            <div class="visual-gallery-intro">
+              <div>
+                <p class="visual-gallery-eyebrow">和花花一起</p>
+                <h3>照片里的小回忆</h3>
+                <p class="visual-gallery-subtitle">主人和花花一起看过的照片</p>
+              </div>
+              <button id="visual-gallery-refresh" type="button">刷新</button>
+            </div>
             <p id="visual-gallery-status" class="inner-life-status" role="status" aria-live="polite"></p>
             <div id="visual-gallery-grid" class="visual-gallery-grid"></div>
             <button id="visual-gallery-more" class="inner-life-more" type="button" hidden>更早的照片</button>
@@ -113,10 +120,10 @@
             <button id="visual-gallery-detail-back" class="icon-button" type="button" aria-label="返回图库">
               <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
             </button>
+            <h2>照片详情</h2>
             <button id="visual-gallery-detail-home" class="icon-button" type="button" aria-label="回到主页">
               <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
             </button>
-            <h2>照片详情</h2>
           </header>
           <div class="visual-gallery-detail-scroll">
             <p id="visual-gallery-detail-status" class="inner-life-status" role="status" aria-live="polite"></p>
@@ -127,7 +134,7 @@
             <section class="visual-gallery-owner" aria-labelledby="visual-gallery-owner-title">
               <h3 id="visual-gallery-owner-title">主人当时说</h3>
               <p id="visual-gallery-owner-text"></p>
-              <p id="visual-gallery-owner-provenance" class="visual-gallery-provenance">原话 · RAW</p>
+              <p id="visual-gallery-owner-provenance" class="visual-gallery-provenance">主人原话</p>
               <div id="visual-gallery-occurrences" class="visual-gallery-occurrences"></div>
             </section>
             <section class="visual-gallery-events" aria-labelledby="visual-gallery-events-title">

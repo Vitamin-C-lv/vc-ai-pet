@@ -173,23 +173,22 @@ function getViewportHeight() {
   return heights.length ? Math.min(...heights) : 0
 }
 
-function setKeyboardOpen(open, height = getViewportHeight()) {
+function setKeyboardOpen(open) {
   if (!petApp) return
   keyboardOpen = open
   petApp.classList.toggle('keyboard-open', open)
-  if (open) {
-    petApp.style.height = `${Math.round(height)}px`
-    petApp.style.minHeight = '0'
-  } else {
-    petApp.style.removeProperty('height')
-    petApp.style.removeProperty('min-height')
-  }
 }
 
 function syncKeyboardState(viewportChanged = false) {
   keyboardFrame = null
   const height = getViewportHeight()
   if (!height) return
+
+  // IME focus can pan the visible viewport without changing its height.
+  // Keep the shell in that visible area even during keyboard dismissal.
+  petApp.style.height = `${Math.round(height)}px`
+  petApp.style.top = `${Math.max(0, globalThis.visualViewport?.offsetTop ?? 0)}px`
+  petApp.style.setProperty('--app-viewport-height', `${Math.round(height)}px`)
 
   const focused = document.activeElement === input
   const mobileViewport = Number(globalThis.innerWidth || 0) <= 900
@@ -203,7 +202,7 @@ function syncKeyboardState(viewportChanged = false) {
   const shouldOpen = keyboardOpen
     ? viewportKeyboard || (focusKeyboard && !viewportChanged)
     : focused && (viewportKeyboard || focusKeyboard)
-  setKeyboardOpen(shouldOpen, height)
+  setKeyboardOpen(shouldOpen)
 }
 
 function scheduleKeyboardState(viewportChanged = false) {
@@ -236,7 +235,7 @@ function bindKeyboardState() {
     homeSpriteAnimator?.setActive(currentScreen === SCREEN.HOME && document.visibilityState !== 'hidden')
   })
   visualViewport?.addEventListener('resize', () => scheduleKeyboardState(true))
-  visualViewport?.addEventListener('scroll', () => scheduleKeyboardState(true))
+  visualViewport?.addEventListener('scroll', () => scheduleKeyboardState())
   scheduleKeyboardState()
 }
 
@@ -504,8 +503,8 @@ async function loadGalleryList({ more = false } = {}) {
 }
 
 function galleryEventLabel(event) {
-  if (event.kind === 'observation') return '花花的观察 · INFERRED'
-  if (event.kind === 'comparison') return '花花做了对照 · INFERRED'
+  if (event.kind === 'observation') return '花花的观察 · 视觉推测'
+  if (event.kind === 'comparison') return '花花做了对照 · 视觉推测'
   if (event.kind === 'revisit') return '花花又看了看'
   return '花花查看了这张照片'
 }
@@ -600,7 +599,7 @@ function renderGalleryDetail(payload) {
   }
   document.querySelector('#visual-gallery-date').textContent = formatInnerLifeTime(payload?.occurredAt)
   document.querySelector('#visual-gallery-owner-text').textContent = payload?.ownerText || '主人当时没有留下文字。'
-  document.querySelector('#visual-gallery-owner-provenance').textContent = payload?.ownerTextProvenance === 'raw' ? '原话 · RAW' : '主人文字'
+  document.querySelector('#visual-gallery-owner-provenance').textContent = payload?.ownerTextProvenance === 'raw' ? '主人原话' : '主人文字'
   const occurrenceList = document.querySelector('#visual-gallery-occurrences')
   occurrenceList.replaceChildren()
   const occurrences = Array.isArray(payload?.occurrences) ? payload.occurrences : []
