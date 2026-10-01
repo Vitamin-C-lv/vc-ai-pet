@@ -17,6 +17,12 @@ Android 系统返回仍先收 IME，页面返回沿实际进入路径处理。
 「主人原话」「视觉推测」，原始文字与 RAW／INFERRED 数据语义保留。
 图库样式独立在 gallery.css，不引入字体、素材下载或 UI 依赖。
 
+根据主人追加要求统一中文字体回退：Apple 系统字体、苹方、Noto Sans SC、
+微软雅黑 UI／微软雅黑及系统无衬线字体，使用设备已有字体。聊天正文
+17 px／1.65（窄屏 16 px），标题 600 字重、正文 400；图库卡片说明
+14 px、详情原话 16 px，日期和辅助文字 12 px，移除遗留 !important
+字号冲突。照片卡片改为纵向 flex，避免短说明的卡片把照片向下居中。
+
 新增 test:mobile-viewport 覆盖 focus pan、resize、scroll-only、发送 blur
 到 IME 关闭之间的高度，以及保留输入焦点的 Android Back 收键盘情形。
 新测试及现有 composer、导航、system-back、视觉消息和 dream-gallery
