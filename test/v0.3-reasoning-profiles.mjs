@@ -79,6 +79,7 @@ assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', memoryFollowUp
   assert.equal(result.ok, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].reasoningEffort, PET_REASONING_PROFILE.chat)
+  assert.equal(calls[0].maxTokens, 896)
   assertDuration(result.reasoning, PET_REASONING_PROFILE.chat, 90)
   console.log('TEXT_REASONING_LOW=PASS')
   console.log('THINKING_TIMER=PASS')
@@ -185,7 +186,7 @@ assert.equal(shouldUseFastVoiceMode({ source: 'stackchan-bridge', memoryFollowUp
   assert.equal(result.ok, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].reasoningEffort, PET_REASONING_PROFILE.reflection)
-  assert.equal(calls[0].maxTokens, 628)
+  assert.equal(calls[0].maxTokens, 756)
   console.log('REFLECTION_REASONING_LOW=PASS')
 }
 

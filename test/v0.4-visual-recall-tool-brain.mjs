@@ -80,7 +80,7 @@ assert.equal(selected.rawMemoryCandidate, null, 'visual recall does not hand a m
 assert.equal(selected.memoryDecision, 'visual-recall-no-memory')
 assert.equal(requests.length, 1, 'tool selection shares the normal Local Brain inference')
 assert.equal(requests[0].reasoningEffort, 'low', 'tool-enabled phone chat keeps enough reasoning for recall-tool selection')
-assert.equal(requests[0].maxTokens, 768, 'tool-enabled phone chat keeps the bounded structured reply allowance')
+assert.equal(requests[0].maxTokens, 896, 'tool-enabled phone chat keeps the bounded structured reply allowance')
 
 const paraphrase = await ask(brain, '你还记得黑莓的毛色吗？', { allowVisualRecall: true })
 assert.deepEqual(paraphrase.visualRecall, recallValue({ query: '黑莓 毛色' }), 'the model can select a semantic query without matching a keyword allowlist')
@@ -122,7 +122,7 @@ assert.equal(ordinary.visualRecall, null, 'mentioning a familiar photo subject w
 assert.match(requests[10].messages[0].content, /黑莓好像饿了/u, 'the model prompt includes the production false-positive example')
 assert.match(requests[10].messages[0].content, /普通聊天/u, 'ordinary chat is excluded by the model selection prompt')
 assert.equal(requests[10].reasoningEffort, 'low', 'tool-enabled planner calls use the text-chat reasoning profile')
-assert.equal(requests[10].maxTokens, 768)
+assert.equal(requests[10].maxTokens, 896)
 
 const relevantFollowup = await ask(brain, '那毛色呢？', {
   allowVisualRecall: true,
@@ -146,7 +146,7 @@ assert.equal(disabled.visualRecall, null)
 assert.strictEqual(requests[13].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA, 'the base schema stays unchanged when disabled')
 assert.doesNotMatch(requests[13].messages[0].content, /visualRecall/u, 'the tool instructions stay disabled')
 assert.equal(requests[13].reasoningEffort, 'low', 'ordinary text chat keeps its existing profile')
-assert.equal(requests[13].maxTokens, 768)
+assert.equal(requests[13].maxTokens, 896)
 
 const imageTurn = await ask(brain, '这张猫的照片长什么样？', { image, allowVisualRecall: true })
 assert.equal(imageTurn.visualRecall, null, 'image input uses the normal vision path without a memory search')
@@ -228,7 +228,7 @@ await verifyBrain.visualStep({
 })
 const photoPrompt = verifyRequests[1].messages[0].content
 assert.equal(verifyRequests[1].reasoningEffort, 'low', 'single-photo recall verification uses the text-chat reasoning profile')
-assert.equal(verifyRequests[1].maxTokens, 896)
+assert.equal(verifyRequests[1].maxTokens, 1024)
 assert.match(photoPrompt, /所有可见的主体、物体及场景关系/u)
 assert.match(photoPrompt, /只有全部明确吻合才填 "match"/u, 'find_photo keeps strict scene matching')
 assert.match(photoPrompt, /本轮原始需求是否确实需要这张历史照片/u)

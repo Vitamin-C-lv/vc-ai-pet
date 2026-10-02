@@ -383,7 +383,7 @@ export class LocalBrain {
         reasoningStage: 'visual-step',
         temperature: verifyRecall ? 0 : 0.45,
         topP: 0.85,
-        maxTokens: verifyRecall ? (subjectRecall ? 2048 : 896) : PET_VISUAL_STEP_MAX_TOKENS,
+        maxTokens: verifyRecall ? (subjectRecall ? 2048 : 1024) : PET_VISUAL_STEP_MAX_TOKENS,
         ...(verifyRecall ? { requestTimeoutMs: 30_000 } : {}),
         responseFormat: { type: 'json_object', schema: verifyRecall ? PET_VISUAL_RECALL_STEP_RESPONSE_SCHEMA : PET_VISUAL_STEP_RESPONSE_SCHEMA },
       })
@@ -513,7 +513,7 @@ export class LocalBrain {
       content: `${messages[0].content}\n\n${MEMORY_OUTPUT_INSTRUCTION}${visualRecallInstruction}${multiPhotoInstruction}\n\n${BELIEF_OUTPUT_INSTRUCTION}\n${formatBeliefContext(beliefContext)}${fastVoiceReply ? '\n\n这是实体机器人的日常语音对话。reply 请用自然、简短的中文口语，尽量一句话；必要时可以用两句，但要完整覆盖主人明确提出的要点，不要漏掉数量、步骤、选择或原因要求。不要输出推理过程。memory 和 beliefs 字段仍严格遵守 JSON Schema。' : ''}`,
     }
 
-    const maxTokens = 768
+    const maxTokens = reasoningEffort === 'low' ? 896 : 768
     const recentTurns = recentMessagesToTurns(messages.slice(1, -1))
     const budget = planFinalRequestBudget({
       system: messages[0].content,
@@ -671,7 +671,7 @@ export class LocalBrain {
         reasoningEffort: PET_REASONING_PROFILE.reflection,
         temperature: 0.45,
         topP: 0.85,
-        maxTokens: 628,
+        maxTokens: 756,
         responseFormat,
       })
 
