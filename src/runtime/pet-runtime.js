@@ -41,6 +41,7 @@ import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input
 import { VisualExperienceStore } from '../vision/visual-experience-store.js'
 import { VisualSemanticIndex } from '../vision/visual-semantic-index.js'
 import { visualTermsFor } from '../vision/visual-keywords.js'
+import { readConfirmedVisualNames } from '../memory/visual-naming-context.js'
 import { importLegacyObservations } from '../vision/legacy-observation-importer.js'
 import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
 import { buildVisualDreamContext } from '../dream/visual-dream-context.js'
@@ -984,10 +985,22 @@ export class PetRuntime {
 
       if (result.visualRecall) {
         const followUp = this.turnOrchestrator.planFollowUp(ownerText)
+        const refersToEarlierSubject = /(?:他|她|它|这个|那个|这只|那只)/u.test(ownerText)
+          && readConfirmedVisualNames(this.memory, ownerText).names.length === 0
+        const ownerContext = refersToEarlierSubject
+          ? recentMessages.filter((message) => message.role === 'user' && typeof message.content === 'string')
+            .slice(-3).map((message) => message.content).join('\n')
+          : ''
+        // Carry the owner's antecedent through search, each inspection and the
+        // final summary. Assistant descriptions and planner inventions are not
+        // evidence for the target or its appearance.
+        const recallQuery = followUp?.query ?? (ownerContext
+          ? `${ownerText}\n当前指代的主人前文（最新陈述优先）：\n${ownerContext}`
+          : ownerText)
         const recalledResult = await this.runVisualTurn({ turnId, emit, userText: ownerText, source,
           // The model chooses the tool. Search constraints come from the owner:
           // live tests showed the planner inventing another cat's coat color.
-          toolRecall: { ...result.visualRecall, query: followUp?.query ?? ownerText,
+          toolRecall: { ...result.visualRecall, query: recallQuery,
             preamble: result.text, ownerMessageStored: Boolean(ownerMessage), startedAt } })
         return { ...recalledResult, visualTurn: true }
       }
