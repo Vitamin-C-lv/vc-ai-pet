@@ -920,7 +920,7 @@ export class PetRuntime {
 
       let recalledVisionImage = null
       let recalledVisual = null
-      if (!currentVisionImage && this.conversationPersistenceReady) {
+      if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady) {
         const recentMessages = await this.conversationStore.listForRecentVisualRecall()
         recalledVisual = this.recentVisualResolver.resolve(ownerText, recentMessages)
         if (recalledVisual.matched && isDirectRecentVisualReference(ownerText, recentMessages)) {
@@ -985,11 +985,15 @@ export class PetRuntime {
 
       if (result.visualRecall) {
         const followUp = this.turnOrchestrator.planFollowUp(ownerText)
-        const refersToEarlierSubject = /(?:他|她|它|这个|那个|这只|那只)/u.test(ownerText)
-          && readConfirmedVisualNames(this.memory, ownerText).names.length === 0
+        const recentOwnerMessages = recentMessages.filter((message) => message.role === 'user' && typeof message.content === 'string').slice(-3)
+        // A planner can resolve an omitted named subject, but only owner text
+        // grounds that name. Do not execute its invented appearance/scene terms.
+        const contextualNames = readConfirmedVisualNames(this.memory, result.visualRecall.query).names
+          .filter((name) => !ownerText.includes(name) && recentOwnerMessages.some((message) => message.content.includes(name)))
+        const refersToEarlierSubject = readConfirmedVisualNames(this.memory, ownerText).names.length === 0
+          && (/(?:他|她|它|这个|那个|这只|那只)/u.test(ownerText) || contextualNames.length > 0)
         const ownerContext = refersToEarlierSubject
-          ? recentMessages.filter((message) => message.role === 'user' && typeof message.content === 'string')
-            .slice(-3).map((message) => message.content).join('\n')
+          ? recentOwnerMessages.map((message) => message.content).join('\n')
           : ''
         // Carry the owner's antecedent through search, each inspection and the
         // final summary. Assistant descriptions and planner inventions are not
