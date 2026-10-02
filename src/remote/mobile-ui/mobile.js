@@ -235,6 +235,7 @@ function bindKeyboardState() {
   document.addEventListener('visibilitychange', () => {
     scheduleKeyboardState()
     homeSpriteAnimator?.setActive(currentScreen === SCREEN.HOME && document.visibilityState !== 'hidden')
+    globalThis.VcAiPetProactive?.onPageVisibilityChanged?.()
   })
   visualViewport?.addEventListener('resize', () => scheduleKeyboardState(true))
   visualViewport?.addEventListener('scroll', () => scheduleKeyboardState())
@@ -390,6 +391,7 @@ function renderScreen(screen, params = {}, { direction = 'forward' } = {}) {
     if (typeof params.experienceId === 'string' && params.experienceId) void loadGalleryDetail(params.experienceId)
     else document.querySelector('#visual-gallery-detail-status').textContent = '请先从图库选择一张照片。'
   }
+  globalThis.VcAiPetProactive?.onScreenChanged?.(nextScreen)
 }
 
 function navigateTo(screen, params = {}) {
@@ -426,7 +428,17 @@ function handleSystemBack() {
   return navigateBack(currentScreen === SCREEN.GALLERY_DETAIL ? SCREEN.GALLERY : SCREEN.HOME)
 }
 
-globalThis.VcAiPetApp = Object.freeze({ handleBack: handleSystemBack })
+globalThis.VcAiPetApp = Object.freeze({
+  handleBack: handleSystemBack,
+  openChat() {
+    if (currentScreen !== SCREEN.CHAT) navigateTo(SCREEN.CHAT)
+    else globalThis.VcAiPetProactive?.markRead?.()
+  },
+  refreshHistory(options) { return loadHistory(options) },
+  getScreen() { return currentScreen },
+  isTurnPending,
+  appendProactiveMessage(message) { return appendProactiveMessage(message) },
+})
 
 function openInnerLife() {
   navigateTo(SCREEN.DREAMS)
@@ -750,17 +762,19 @@ function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
   return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, turnId = null, showAttachment = true, animate = false } = {}) {
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, turnId = null, id = null, messageId = null, showAttachment = true, animate = false } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
-  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}${kind === 'media_ref' ? ' media-ref-line' : kind === 'activity' ? ' activity-line' : ''}`
+  node.className = `message ${userMessage ? 'user-line' : 'pet-line'}${kind === 'media_ref' ? ' media-ref-line' : kind === 'activity' ? ' activity-line' : kind === 'proactive' ? ' proactive-line' : ''}`
+  const proactiveId = id != null ? String(id) : messageId != null ? String(messageId) : ''
+  if (kind === 'proactive' && proactiveId) node.dataset.proactiveId = proactiveId
   const bubble = document.createElement('div')
   bubble.className = 'message-bubble'
 
   const label = document.createElement('div')
   label.className = 'message-label'
-  label.textContent = userMessage ? '主人' : '李花花'
+  label.textContent = userMessage ? '主人' : kind === 'proactive' ? '李花花 · 主动找你' : '李花花'
   bubble.append(label)
 
   const cleanText = String(text ?? '').trim()
@@ -942,8 +956,21 @@ function renderHistory(history) {
       state.finalCount += 1
       if (state.finalCount > finalLimit) return
     }
-    renderMessage(message)
+    if (message.kind === 'proactive') renderMessage({ ...message, messageId: message.id ?? message.messageId })
+    else renderMessage(message)
   })
+}
+
+function appendProactiveMessage(message = {}) {
+  const messageId = message.id != null ? String(message.id) : message.messageId != null ? String(message.messageId) : ''
+  if (!messageId || [...messages.querySelectorAll('[data-proactive-id]')].some(node => node.dataset.proactiveId === messageId)) return null
+  const wasAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 48
+  const node = renderMessage({
+    role: 'assistant', kind: 'proactive', text: message.text, turnId: message.turnId,
+    messageId, animate: currentScreen === SCREEN.CHAT,
+  })
+  if (currentScreen === SCREEN.CHAT && wasAtBottom) scrollMessagesToBottom()
+  return node
 }
 
 function updateSendButton() {
@@ -1110,7 +1137,7 @@ function renderPetPresentation(state = {}) {
   else sprite.src = `/assets/${fallbackSprite}`
 }
 
-async function loadHistory() {
+async function loadHistory({ preserveViewport = false } = {}) {
   try {
     const { payload } = await fetchJsonDiagnostic('/api/pet/history', { cache: 'no-store' }, { stage: 'history' })
     const history = Array.isArray(payload) ? payload : payload?.messages
@@ -1118,10 +1145,24 @@ async function loadHistory() {
       recordDiagnostic({ level: 'error', stage: 'history', code: 'HISTORY_INVALID_RESPONSE' })
       throw diagnosticError('HISTORY_INVALID_RESPONSE', 'invalid history')
     }
+    if (preserveViewport && isTurnPending()) {
+      setOnline(true)
+      return history
+    }
+    const wasAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 48
+    const previousScrollTop = messages.scrollTop
     renderHistory(history)
-    if (currentScreen === SCREEN.CHAT) scrollMessagesToBottom()
+    if (currentScreen === SCREEN.CHAT) {
+      if (preserveViewport && !wasAtBottom) messages.scrollTop = previousScrollTop
+      else scrollMessagesToBottom()
+    }
     setOnline(true)
+    return history
   } catch { setOnline(false) }
+}
+
+function isTurnPending() {
+  return Boolean(activeTurnId || submissionStatusNode || input?.readOnly || submissionController?.hasActive?.())
 }
 
 async function uploadImage(image) {
@@ -1332,6 +1373,7 @@ function createMobileSubmissionController() {
       activeTurnId = null
       setOnline(true)
       scrollMessagesToBottom()
+      globalThis.setTimeout(() => globalThis.VcAiPetProactive?.onTurnSettled?.(), 0)
     },
     onPreAcceptFailure: (state) => {
       removeThinkingMessage(state.thinkingMessage)

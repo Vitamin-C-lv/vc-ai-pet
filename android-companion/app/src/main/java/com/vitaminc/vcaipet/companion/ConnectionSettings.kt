@@ -57,6 +57,17 @@ enum class EndpointRoute {
     DEFAULT,
 }
 
+fun <T> networkForEndpointRoute(
+    route: EndpointRoute,
+    wifiNetwork: T?,
+    activeDefaultNetwork: T?,
+): T? {
+    return when (route) {
+        EndpointRoute.WIFI -> wifiNetwork
+        EndpointRoute.DEFAULT -> activeDefaultNetwork
+    }
+}
+
 data class EndpointCandidate(
     val address: LanAddress,
     val route: EndpointRoute,

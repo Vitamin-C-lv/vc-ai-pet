@@ -8,6 +8,7 @@ import { containsSensitiveMemoryText, detectExplicitMemoryRequest, userOptedOutO
 import { containsNonAssertion } from '../memory/current-belief.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { ReasoningDebugStore } from '../brain/reasoning-debug-store.js'
+import { ProactiveMessages } from './proactive-messages.js'
 import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
@@ -316,6 +317,8 @@ export class PetRuntime {
     this.conversation = new RecentConversation({ maxTurns: this.pipelineConfig.shortTermContextTurns })
     this.conversationStore = new ConversationStore(this.sandbox.root)
     this.reasoningDebugStore = new ReasoningDebugStore({ sandboxRoot: this.sandbox.root })
+    this.proactive = new ProactiveMessages({ runtime: this })
+    this.lastProactiveCheckAt = 0
     this.recentVisualResolver = new RecentVisualResolver()
     this.visualExperience = new VisualExperienceStore(this.sandbox.root)
     this.longTermVisualResolver = new LongTermVisualResolver({ experienceStore: this.visualExperience })
@@ -513,6 +516,7 @@ export class PetRuntime {
       reflectionRun: ({ force }) => this.#runReflectionWithExperienceSnapshot({ force }),
     })
     await this.persist()
+    await this.proactive.initialize()
     return this.snapshot()
   }
 
@@ -606,8 +610,17 @@ export class PetRuntime {
     if (!deepStarted && typeof this.dreamScheduler?.maybeRunReflection === 'function') {
       await this.dreamScheduler.maybeRunReflection(schedulerState)
     }
+    if (now - this.lastProactiveCheckAt >= 60_000) {
+      this.lastProactiveCheckAt = now
+      void this.proactive.maybeSend(now)
+    }
     return this.snapshot()
   }
+
+  getProactiveSettings() { return this.proactive.getSettings() }
+  setProactiveSettings(patch) { return this.proactive.setSettings(patch) }
+  pollProactiveMessages(after, options) { return this.proactive.inbox(after, options) }
+  sendProactiveTestMessage() { return this.proactive.sendTest() }
 
   async interact(kind = 'pet', now = Date.now()) {
     // Long press is a first-class shared presentation action, while the
@@ -948,13 +961,17 @@ export class PetRuntime {
         })
       }
 
+      const recentMessages = this.#shortTermContext()
+      const invitation = this.conversationPersistenceReady
+        ? await this.conversationStore.unansweredProactiveMessage(turnId) : null
+      if (invitation) recentMessages.push({ role: 'assistant', content: invitation.text })
       const result = await this.brain.reply({
         identity: this.identitySnapshot(),
         state: this.snapshot(),
         userText: promptText,
         image: effectiveVisionImage,
         visualContext,
-        recentMessages: this.#shortTermContext(),
+        recentMessages,
         // The window the model is allowed to see, in turns. Passed explicitly so
         // the prompt builder can never cap it at some other hard-coded number.
         contextTurns: this.pipelineConfig.shortTermContextTurns,
@@ -1798,6 +1815,7 @@ export class PetRuntime {
   }
 
   close() {
+    this.proactive.close()
     this.visualSemanticIndex?.stop()
     // Local Brain is now a shared external service. Pet owns no model process.
     this.conversation?.clear()

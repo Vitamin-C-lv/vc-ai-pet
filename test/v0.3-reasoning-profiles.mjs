@@ -45,6 +45,7 @@ function assertDuration(reasoning, effort, minimum = 0) {
 }
 
 assert.deepEqual(PET_REASONING_PROFILE, {
+  proactive: 'medium',
   chat: 'low',
   vision: 'medium',
   dream: 'high',

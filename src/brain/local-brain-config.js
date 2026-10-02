@@ -7,6 +7,7 @@ const REASONING_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max'])
 // Keep the mapping in one place so every inference surface uses the same
 // contract and no caller can silently promote a normal chat turn.
 export const PET_REASONING_PROFILE = Object.freeze({
+  proactive: 'medium',
   chat: 'low',
   vision: 'medium',
   dream: 'high',

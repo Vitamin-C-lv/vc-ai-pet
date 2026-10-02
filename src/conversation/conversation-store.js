@@ -16,7 +16,7 @@ export const CONVERSATION_ARCHIVE_FILENAME = 'conversation-archive.db'
 
 const DATA_URL_PATTERN = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const MESSAGE_KINDS = new Set(['dialogue', 'activity', 'media_ref', 'final'])
+const MESSAGE_KINDS = new Set(['dialogue', 'activity', 'media_ref', 'final', 'proactive'])
 const ACTIVITY_TYPES = new Set(['turn_started', 'thinking', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'visual_recall', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed', 'visual_owner_caption'])
 const MESSAGE_PROVENANCE = new Set(['confirmed', 'inferred'])
 const IMAGE_EXTENSION_BY_MIME = Object.freeze({
@@ -310,6 +310,7 @@ function normalizeState(value) {
         attachment: attachment ? clone(attachment) : null,
         ...(turnId ? { turnId } : {}),
         ...(cleanAttachmentSource(message.source) ? { source: cleanAttachmentSource(message.source) } : {}),
+        ...(kind === 'proactive' && message.proactiveTest === true ? { proactiveTest: true } : {}),
         ...(kind !== 'dialogue' ? { kind } : {}),
         ...(sourceAttachmentId ? { sourceAttachmentId } : {}),
         ...(activityType ? { activityType } : {}),
@@ -472,6 +473,34 @@ export class ConversationStore {
     const row = this.archive.prepare('SELECT COALESCE(MAX(sequence), 0) AS n FROM raw_messages').get()
     const sequence = Number(row?.n)
     return Number.isFinite(sequence) ? sequence : 0
+  }
+
+  async proactiveInbox(after = 0, { latest = false } = {}) {
+    await this.initialize()
+    const highWater = await this.rawHistoryMaxSequence()
+    if (latest) return { cursor: highWater, messages: [] }
+    const rows = this.archive.prepare("SELECT sequence, payload FROM raw_messages WHERE sequence > ? AND role = 'assistant' AND json_extract(payload, '$.kind') = 'proactive' ORDER BY sequence LIMIT 50").all(after)
+    return { cursor: rows.length ? rows.at(-1).sequence : highWater,
+      messages: rows.map(({ sequence, payload }) => {
+        const message = JSON.parse(payload)
+        return { id: message.id, cursor: sequence, text: message.text,
+          timestamp: message.timestamp, turnId: message.turnId }
+      }) }
+  }
+
+  async proactiveEligibilityHistory() {
+    await this.initialize()
+    const owner = this.archive.prepare("SELECT sequence, payload FROM raw_messages WHERE role = 'user' AND COALESCE(json_extract(payload, '$.source'), '') != ? ORDER BY sequence DESC LIMIT 1").get(STACKCHAN_CAMERA_SOURCE)
+    const messages = this.archive.prepare("SELECT payload FROM raw_messages WHERE role = 'assistant' AND json_extract(payload, '$.kind') = 'proactive' AND COALESCE(json_extract(payload, '$.proactiveTest'), 0) != 1 ORDER BY sequence DESC LIMIT 64").all().map(row => JSON.parse(row.payload))
+    return { lastOwnerAt: owner ? JSON.parse(owner.payload).timestamp : null,
+      lastOwnerSequence: owner?.sequence ?? 0, messages }
+  }
+
+  async unansweredProactiveMessage(turnId) {
+    await this.initialize()
+    const row = this.archive.prepare("SELECT payload FROM raw_messages WHERE COALESCE(json_extract(payload, '$.turnId'), '') != ? AND COALESCE(json_extract(payload, '$.kind'), 'dialogue') IN ('dialogue', 'final', 'proactive') ORDER BY sequence DESC LIMIT 1").get(turnId)
+    const message = row ? JSON.parse(row.payload) : null
+    return message?.role === 'assistant' && message.kind === 'proactive' ? message : null
   }
 
   close() {
@@ -686,7 +715,7 @@ export class ConversationStore {
     }
   }
 
-  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null, turnId = null, source = null, kind = 'dialogue', sourceAttachmentId = null, activityType = null, relation = null, provenance = null, activitySeq = null, activityAt = null } = {}) {
+  async appendMessage({ id = null, role, text = '', timestamp = this.now(), attachment = null, reasoning = null, turnId = null, source = null, kind = 'dialogue', sourceAttachmentId = null, activityType = null, relation = null, provenance = null, activitySeq = null, activityAt = null, proactiveTest = false } = {}) {
     return this.#enqueue(async () => {
       await this.initialize()
       if (role !== 'user' && role !== 'assistant') throw storeError('PET_CONVERSATION_ROLE_INVALID')
@@ -722,6 +751,7 @@ export class ConversationStore {
         ...(normalizedTurnId ? { turnId: normalizedTurnId } : {}),
         ...(cleanAttachmentSource(source) ? { source: cleanAttachmentSource(source) } : {}),
         ...(normalizedKind !== 'dialogue' ? { kind: normalizedKind } : {}),
+        ...(normalizedKind === 'proactive' && proactiveTest === true ? { proactiveTest: true } : {}),
         ...(normalizedSourceAttachmentId ? { sourceAttachmentId: normalizedSourceAttachmentId } : {}),
         ...(normalizedActivityType ? { activityType: normalizedActivityType } : {}),
         ...(normalizedRelation ? { relation: normalizedRelation } : {}),

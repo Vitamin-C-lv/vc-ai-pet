@@ -145,4 +145,13 @@ class ConnectionSelectionTest {
             assertEquals(route, settings.candidateEntries().first().route)
         }
     }
+
+    @Test
+    fun notificationRouteUsesWifiForLanAndActiveDefaultForTailscale() {
+        val wifi = "Wi-Fi network"
+        val active = "active VPN network"
+
+        assertEquals(wifi, networkForEndpointRoute(EndpointRoute.WIFI, wifi, active))
+        assertEquals(active, networkForEndpointRoute(EndpointRoute.DEFAULT, wifi, active))
+    }
 }

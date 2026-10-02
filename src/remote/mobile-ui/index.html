@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/typography.css">
     <link rel="stylesheet" href="/thinking-indicator.css">
     <link rel="stylesheet" href="/developer-settings.css">
+    <link rel="stylesheet" href="/proactive-messages.css">
   </head>
   <body>
     <main class="pet-app">
@@ -50,7 +51,7 @@
               <span class="vc-icon vc-icon-construction" aria-hidden="true"></span><span>花花家</span>
             </button>
             <button id="chat-open" class="home-action" type="button" aria-controls="chat-view">
-              <span aria-hidden="true">💬</span><span>聊天</span>
+              <span aria-hidden="true">💬</span><span>聊天</span><span id="chat-unread-badge" class="proactive-unread-badge" hidden aria-label="未读主动消息"></span>
             </button>
           </div>
         </section>
@@ -217,6 +218,40 @@
           <button id="home-settings-close" type="button" aria-label="关闭设置">×</button>
         </div>
         <p class="settings-intro">一些安静藏起来的小选项。</p>
+        <section class="proactive-settings" aria-labelledby="proactive-settings-title">
+          <h3 id="proactive-settings-title">花花主动找你</h3>
+          <label class="proactive-setting-row" for="proactive-enabled">
+            <span><strong>允许花花主动发消息</strong><small>花花会在合适的时候来找你</small></span>
+            <input id="proactive-enabled" type="checkbox" role="switch" disabled>
+          </label>
+          <label class="proactive-setting-row proactive-frequency-row" for="proactive-max-per-day">
+            <span><strong>每天最多几条</strong><small>给主动消息留一点空间</small></span>
+            <select id="proactive-max-per-day" disabled>
+              <option value="1">1 条</option>
+              <option value="2">2 条</option>
+              <option value="3">3 条</option>
+              <option value="4">4 条</option>
+              <option value="5">5 条</option>
+              <option value="6">6 条</option>
+              <option value="7">7 条</option>
+              <option value="8">8 条</option>
+              <option value="9">9 条</option>
+              <option value="10">10 条</option>
+            </select>
+          </label>
+          <div class="proactive-quiet-hours">
+            <span><strong>安静时间</strong><small>这段时间花花会先休息</small></span>
+            <label><span class="visually-hidden">安静开始时间</span><input id="proactive-quiet-start" type="time" disabled></label>
+            <span aria-hidden="true">—</span>
+            <label><span class="visually-hidden">安静结束时间</span><input id="proactive-quiet-end" type="time" disabled></label>
+          </div>
+          <label class="proactive-setting-row" for="proactive-device-notifications">
+            <span><strong>此设备通知</strong><small id="proactive-device-note">仅影响这台设备</small></span>
+            <input id="proactive-device-notifications" type="checkbox" role="switch" disabled>
+          </label>
+          <button id="proactive-test" class="proactive-test-button" type="button">给主人试发一条</button>
+          <p id="proactive-settings-status" class="settings-status" role="status" aria-live="polite"></p>
+        </section>
         <details class="developer-settings">
           <summary>开发调试</summary>
           <label class="reasoning-setting-row" for="reasoning-debug-toggle">
@@ -243,6 +278,7 @@
         </div>
       </div>
     </section>
+    <button id="proactive-toast" class="proactive-toast" type="button" aria-live="polite" hidden>花花来找你啦</button>
     <script src="/diagnostics.js"></script>
     <script src="/navigation.js"></script>
     <script src="/emoji-drawer.js"></script>
@@ -252,5 +288,6 @@
     <script src="/thinking-indicator.js"></script>
     <script src="/reasoning-debug.js"></script>
     <script src="/mobile.js"></script>
+    <script src="/proactive-messages.js"></script>
   </body>
 </html>

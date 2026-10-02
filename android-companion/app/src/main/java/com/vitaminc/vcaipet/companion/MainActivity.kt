@@ -1,10 +1,12 @@
 package com.vitaminc.vcaipet.companion
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.drawable.AnimationDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +17,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.JavascriptInterface
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
@@ -63,6 +66,21 @@ class MainActivity : ComponentActivity() {
     private var discoveryRetryRunnable: Runnable? = null
     private var revealRunnable: Runnable? = null
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
+    @Volatile
+    private var trustedPageReady = false
+    private var pendingNotificationTap = false
+    private var notificationTapAttempts = 0
+    private var notificationTapRunnable: Runnable? = null
+    private var notificationSettingsEventPending = false
+    private var pendingNotificationEnable = false
+
+    private val requestNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingNotificationEnable) startProactiveNotifications()
+        else finishNotificationEnable()
+        pendingNotificationEnable = false
+    }
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val callback = pendingFileCallback ?: return@registerForActivityResult
@@ -72,6 +90,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ProactiveNotificationService.ensureChannels(this)
+        pendingNotificationTap = intent?.action == ACTION_OPEN_CHAT
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
 
@@ -111,6 +131,7 @@ class MainActivity : ComponentActivity() {
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = false
         }
+        petWebView.addJavascriptInterface(NativeNotificationsBridge(), "VcAiPetNotifications")
         petWebView.overScrollMode = View.OVER_SCROLL_NEVER
         petWebView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
@@ -348,63 +369,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun readEndpointSettings(): EndpointSettings {
-        val lanEndpoint = readEndpoint(
-            ConnectionPreferenceKeys.LAN_ENDPOINT,
-            ConnectionDefaults.LAN_ENDPOINT,
-        )
-        val remoteEndpoint = readEndpoint(
-            ConnectionPreferenceKeys.REMOTE_ENDPOINT,
-            ConnectionDefaults.REMOTE_ENDPOINT,
-        )
-        val mode = ConnectionMode.fromPreference(
-            preferences.getString(ConnectionPreferenceKeys.CONNECTION_MODE, null),
-        )
-        val learnedLanEndpoint = preferences.getString(
-            ConnectionPreferenceKeys.LEARNED_LAN_ENDPOINT,
-            null,
-        )?.let { runCatching { LanAddress.parse(it) }.getOrNull() }
-            ?.takeIf { LanAddress.isPrivateLanIpv4(it.host) }
-        val lastSuccessfulEndpoint = listOf(
-            preferences.getString(ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT, null),
-            preferences.getString(PREFERENCE_HOST, null),
-        ).asSequence()
-            .filterNotNull()
-            .mapNotNull { runCatching { LanAddress.parse(it) }.getOrNull() }
-            .firstOrNull()
-
-        val preferenceEditor = preferences.edit()
-            .putString(ConnectionPreferenceKeys.LAN_ENDPOINT, lanEndpoint.hostPort)
-            .putString(ConnectionPreferenceKeys.REMOTE_ENDPOINT, remoteEndpoint.hostPort)
-            .putString(ConnectionPreferenceKeys.CONNECTION_MODE, mode.name)
-        if (lastSuccessfulEndpoint != null) {
-            preferenceEditor.putString(
-                ConnectionPreferenceKeys.LAST_SUCCESSFUL_ENDPOINT,
-                lastSuccessfulEndpoint.hostPort,
-            )
-        }
-        if (learnedLanEndpoint != null) {
-            preferenceEditor.putString(
-                ConnectionPreferenceKeys.LEARNED_LAN_ENDPOINT,
-                learnedLanEndpoint.hostPort,
-            )
-        }
-        preferenceEditor.apply()
-
-        return EndpointSettings(
-            lanEndpoint = lanEndpoint,
-            remoteEndpoint = remoteEndpoint,
-            mode = mode,
-            lastSuccessfulEndpoint = lastSuccessfulEndpoint,
-            learnedLanEndpoint = learnedLanEndpoint,
-        )
-    }
-
-    private fun readEndpoint(key: String, fallback: String): LanAddress {
-        val raw = preferences.getString(key, null) ?: fallback
-        return runCatching { LanAddress.parse(raw) }
-            .getOrElse { LanAddress.parse(fallback) }
-    }
+    private fun readEndpointSettings(): EndpointSettings = ConnectionSettingsReader.read(preferences)
 
     private fun rememberSuccessfulEndpoint(address: LanAddress, learnedLan: Boolean = false) {
         val editor = preferences.edit()
@@ -422,6 +387,8 @@ class MainActivity : ComponentActivity() {
         attempt: SplashTimingCoordinator.Attempt,
     ) {
         if (!isAttemptOpen(attempt)) return
+        trustedPageReady = false
+        ProactiveChatVisibility.chatVisible = false
         connectivityManager.bindProcessToNetwork(network)
         activeEndpoint = address
         activeEndpointNetwork = network
@@ -431,6 +398,10 @@ class MainActivity : ComponentActivity() {
             .apply()
         petWebView.webViewClient = PetWebViewClient(
             petAddress = address,
+            onMainFrameStarted = {
+                trustedPageReady = false
+                ProactiveChatVisibility.chatVisible = false
+            },
             onMainFrameReady = { onPetPageReady(attempt, address) },
             onMainFrameError = { onPetPageError(attempt, address) },
         )
@@ -444,6 +415,9 @@ class MainActivity : ComponentActivity() {
         address: LanAddress,
     ) {
         if (!isAttemptOpen(attempt) || activeEndpoint != address) return
+        trustedPageReady = true
+        if (notificationSettingsEventPending) dispatchNotificationSettingsChanged()
+        if (pendingNotificationTap) dispatchNotificationTapWhenReady()
         val decision = splashTimingCoordinator.markPageReady(
             attempt,
             SystemClock.elapsedRealtime(),
@@ -470,6 +444,8 @@ class MainActivity : ComponentActivity() {
         address: LanAddress,
     ) {
         if (!isAttemptOpen(attempt) || activeEndpoint != address) return
+        trustedPageReady = false
+        ProactiveChatVisibility.chatVisible = false
         petWebView.stopLoading()
         petWebView.visibility = View.GONE
     }
@@ -622,7 +598,39 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
+    override fun onResume() {
+        super.onResume()
+        ProactiveChatVisibility.activityResumed = true
+        if (preferences.getBoolean(ProactiveNotificationPrefs.ENABLED, false) &&
+            !ProactiveNotificationService.notificationsAllowed(this)
+        ) {
+            preferences.edit().putBoolean(ProactiveNotificationPrefs.ENABLED, false).apply()
+            ProactiveNotificationService.stop(this)
+            notifyNotificationSettingsChanged()
+        } else if (preferences.getBoolean(ProactiveNotificationPrefs.ENABLED, false)) {
+            ProactiveNotificationService.start(this)
+        }
+    }
+
+    override fun onPause() {
+        ProactiveChatVisibility.activityResumed = false
+        super.onPause()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_OPEN_CHAT) {
+            pendingNotificationTap = true
+            notificationTapAttempts = 0
+            if (trustedPageReady) dispatchNotificationTapWhenReady()
+        }
+    }
+
     override fun onDestroy() {
+        trustedPageReady = false
+        ProactiveChatVisibility.activityResumed = false
+        notificationTapRunnable?.let(mainHandler::removeCallbacks)
         endpointProbeGeneration += 1
         cancelAttemptCallbacks()
         cancelProbeWork()
@@ -638,12 +646,115 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun requestNotificationEnable(enabled: Boolean) {
+        if (!trustedPageReady) return
+        if (!enabled) {
+            pendingNotificationEnable = false
+            preferences.edit().putBoolean(ProactiveNotificationPrefs.ENABLED, false).apply()
+            ProactiveNotificationService.stop(this)
+            notifyNotificationSettingsChanged()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingNotificationEnable = true
+            requestNotificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        startProactiveNotifications()
+    }
+
+    private fun startProactiveNotifications() {
+        if (!ProactiveNotificationService.notificationsAllowed(this)) {
+            finishNotificationEnable()
+            return
+        }
+        preferences.edit().putBoolean(ProactiveNotificationPrefs.ENABLED, true).commit()
+        try {
+            ProactiveNotificationService.start(this)
+            notifyNotificationSettingsChanged()
+        } catch (_: Exception) {
+            finishNotificationEnable()
+        }
+    }
+
+    private fun finishNotificationEnable() {
+        preferences.edit().putBoolean(ProactiveNotificationPrefs.ENABLED, false).commit()
+        ProactiveNotificationService.stop(this)
+        notifyNotificationSettingsChanged()
+    }
+
+    private fun notifyNotificationSettingsChanged() {
+        notificationSettingsEventPending = true
+        if (trustedPageReady) dispatchNotificationSettingsChanged()
+    }
+
+    private fun dispatchNotificationSettingsChanged() {
+        if (!trustedPageReady || !::petWebView.isInitialized) return
+        notificationSettingsEventPending = false
+        petWebView.evaluateJavascript(
+            "globalThis.dispatchEvent(new Event('pet:notificationsettingschange'))",
+            null,
+        )
+    }
+
+    private fun dispatchNotificationTapWhenReady() {
+        if (!trustedPageReady || !::petWebView.isInitialized || !pendingNotificationTap) return
+        notificationTapRunnable?.let(mainHandler::removeCallbacks)
+        petWebView.evaluateJavascript(
+            "typeof globalThis.VcAiPetProactive?.onNotificationTap === 'function'",
+        ) { result ->
+            if (result == "true") {
+                pendingNotificationTap = false
+                notificationTapAttempts = 0
+                petWebView.evaluateJavascript(
+                    "globalThis.VcAiPetProactive.onNotificationTap()",
+                    null,
+                )
+            } else if (notificationTapAttempts++ < 8) {
+                val retry = Runnable {
+                    notificationTapRunnable = null
+                    dispatchNotificationTapWhenReady()
+                }
+                notificationTapRunnable = retry
+                mainHandler.postDelayed(retry, NOTIFICATION_TAP_RETRY_MS)
+            }
+        }
+    }
+
+    private inner class NativeNotificationsBridge {
+        @JavascriptInterface
+        fun isAvailable(): Boolean = trustedPageReady && !isFinishing && !isDestroyed
+
+        @JavascriptInterface
+        fun isEnabled(): Boolean {
+            return trustedPageReady &&
+                preferences.getBoolean(ProactiveNotificationPrefs.ENABLED, false) &&
+                ProactiveNotificationService.notificationsAllowed(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun setEnabled(enabled: Boolean) {
+            runOnUiThread { requestNotificationEnable(enabled) }
+        }
+
+        @JavascriptInterface
+        fun setChatVisible(visible: Boolean) {
+            if (!trustedPageReady) return
+            ProactiveChatVisibility.chatVisible = visible
+        }
+    }
+
     companion object {
         private const val PREFERENCES_NAME = "pet_connection"
         private const val PREFERENCE_HOST = "pet_host"
         private const val SPLASH_FOUND_MESSAGE_MS = 300L
         private const val SPLASH_FADE_DURATION_MS = 250L
         private const val WIFI_DISCOVERY_LOG_TAG = "WifiLanDiscovery"
+        const val ACTION_OPEN_CHAT = "com.vitaminc.vcaipet.companion.action.OPEN_CHAT_FROM_NOTIFICATION"
+        private const val NOTIFICATION_TAP_RETRY_MS = 250L
         private val DISCOVERY_RETRY_OFFSETS_MS = longArrayOf(4_000L, 9_000L, 14_000L)
         private val IMAGE_MIME_TYPES = arrayOf(
             "image/jpeg",

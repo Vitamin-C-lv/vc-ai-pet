@@ -26,7 +26,11 @@ Android APK
 - `WebChromeClient.onShowFileChooser()` 使用 Activity Result `OpenDocument`，只交回图片 URI；取消时回调 `null`，不读取、压缩或上传图片。
 - 使用 `WindowCompat` / `WindowInsetsControllerCompat` 隐藏状态栏和导航栏，允许边缘 swipe 临时显示系统栏；方向固定为 portrait。
 - 返回键优先返回 WebView history，没有 history 时退出 Activity。
-- 不使用 `addJavascriptInterface()`，不包含原生聊天、Vision、HTTP Pet API client、数据库、WebSocket、后台服务、推送、扫描或登录。
+- 不包含原生聊天、Vision、聊天数据库或 WebSocket。WebView 提供一个仅在已验证花花页面 ready 后响应的窄桥 `VcAiPetNotifications`，用于用户启停 Android 主动消息和报告聊天页可见状态；不开放通用 HTTP、文件或原生业务 API。
+- 用户在前台打开主动消息后，原生 `remoteMessaging` foreground service（API 34+）通过现有 LAN/Tailscale endpoint 长轮询；API 26–33 使用普通 foreground service。首次启用读取 `latest=1` 建立 cursor 基线，之后把持久消息 cursor 存在应用 preferences，按 cursor 去重。通知点击会打开聊天页；若服务端响应当前安静时段标记，补收通知仍展示但保持静音。
+- 后台连接服务按 endpoint route 显式使用 Wi-Fi `Network` 或系统 active default/VPN `Network`，不会依赖 Activity 的 process-wide Wi-Fi bind。连接失败时继续重试；LAN endpoint 全部失效后，每个当前 Wi-Fi IPv4/prefix 最多执行一次复用现有有界 discovery，并保存发现的 LAN endpoint。
+- Android Doze 和厂商省电策略仍可暂停 foreground service 的网络活动，因此无云推送 provider 时，后台主动消息属于尽力送达，恢复网络/系统调度后会从持久 cursor 续传。应用不请求 wakelock，也不申请或修改电池优化豁免。
+- Android 13+ 需要用户授权 `POST_NOTIFICATIONS` 才显示消息提醒。用户必须在应用前台主动打开此功能；服务不会从后台自行启动。Android 13 用户若拒绝通知权限，服务不会启用。
 
 ## 构建
 
@@ -43,7 +47,7 @@ adb devices
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-不需要 `READ_EXTERNAL_STORAGE`、`WRITE_EXTERNAL_STORAGE`、`MANAGE_EXTERNAL_STORAGE`、`CAMERA`、`RECORD_AUDIO`、`POST_NOTIFICATIONS` 或位置权限；Manifest 只声明 `INTERNET`、用于读取当前网络拓扑的 `ACCESS_NETWORK_STATE`，以及在 LAN WebView 加载时绑定当前 Wi-Fi、在 remote/手工连接时恢复 default network 的 `CHANGE_NETWORK_STATE`。LAN HTTP 由应用自己的 `network_security_config.xml` 允许，WebViewClient 仍执行当前 origin 的导航边界。
+Manifest 还声明主动消息所需的 `FOREGROUND_SERVICE`、API 34+ `FOREGROUND_SERVICE_REMOTE_MESSAGING` 和运行时 `POST_NOTIFICATIONS`；没有位置权限或电池优化豁免。其余网络权限为 `INTERNET`、读取当前网络拓扑的 `ACCESS_NETWORK_STATE`，以及 WebView 页面加载时绑定 LAN Wi-Fi / remote default network 的 `CHANGE_NETWORK_STATE`。LAN HTTP 由应用自己的 `network_security_config.xml` 允许，WebViewClient 仍执行当前 origin 的导航边界。
 
 ## 人工验收
 

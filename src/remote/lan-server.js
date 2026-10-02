@@ -109,6 +109,35 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         const presentation = runtime.presentationSnapshot(visualConfig)
         return sendJson(res, 200, presentation)
       }
+      if (url.pathname === '/api/pet/proactive/settings' && req.method === 'GET') {
+        return sendJson(res, 200, runtime.getProactiveSettings())
+      }
+      if (url.pathname === '/api/pet/proactive/settings' && req.method === 'POST') {
+        const body = await readJsonBody(req, 1024)
+        try { return sendJson(res, 200, { ok: true, ...await runtime.setProactiveSettings(body) }) }
+        catch (error) {
+          if (error.code === 'PET_PROACTIVE_SETTINGS_INVALID') return sendJson(res, 400, { error: 'invalid-proactive-settings' })
+          throw error
+        }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/pet/proactive/messages') {
+        const after = url.searchParams.get('after') ?? '0'
+        const wait = url.searchParams.get('wait') ?? '0'
+        if (!/^\d{1,12}$/u.test(after) || !/^\d{1,2}$/u.test(wait) || Number(wait) > 25) return sendJson(res, 400, { error: 'invalid-proactive-cursor' })
+        const controller = new AbortController()
+        const abort = () => controller.abort()
+        res.once('close', abort)
+        try {
+          const inbox = await runtime.pollProactiveMessages(Number(after), {
+            latest: url.searchParams.get('latest') === '1', wait: Number(wait), signal: controller.signal,
+          })
+          if (!res.destroyed) return sendJson(res, 200, { ...inbox, silent: runtime.proactive.isQuiet() })
+        } finally { res.removeListener('close', abort) }
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/pet/proactive/test') {
+        return sendJson(res, 200, { ok: true, message: await runtime.sendProactiveTestMessage() })
+      }
       if (req.method === 'GET' && url.pathname === '/api/pet/developer/settings') {
         if (typeof runtime.getDeveloperSettings !== 'function') return sendJson(res, 503, { error: 'developer-settings-unavailable' })
         return sendJson(res, 200, await runtime.getDeveloperSettings())

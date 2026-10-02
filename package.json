@@ -4,6 +4,7 @@
   "description": "李花花 — an isolated local pixel Bernese Mountain Dog pet for DeepSeek Harness.",
   "type": "module",
   "scripts": {
+    "test:proactive": "node test/v0.5-proactive-brain.mjs && node test/v0.5-proactive-messages.mjs && node test/v0.5-proactive-ui.mjs",
     "test:chat-developer-debug": "node test/v0.5-thinking-indicator.mjs && node test/v0.5-reasoning-debug-store.mjs && node test/v0.5-reasoning-debug-runtime.mjs && node test/v0.3-thinking-ui.mjs && node test/v0.3-thinking-duration-persistence.mjs",
     "test:visual-multi-photo": "node test/v0.5-multi-photo-task-routing.mjs && node test/v0.5-multi-photo-recall.mjs",
     "test:visual-semantic": "node test/v0.4-visual-semantic-store.mjs && node test/v0.4-visual-semantic-index.mjs && node test/v0.4-visual-recall-tool-brain.mjs && node test/v0.4-visual-recall-tool-runtime.mjs && node test/v0.4-visual-recall-verify-before-show.mjs",
