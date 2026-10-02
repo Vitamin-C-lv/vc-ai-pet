@@ -290,7 +290,7 @@ assert.equal(resultX.status, 'turn-failed')
 assert.equal(storageX.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
 assert.equal(harnessX.controller.getRetryable(), null)
 
-// CASE Y: stale pending data is discarded without an automatic start.
+// CASE Y: an old submitted message retains its id for reconciliation.
 const serverY = createServer()
 const storageY = new MemoryStorage()
 const storeY = createPendingSubmissionStore({ storage: storageY, now: () => currentTime, maxAgeMs: 100 })
@@ -300,13 +300,12 @@ storeY.saveState({
   createdAt: currentTime - 101, after: 0,
 })
 const staleY = storeY.read()
-assert.equal(staleY.status, 'stale')
-assert.equal(storageY.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
+assert.equal(staleY.status, 'pending')
+assert.equal(staleY.pending.submissionId, 'submission-y')
+assert.notEqual(storageY.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
 assert.equal(serverY.newTurnCount, 0)
 
-// CASE AB: the default frontend pending lifetime is the same as the server
-// registry TTL. At the boundary, stale data is cleared and boot recovery does
-// not get a pending record to reconcile.
+// CASE AB: exceeding the in-memory registry TTL must not discard a message.
 const serverAB = createServer()
 const storageAB = new MemoryStorage()
 const storeAB = createPendingSubmissionStore({ storage: storageAB, now: () => currentTime })
@@ -318,8 +317,9 @@ storeAB.saveState({
 })
 currentTime = pendingCreatedAtAB + submission.CLIENT_PENDING_MAX_AGE_MS
 const staleAB = storeAB.read()
-assert.equal(staleAB.status, 'stale')
-assert.equal(storageAB.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
+assert.equal(staleAB.status, 'pending')
+assert.equal(staleAB.pending.submissionId, 'submission-ab')
+assert.notEqual(storageAB.getItem(submission.PENDING_SUBMISSION_STORAGE_KEY), null)
 assert.equal(serverAB.newTurnCount, 0)
 assert.equal(submission.CLIENT_PENDING_MAX_AGE_MS, 10 * 60 * 1000)
 assert.equal(submission.CLIENT_PENDING_MAX_AGE_MS, SERVER_IDEMPOTENCY_TTL_MS)
@@ -368,12 +368,12 @@ console.log('CASE_U_UPLOADED_RELOAD_NO_REUPLOAD=PASS')
 console.log('CASE_V_PRE_UPLOAD_RESELECT_NO_FAKE_SEND=PASS')
 console.log('CASE_W_COMPLETE_STORAGE_CLEARED=PASS')
 console.log('CASE_X_FAILED_STORAGE_CLEARED=PASS')
-console.log('CASE_Y_STALE_PENDING_CLEARED_NO_START=PASS')
-console.log('CASE_AB_PENDING_TTL_CLEARED_NO_RECONCILE=PASS')
+console.log('CASE_Y_OLD_PENDING_RETAINED=PASS')
+console.log('CASE_AB_PENDING_SURVIVES_REGISTRY_TTL=PASS')
 console.log('CASE_Z_TWO_CLIENTS_ONE_TURN=PASS')
 console.log('ATTACHMENT_UPLOAD_COUNT_ON_FAILURE_RETRY=1')
 console.log('ATTACHMENT_REUSED=YES')
-console.log('CLIENT_PENDING_MAX_AGE=10_MINUTES')
+console.log('SUBMITTED_PENDING_EXPIRY=NONE')
 console.log('LOCALSTORAGE_USER_MESSAGE_TEXT=YES')
 console.log('LOCALSTORAGE_IMAGE_BASE64=NO')
 console.log('CROSS_WEBVIEW_RELOAD_DUPLICATE_TURN=NO')

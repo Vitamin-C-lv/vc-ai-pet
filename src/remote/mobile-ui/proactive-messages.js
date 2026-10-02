@@ -60,10 +60,14 @@
   }
 
   async function requestJson(path, options = {}) {
-    const response = await globalThis.fetch(path, { cache: 'no-store', ...options })
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload?.error || 'request-failed')
-    return payload
+    const controller = new AbortController()
+    const timer = globalThis.setTimeout(() => controller.abort(), 15_000)
+    try {
+      const response = await globalThis.fetch(path, { cache: 'no-store', ...options, signal: controller.signal })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload?.error || 'request-failed')
+      return payload
+    } finally { globalThis.clearTimeout(timer) }
   }
 
   function renderSettings() {
@@ -215,6 +219,7 @@
     try {
       if (!localState.cursor) await establishBaseline()
       const result = await requestJson(`/api/pet/proactive/messages?after=${encodeURIComponent(localState.cursor || '0')}`)
+      const historyChanged = result.cursor != null && String(result.cursor) !== localState.cursor
       const newMessages = []
       for (const message of result.messages || []) {
         if (message?.id == null) continue
@@ -228,9 +233,6 @@
       if (newMessages.length && chatIsOpen) {
         for (const message of newMessages) globalThis.VcAiPetApp?.appendProactiveMessage?.(message)
         markRead()
-        if (!globalThis.VcAiPetApp?.isTurnPending?.()) {
-          void globalThis.VcAiPetApp?.refreshHistory?.({ preserveViewport: true })
-        }
       } else if (newMessages.length) {
         for (const message of newMessages) {
           const id = String(message.id)
@@ -240,6 +242,12 @@
         showToast()
       } else {
         saveLocalState()
+      }
+      // The durable cursor also advances for ordinary conversation messages.
+      // Catch up after a reload or a change of endpoint without waiting for a
+      // new proactive message to arrive.
+      if (historyChanged && chatIsOpen && !globalThis.VcAiPetApp?.isTurnPending?.()) {
+        void globalThis.VcAiPetApp?.refreshHistory?.({ preserveViewport: true })
       }
     } catch {}
     finally { polling = false }

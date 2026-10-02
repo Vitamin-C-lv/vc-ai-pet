@@ -172,11 +172,11 @@ assert.equal(caseCResult.state.stage, SUBMISSION_STAGE.TURN_ACCEPTED)
 assert.equal(caseC.controller.getActiveTurnId(), 'turn-owned')
 assert.equal(caseC.visibleUserCount, 1)
 const caseCResume = await caseC.controller.resume()
-assert.equal(caseCResume.status, 'paused')
+assert.equal(caseCResume.status, 'completed')
 const caseCExplicitResume = await caseC.controller.resume({ explicit: true })
-assert.equal(caseCExplicitResume.status, 'completed')
-assert.equal(caseCExplicitResume.state.stage, SUBMISSION_STAGE.TURN_COMPLETED)
-assert.equal(caseCExplicitResume.state.turnId, 'turn-owned')
+assert.equal(caseCExplicitResume.status, 'idle')
+assert.equal(caseCResume.state.stage, SUBMISSION_STAGE.TURN_COMPLETED)
+assert.equal(caseCResume.state.turnId, 'turn-owned')
 assert.equal(caseC.startCount, 1)
 assert.equal(caseC.runCount, 2)
 assert.equal(caseC.uploadCount, 1)
@@ -253,6 +253,11 @@ const caseI = createHarness({
       error.serverAccepted = true
       throw error
     },
+    async (args) => {
+      assert.equal(args.submissionId, caseIResult.state.submissionId)
+      assert.equal(args.attachment.id, uploadedAttachment.id)
+      return completedRun('turn-unknown-reconciled')(args)
+    },
   ],
 })
 const caseIResult = await caseI.controller.submit({ draftText: '状态未知', message: '状态未知', pendingImage: image })
@@ -266,10 +271,16 @@ assert.equal(caseI.startAcceptanceUnknown.length, 1)
 assert.equal(caseI.controller.hasActive(), true)
 assert.equal(caseI.controller.getActiveTurnId(), null)
 assert.equal(caseI.uploadCount, 1)
+
 const caseIStartCount = caseI.startCount
 const caseJResult = await caseI.controller.submit({ draftText: '状态未知', message: '状态未知', pendingImage: image })
 assert.equal(caseJResult.status, 'busy')
 assert.equal(caseI.startCount, caseIStartCount)
+assert.equal(caseI.uploadCount, 1)
+
+const reconciledI = await caseI.controller.resume()
+assert.equal(reconciledI.status, 'completed')
+assert.equal(caseI.visibleUserCount, 1)
 assert.equal(caseI.uploadCount, 1)
 
 // CASE K: a transient accepted poll failure is retried with the same turn and
@@ -345,7 +356,7 @@ assert.equal(caseLArguments[1].after, 10)
 assert.equal(caseL.visibleUserCount, 1)
 
 // CASE M: after the bounded retry budget is exhausted, the turn is paused and
-// only an explicit same-turn resume may continue it.
+// a network recovery resumes the same turn without another start.
 const caseM = createHarness({
   runs: [
     async ({ onTurnAccepted, onPollProgress }) => {
@@ -389,12 +400,12 @@ assert.equal(caseM.startCount, 1)
 assert.equal(caseM.runCount, 4)
 assert.equal(caseM.visibleUserCount, 1)
 const caseMPausedResume = await caseM.controller.resume()
-assert.equal(caseMPausedResume.status, 'paused')
-assert.equal(caseM.runCount, 4)
+assert.equal(caseMPausedResume.status, 'completed')
+assert.equal(caseM.runCount, 5)
 const caseMStartCount = caseM.startCount
 const caseMExplicitResume = await caseM.controller.resume({ explicit: true })
-assert.equal(caseMExplicitResume.status, 'completed')
-assert.equal(caseMExplicitResume.state.turnId, 'turn-m')
+assert.equal(caseMExplicitResume.status, 'idle')
+assert.equal(caseMPausedResume.state.turnId, 'turn-m')
 assert.equal(caseM.startCount, caseMStartCount)
 assert.equal(caseM.controller.hasActive(), false)
 
@@ -406,7 +417,7 @@ assert.match(mobileJs, /TURN_ACCEPTED/u)
 assert.match(mobileJs, /onTurnAccepted/u)
 assert.match(mobileJs, /onStartInFlight/u)
 assert.match(mobileJs, /START_ACCEPTANCE_UNKNOWN/u)
-assert.match(mobileJs, /消息可能已经交给花花了，正在确认/u)
+assert.match(mobileJs, /正在确认送达状态/u)
 assert.match(mobileJs, /submission-resume-button/u)
 assert.match(submissionJs, /POLL_RETRY_DELAYS_MS/u)
 assert.match(mobileJs, /markStartFailure/u)
@@ -426,7 +437,7 @@ console.log('CASE_I_START_RESPONSE_LOST_FAIL_CLOSED=PASS')
 console.log('CASE_J_UNKNOWN_ORDINARY_SUBMIT_NO_NEW_START=PASS')
 console.log('CASE_K_ACCEPTED_POLL_BOUNDED_SAME_TURN=PASS')
 console.log('CASE_L_BOUNDED_RETRY_EVENTUAL_COMPLETION=PASS')
-console.log('CASE_M_BOUNDED_RETRY_EXHAUSTED_EXPLICIT_RESUME=PASS')
+console.log('CASE_M_BOUNDED_RETRY_EXHAUSTED_RECONNECT_RESUME=PASS')
 console.log('CASE_H_EXISTING_COMPOSER_CONTRACT=PASS')
 console.log('SUBMISSION_STAGES=PRE_UPLOAD|PRE_START|UPLOADED|START_IN_FLIGHT|START_ACCEPTANCE_UNKNOWN|TURN_ACCEPTED|TURN_COMPLETED|TURN_FAILED')
 console.log('ACCEPTED_POLL_RETRY_DELAYS_MS=1000|2000|4000')
@@ -434,6 +445,6 @@ console.log('ACCEPTED_POLL_RETRY_START_COUNT=0')
 console.log('EXPLICIT_RESUME_SAME_TURN=PASS')
 console.log('ATTACHMENT_UPLOAD_COUNT_ON_FAILURE_RETRY=1')
 console.log('ATTACHMENT_REUSED=YES')
-console.log('START_UNKNOWN_AUTO_RESEND=NO')
+console.log('START_UNKNOWN_SAME_ID_RECONCILE=PASS')
 console.log('START_UNKNOWN_DRAFT_RESTORED=NO')
 console.log('AUTOMATIC_DUPLICATE_TURN=NO')

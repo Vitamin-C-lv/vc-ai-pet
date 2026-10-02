@@ -87,8 +87,8 @@ try {
   assert.notEqual(distinctP1.payload.turnId, distinctP2.payload.turnId)
   assert.equal(startCount, 3)
 
-  // CASE Q: the registry is host-lifetime RAM with bounded LRU capacity and
-  // TTL eviction; it is not a ConversationStore or memory database.
+  // CASE Q: standalone registries without a ConversationStore remain bounded
+  // in-memory helpers. The LAN server uses durable ConversationStore receipts.
   let now = 0
   let boundedCreateCount = 0
   const bounded = new ChatSubmissionIdempotency({ maxEntries: 2, ttlMs: 100, now: () => now })
@@ -103,9 +103,8 @@ try {
   now = 101
   assert.equal(bounded.size(), 0)
 
-  // CASE AA: the default submission registry expires before the existing
-  // PetTurnManager lifecycle, so it cannot replay a stale turn id.
-  const petTurnManagerTtlMs = 15 * 60 * 1000
+  // CASE AA: an in-memory-only registry keeps its short-lived behavior. This
+  // TTL does not expire production receipts stored in ConversationStore.
   let alignedNow = 0
   const alignedRegistry = new ChatSubmissionIdempotency({ now: () => alignedNow })
   alignedRegistry.start({
@@ -114,9 +113,6 @@ try {
     createTurn: () => ({ turnId: 'turn-aa' }),
   })
   alignedNow = SERVER_IDEMPOTENCY_TTL_MS
-  assert.equal(alignedRegistry.get('submission-aa'), null)
-  assert.equal(SERVER_IDEMPOTENCY_TTL_MS <= petTurnManagerTtlMs, true)
-  alignedNow = petTurnManagerTtlMs
   assert.equal(alignedRegistry.get('submission-aa'), null)
 
   // CASE Z: two independent clients racing with one id converge on one turn.
@@ -148,10 +144,7 @@ console.log('CASE_Q_REGISTRY_BOUNDED_TTL=PASS')
 console.log('CASE_AA_TTL_ALIGNS_BEFORE_TURN_MANAGER=PASS')
 console.log('CASE_Z_TWO_CLIENTS_ONE_TURN=PASS')
 console.log('SAME_SUBMISSION_START_CALL_COUNT=1')
-console.log('SERVER_IDEMPOTENCY_BOUNDED=MAX_ENTRIES_256')
-console.log('SERVER_IDEMPOTENCY_TTL=10_MINUTES')
-console.log('PET_TURN_MANAGER_TTL=15_MINUTES')
-console.log('PET_TURN_MANAGER_MODIFIED=NO')
-console.log('TTL_ALIGNMENT=PASS')
-console.log('STALE_TURN_REPLAY=NO')
+console.log('MEMORY_ONLY_REGISTRY_BOUNDED=MAX_ENTRIES_256')
+console.log('MEMORY_ONLY_REGISTRY_TTL=10_MINUTES')
+console.log('DURABLE_RECEIPT_TTL=NONE')
 console.log('GLOBAL_EXACTLY_ONCE_CLAIMED=NO')

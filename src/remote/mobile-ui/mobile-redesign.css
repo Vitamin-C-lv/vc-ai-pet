@@ -552,6 +552,33 @@ button {
   to { opacity: 1; }
 }
 
+.chat-system-status {
+  align-self: center;
+  width: min(100%, 330px);
+  margin: 8px 0 14px;
+  padding: 11px 15px;
+  box-sizing: border-box;
+  border: 1px solid rgba(174, 136, 99, .15);
+  border-radius: 14px;
+  background: rgba(244, 233, 216, .65);
+  color: var(--vc-muted);
+  font-family: var(--vc-font-ui);
+  text-align: center;
+}
+
+.system-status-label { font-size: 11px; letter-spacing: .04em; }
+.system-status-content p { margin: 5px 0 0; font-size: 13px; line-height: 1.6; }
+.chat-system-status .submission-resume-button {
+  margin-top: 8px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(180, 123, 80, .1);
+  color: #996947;
+  font: inherit;
+  font-size: 12px;
+}
+
 @keyframes vc-motion-rise-in {
   from { transform: translateY(10px); }
   to { transform: translateY(0); }

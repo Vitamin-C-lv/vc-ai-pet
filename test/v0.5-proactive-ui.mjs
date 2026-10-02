@@ -46,6 +46,8 @@ function makePage(hash = '') {
   let screen = 'home'
   let pendingTurn = false
   const historyRefreshes = []
+  const timeouts = new Map()
+  let timeoutSequence = 0
 
   const document = {
     visibilityState: 'visible',
@@ -56,14 +58,15 @@ function makePage(hash = '') {
   }
 
   const sandbox = {
+    AbortController,
     document,
     location: { hash },
     localStorage: {
       getItem(key) { return storage.get(key) ?? null },
       setItem(key, value) { storage.set(key, value) },
     },
-    setTimeout() { return 1 },
-    clearTimeout() {},
+    setTimeout(callback, delay) { const id = ++timeoutSequence; timeouts.set(id, { callback, delay }); return id },
+    clearTimeout(id) { timeouts.delete(id) },
     setInterval(callback, delay) {
       const id = ++intervalSequence
       intervals.set(id, { callback, delay })
@@ -79,6 +82,7 @@ function makePage(hash = '') {
       for (const listener of windowListeners.get(event.type) ?? []) listener(event)
     },
     fetch: async (path, options = {}) => {
+      if (api.hang) return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('request aborted'))))
       const url = new URL(path, 'http://pet-ui.test')
       let payload
       if (url.pathname === '/api/pet/proactive/settings' && options.method === 'POST') {
@@ -135,6 +139,7 @@ function makePage(hash = '') {
     api,
     visibleCalls,
     historyRefreshes,
+    abortStalledRequests() { for (const timer of timeouts.values()) if (timer.delay === 15_000) timer.callback() },
     get permissionRequest() { return permissionRequest },
     get clearIntervalCount() { return clearIntervalCount },
     setScreen(value) { screen = value },
@@ -185,6 +190,32 @@ page.document.visibilityState = 'visible'
 page.sandbox.VcAiPetProactive.onPageVisibilityChanged()
 await page.flush()
 assert.equal(page.visibleCalls.at(-1), true, 'visible chat resumes native visibility state')
+
+const beforeOrdinaryMessage = page.historyRefreshes.length
+page.api.cursor += 1
+page.sandbox.VcAiPetProactive.onPageVisibilityChanged()
+await page.flush()
+assert.equal(page.historyRefreshes.length, beforeOrdinaryMessage + 1, 'ordinary archive messages trigger catch-up without a proactive message')
+
+page.setPending(true)
+page.api.cursor += 1
+page.sandbox.VcAiPetProactive.onPageVisibilityChanged()
+await page.flush()
+assert.equal(page.historyRefreshes.length, beforeOrdinaryMessage + 1, 'archive catch-up preserves an active turn')
+page.setPending(false)
+page.sandbox.VcAiPetProactive.onTurnSettled()
+assert.equal(page.historyRefreshes.length, beforeOrdinaryMessage + 2, 'settling catches up deferred archive changes')
+
+page.api.hang = true
+page.sandbox.VcAiPetProactive.onPageVisibilityChanged()
+await page.flush()
+page.abortStalledRequests()
+await page.flush()
+page.api.hang = false
+page.api.cursor += 1
+page.sandbox.VcAiPetProactive.onPageVisibilityChanged()
+await page.flush()
+assert.equal(page.historyRefreshes.length, beforeOrdinaryMessage + 3, 'a stalled fetch releases the polling lock and the next connection catches up')
 
 page.setScreen('home')
 page.sandbox.VcAiPetProactive.onScreenChanged('home')

@@ -345,7 +345,9 @@ export class LocalBrain {
       ? confirmedNames.facts
         .slice(0, 2).map((fact) => String(fact).slice(0, 120))
       : []
-    const nameContext = namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只说明主人确认的名字，不证明当前照片里的主体身份或场景。` : ''
+    const nameContext = (namedFacts.length ? `\n主人确认的称呼：${namedFacts.join('；')}。这些事实只说明主人确认的名字，不证明当前照片里的主体身份或场景。` : '') + (verifyRecall
+      ? '\n核验 match 前先判断本轮原始需求是否确实需要这张历史照片：照片必须能回答主人当前提出的视觉或找图请求；主体身份相同、候选存在或照片内容看起来吻合，都不能代替这项判断。如果原始需求只谈主体现在的状态、需要或普通聊天，例如“黑莓好像饿了”，旧静态照片无法证明它现在是否饿，也不构成发图请求，必须填 match="uncertain" 且 replyMessages=[]，不得发出图片。'
+      : '')
     const multiPhotoSummary = verifyRecall && recallGoal === 'summarize_photos'
     const subjectRecall = verifyRecall && ['describe_subject', 'summarize_photos'].includes(recallGoal)
     const rawOwnerCaption = String(ownerCaption ?? '').slice(-1200)
@@ -500,7 +502,7 @@ export class LocalBrain {
     // Keep one inference per turn. The same structured response contains the
     // visible reply and at most one memory candidate.
     const visualRecallInstruction = visualRecallEnabled
-      ? `\n\nvisualRecall 是本轮允许的本地照片记忆检索请求，不是电脑或网络操作；由本轮这一次回复直接决定，不要进行单独规划。它要查询的是图库中跨越当前对话窗口的旧图片，当前上下文没有图片不代表图库没有相关图片。若主人在问一个以前见过的个人主体长什么样、毛色或其他外观特征，必须先查图库再回答；不能仅因为当前没有看到图片或记忆上下文未提到图片，就说“没见过”“不记得”或让主人重发。比如“你知不知道我们家的猫黑莓长什么样子”和“你还记得黑莓的毛色吗”都应选择 visualRecall 对象，goal="describe_subject"，query 包含主体“黑莓”和主人问的外观特征。若主人要找回某张具体旧照片，选择 goal="find_photo"。tool 固定为 "search_visual_memory"；query 是不超过240字的自包含检索词，只根据主人当前原话、已确认的名字和明确相关的视觉回忆上下文写，不要编造场景。普通聊天、假设问题，以及询问记忆、检索、视觉能力或相关技术原理的元问题返回 null。若存在下面这条未解决的视觉回忆请求，主人本轮短句若明显是在补充、纠正或澄清它，才用它理解当前指代，并将此前主体与当前补充组合成自包含 query；只保留与视觉回忆有关的内容。若转到晚饭等无关话题、普通聊天或元问题，visualRecall 必须为 null。未解决的视觉回忆请求原文（仅作当前指代上下文）：${activeVisualRecallContext ? JSON.stringify(activeVisualRecallContext) : '- 无'}。若选择工具，reply 和 replyMessages 只能是简短的等待语（例如“${VISUAL_RECALL_WAITING_REPLY}”），不要给出任何猜测的外观或照片内容；memory.remember 必须为 false。`
+      ? `\n\nvisualRecall 是本轮允许的本地照片记忆检索请求，不是电脑或网络操作；由本轮这一次回复直接决定，不要进行单独规划。它要查询的是图库中跨越当前对话窗口的旧图片，当前上下文没有图片不代表图库没有相关图片。若主人在问一个以前见过的个人主体长什么样、毛色或其他外观特征，必须先查图库再回答；不能仅因为当前没有看到图片或记忆上下文未提到图片，就说“没见过”“不记得”或让主人重发。比如“你知不知道我们家的猫黑莓长什么样子”和“你还记得黑莓的毛色吗”都应选择 visualRecall 对象，goal="describe_subject"，query 包含主体“黑莓”和主人问的外观特征。若主人要找回某张具体旧照片，选择 goal="find_photo"。tool 固定为 "search_visual_memory"；query 是不超过240字的自包含检索词，只根据主人当前原话、已确认的名字和明确相关的视觉回忆上下文写，不要编造场景。只有本轮确实需要查回历史照片才能回答时才选择工具：若当前话题只是提到照片里出现过的主体、谈它现在的需要、状态或日常聊天，必须返回 null；例如“黑莓好像饿了”是普通聊天，不能因为旧图库里有黑莓的照片就去找图，静态照片也不能判断它现在是否饿。只有询问过去照片里的外观/场景、要求找回具体旧照片，或在未解决的视觉回忆中明确补充/纠正主体或场景，才选择相应 visualRecall；否则返回 null。若存在下面这条未解决的视觉回忆请求，主人本轮短句若明显是在补充、纠正或澄清它，才用它理解当前指代，并将此前主体与当前补充组合成自包含 query；只保留与视觉回忆有关的内容。若转到晚饭等无关话题、普通聊天或元问题，visualRecall 必须为 null。未解决的视觉回忆请求原文（仅作当前指代上下文）：${activeVisualRecallContext ? JSON.stringify(activeVisualRecallContext) : '- 无'}。若选择工具，reply 和 replyMessages 只能是简短的等待语（例如“${VISUAL_RECALL_WAITING_REPLY}”），不要给出任何猜测的外观或照片内容；memory.remember 必须为 false。`
       : ''
     const multiPhotoInstruction = visualRecallEnabled
       ? '\n如果主人要求多看几张、两张以上照片后总结、综合或归纳，visualRecall.goal 必须为 "summarize_photos"，不要降为 describe_subject 或 find_photo。photoCount 是本轮计划查看的不同照片数量；“多看几张”默认3，明确数量取该数量但本轮最多5张。只有 summarize_photos 才填写 photoCount；不能用一张代替多张。query 保留主体和场景线索，原始需求中的数量和总结要求由执行器单独保留。'

@@ -64,7 +64,7 @@ export function actionToInteractionKind(action, state = {}) {
 
 export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console, submissionRegistry = null } = {}) {
   const assets = resolve(assetRoot)
-  const chatSubmissionIdempotency = submissionRegistry ?? createChatSubmissionIdempotency()
+  const chatSubmissionIdempotency = submissionRegistry ?? createChatSubmissionIdempotency({ conversationStore })
 
   return async (req, res) => {
     if (!isAllowedLanAddress(req.socket?.remoteAddress)) return sendJson(res, 403, { error: 'lan-only' })
@@ -300,8 +300,11 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
         if (!/^[a-z0-9-]{1,80}$/iu.test(turnId) || typeof runtime.pollChatTurn !== 'function') return sendJson(res, 404, { error: 'turn-not-found' })
         const after = url.searchParams.get('after')
         if (after !== null && !/^\d{1,9}$/u.test(after)) return sendJson(res, 400, { error: 'invalid-after' })
-        const result = runtime.pollChatTurn(turnId, after)
-        return result ? sendJson(res, 200, result) : sendJson(res, 404, { error: 'turn-not-found' })
+        const cursor = Number(after ?? 0)
+        const result = runtime.pollChatTurn(turnId, cursor)
+        if (result) return sendJson(res, 200, result)
+        const recovered = await conversationStore?.recoverChatTurn?.(turnId, cursor)
+        return recovered ? sendJson(res, 200, recovered) : sendJson(res, 404, { error: 'turn-not-found' })
       }
       if (req.method === 'GET' && url.pathname.startsWith('/conversation-assets/')) {
         return await serveConversationAsset(url.pathname, conversationStore, res)
@@ -325,6 +328,7 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
 export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console, submissionRegistry = null } = {}) {
   if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
   if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
+  await conversationStore?.initialize?.()
   const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger, submissionRegistry }))
   await new Promise((resolveStart, rejectStart) => {
     server.once('error', rejectStart)

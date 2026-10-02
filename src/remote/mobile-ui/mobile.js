@@ -28,6 +28,7 @@ let activeTurnId = null
 let submissionStatusNode = null
 let renderedHistoryTurnIds = new Set()
 let pendingRecoveryStarted = false
+let lastSubmissionResumeAt = 0
 let diagnosticsPanel
 let diagnosticsOutput
 let diagnosticsStatus
@@ -164,7 +165,11 @@ function markPollTransportFailure(error) {
 }
 
 async function fetchJsonDiagnostic(url, options, requestContext) {
-  return diagnostics.fetchJsonDiagnostic(url, options, requestContext)
+  if (!['turn-start', 'turn-poll', 'state', 'history'].includes(requestContext?.stage)) return diagnostics.fetchJsonDiagnostic(url, options, requestContext)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15_000)
+  try { return await diagnostics.fetchJsonDiagnostic(url, { ...options, signal: controller.signal }, requestContext) }
+  finally { clearTimeout(timer) }
 }
 
 function getViewportHeight() {
@@ -705,7 +710,6 @@ function createVisualPresentationState({ currentAttachmentId = null } = {}) {
     previousActivityShown: false,
     observationShown: false,
     mediaImageCounts: new Map(),
-    finalCount: 0,
   }
 }
 
@@ -951,11 +955,6 @@ function renderHistory(history) {
       renderMessage({ ...message, role: 'assistant', text: '', attachment: message.attachment })
       return
     }
-    if (message.kind === 'final' && state.mode === 'visual') {
-      const finalLimit = state.recalled ? 1 : 2
-      state.finalCount += 1
-      if (state.finalCount > finalLimit) return
-    }
     if (message.kind === 'proactive') renderMessage({ ...message, messageId: message.id ?? message.messageId })
     else renderMessage(message)
   })
@@ -1124,6 +1123,8 @@ async function refresh() {
     const { payload: state } = await fetchJsonDiagnostic('/api/pet/state', { cache: 'no-store' }, { stage: 'state' })
     renderPetPresentation(state)
     setOnline(true)
+    const pending = submissionController?.getActive?.()
+    if (pending?.paused && document.visibilityState !== 'hidden' && Date.now() - lastSubmissionResumeAt >= 10_000) resumeActiveSubmission()
   } catch { setOnline(false) }
 }
 
@@ -1298,7 +1299,11 @@ async function runTurnProgress({
     onPollProgress?.({ after, presentation, assistantRendered })
     if (payload?.status === 'done') {
       pollDone = true
-      if (!assistantRendered) {
+      if (payload.historyRecovered) {
+        const recoveredHistory = await loadHistory()
+        if (!Array.isArray(recoveredHistory)) throw markPollTransportFailure(diagnosticError('TURN_HISTORY_SYNC_FAILED', 'history sync unavailable'))
+      }
+      else if (!assistantRendered) {
         const replies = Array.isArray(payload.result?.replyMessages) && payload.result.replyMessages.length ? payload.result.replyMessages : [payload.result?.text]
         replies.filter(Boolean).forEach((text) => line('pet', text))
       }
@@ -1322,16 +1327,33 @@ function clearSubmissionStatus() {
   submissionStatusNode = null
 }
 
+function clearSubmittedComposer(state) {
+  if (input.value === state.draftText) input.value = ''
+  if (!selectedImage || selectedImage === state.pendingImage) clearImageSelection()
+}
+
 function showSubmissionStatus(text, { resume = false } = {}) {
   clearSubmissionStatus()
-  submissionStatusNode = line('pet', text)
+  submissionStatusNode = document.createElement('div')
+  submissionStatusNode.className = 'chat-system-status'
+  submissionStatusNode.setAttribute('role', 'status')
+  const content = document.createElement('div')
+  content.className = 'system-status-content'
+  const label = document.createElement('span')
+  label.className = 'system-status-label'
+  label.textContent = '系统 · 消息同步'
+  const copy = document.createElement('p')
+  copy.textContent = text
+  content.append(label, copy)
+  submissionStatusNode.append(content)
+  messages.append(submissionStatusNode)
   if (resume) {
-    const bubble = submissionStatusNode.querySelector?.('.message-bubble')
+    const bubble = content
     if (bubble) {
       const button = document.createElement('button')
       button.className = 'submission-resume-button'
       button.type = 'button'
-      button.textContent = '继续等待'
+      button.textContent = '立即同步'
       button.addEventListener('click', () => {
         button.disabled = true
         resumeActiveSubmission({ explicit: true })
@@ -1368,8 +1390,7 @@ function createMobileSubmissionController() {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
       clearSubmissionStatus()
-      input.value = ''
-      clearImageSelection()
+      clearSubmittedComposer(state)
       activeTurnId = null
       setOnline(true)
       scrollMessagesToBottom()
@@ -1383,35 +1404,32 @@ function createMobileSubmissionController() {
       activeTurnId = null
       input.value = state.draftText
       restoreImageSelection(state.pendingImage)
-      line('pet', '花花脑袋刚刚卡了一下……')
+      showSubmissionStatus('消息尚未送达，输入内容已保留，请重试。')
       scrollMessagesToBottom()
       setOnline(false)
     },
     onStartAcceptanceUnknown: (state, error) => {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
-      input.value = ''
-      clearImageSelection()
+      clearSubmittedComposer(state)
       activeTurnId = null
       showSubmissionStatus(error?.code === 'SUBMISSION_ID_CONFLICT'
         ? '发送状态冲突，请刷新后重试。'
-        : '消息可能已经交给花花了，正在确认……')
+        : '正在确认送达状态，连接恢复后会自动同步。', { resume: error?.code !== 'SUBMISSION_ID_CONFLICT' })
       setOnline(false)
     },
     onAcceptedFailure: (state) => {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
-      input.value = ''
-      clearImageSelection()
+      clearSubmittedComposer(state)
       activeTurnId = state.turnId
-      showSubmissionStatus('消息已经交给花花了，但连接暂时中断。', { resume: true })
+      showSubmissionStatus('消息已送达，正在恢复连接并补收回复。', { resume: true })
       setOnline(false)
     },
     onServerFailure: (state) => {
       removeThinkingMessage(state.thinkingMessage)
       state.thinkingMessage = null
-      input.value = ''
-      clearImageSelection()
+      clearSubmittedComposer(state)
       activeTurnId = null
       showSubmissionStatus('这条消息没有完成；如需重试，请重新发送。')
       setOnline(true)
@@ -1481,6 +1499,7 @@ async function submitComposer(message = input.value.trim()) {
 
 function resumeActiveSubmission(options = {}) {
   if (!submissionController?.hasActive?.()) return
+  lastSubmissionResumeAt = Date.now()
   void submissionController.resume(options)
 }
 
@@ -1544,6 +1563,12 @@ function installDiagnosticHooks() {
   globalThis.addEventListener?.('offline', () => {
     recordDiagnostic({ level: 'warn', stage: 'network', code: 'OFFLINE' })
     setOnline(false)
+  })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      resumeActiveSubmission()
+      void refresh()
+    }
   })
   globalThis.addEventListener?.('error', (event) => {
     const error = event?.error

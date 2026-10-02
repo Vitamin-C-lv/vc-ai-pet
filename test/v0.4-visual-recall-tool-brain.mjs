@@ -97,6 +97,7 @@ const selectedPrompt = requests[0].messages[0].content
 assert.match(selectedPrompt, /以前见过的个人主体长什么样/u)
 assert.match(selectedPrompt, /find_photo/u)
 assert.match(selectedPrompt, /普通聊天/u)
+assert.match(selectedPrompt, /只有本轮确实需要查回历史照片才能回答时才选择工具/u)
 assert.match(selectedPrompt, /当前上下文没有图片不代表图库没有相关图片/u)
 assert.match(selectedPrompt, /不能仅因为当前没有看到图片/u)
 assert.match(selectedPrompt, /memory\.remember 必须为 false/u)
@@ -116,8 +117,9 @@ assert.equal(technicalMeta.visualRecall, null, 'filter a model-selected tool for
 const responseMeta = await ask(brain, '为什么你看了图片以后像机器人？', { allowVisualRecall: true })
 assert.equal(responseMeta.visualRecall, null, 'filter the known meta question about the pet response style')
 
-const ordinary = await ask(brain, '今天好困。', { allowVisualRecall: true })
-assert.equal(ordinary.visualRecall, null, 'ordinary chat returns no tool choice')
+const ordinary = await ask(brain, '黑莓好像饿了', { allowVisualRecall: true })
+assert.equal(ordinary.visualRecall, null, 'mentioning a familiar photo subject while discussing current needs is ordinary chat')
+assert.match(requests[10].messages[0].content, /黑莓好像饿了/u, 'the model prompt includes the production false-positive example')
 assert.match(requests[10].messages[0].content, /普通聊天/u, 'ordinary chat is excluded by the model selection prompt')
 assert.equal(requests[10].reasoningEffort, 'low', 'tool-enabled planner calls use the text-chat reasoning profile')
 assert.equal(requests[10].maxTokens, 768)
@@ -229,6 +231,9 @@ assert.equal(verifyRequests[1].reasoningEffort, 'low', 'single-photo recall veri
 assert.equal(verifyRequests[1].maxTokens, 896)
 assert.match(photoPrompt, /所有可见的主体、物体及场景关系/u)
 assert.match(photoPrompt, /只有全部明确吻合才填 "match"/u, 'find_photo keeps strict scene matching')
+assert.match(photoPrompt, /本轮原始需求是否确实需要这张历史照片/u)
+assert.match(photoPrompt, /黑莓好像饿了/u, 'verification explicitly rejects identity-only matches for a current-state chat')
+assert.match(photoPrompt, /match="uncertain" 且 replyMessages=\[\]/u)
 
 await verifyBrain.visualStep({
   userText: '多看几张照片后总结黑莓的样子',
@@ -240,6 +245,7 @@ await verifyBrain.visualStep({
 })
 assert.equal(verifyRequests[2].reasoningEffort, 'medium', 'each multi-photo summary inspection uses vision reasoning')
 assert.equal(verifyRequests[2].maxTokens, 2048)
+assert.match(verifyRequests[2].messages[0].content, /本轮原始需求是否确实需要这张历史照片/u, 'multi-photo verification keeps the same intent gate')
 assert.match(photoPrompt, /"这只猫叫小橘，在纸箱里"/u, 'find_photo receives the raw owner caption')
 assert.match(photoPrompt, /原始说明明确给主体标了另一个名字时必须填 mismatch/u)
 assert.match(photoPrompt, /没有名字本身不构成 mismatch/u, 'a missing owner label does not reject a scene match')

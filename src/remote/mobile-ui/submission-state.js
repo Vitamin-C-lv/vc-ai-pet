@@ -136,7 +136,8 @@
         clear()
         return { status: 'invalid', pending: null }
       }
-      if (Number.isFinite(maxAgeMs) && maxAgeMs > 0 && now() - createdAt >= maxAgeMs) {
+      // Submitted messages keep their id until a confirmed terminal outcome.
+      if (stage === SUBMISSION_STAGE.PRE_UPLOAD && Number.isFinite(maxAgeMs) && maxAgeMs > 0 && now() - createdAt >= maxAgeMs) {
         clear()
         return { status: 'stale', pending: null, createdAt }
       }
@@ -408,11 +409,8 @@
     }
 
     function resume({ explicit = false } = {}) {
-      if (!activeSubmission || activeSubmission.stage !== SUBMISSION_STAGE.TURN_ACCEPTED) {
+      if (!activeSubmission || ![SUBMISSION_STAGE.TURN_ACCEPTED, SUBMISSION_STAGE.START_ACCEPTANCE_UNKNOWN].includes(activeSubmission.stage)) {
         return Promise.resolve({ status: 'idle', state: activeSubmission })
-      }
-      if (activeSubmission.paused && !explicit) {
-        return Promise.resolve({ status: 'paused', state: activeSubmission })
       }
       if (executionPromise || resumePromise) return executionPromise ?? resumePromise
 

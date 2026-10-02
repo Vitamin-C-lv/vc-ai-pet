@@ -72,7 +72,7 @@ vm.createContext(context)
 vm.runInContext(
   mobileSource.replace(
     /startApp\(\)\s*$/u,
-    'messages = document.querySelector(\'#messages\'); globalThis.__renderHistory = renderHistory; globalThis.__renderTurnEvent = renderTurnEvent; globalThis.__createVisualPresentationState = createVisualPresentationState',
+    'messages = document.querySelector(\'#messages\'); globalThis.__renderHistory = renderHistory; globalThis.__renderTurnEvent = renderTurnEvent; globalThis.__createVisualPresentationState = createVisualPresentationState; globalThis.__showSubmissionStatus = showSubmissionStatus',
   ),
   context,
   { filename: 'mobile.js' },
@@ -107,11 +107,13 @@ function renderHistory(history) {
 const historicalAttachment = await saveAttachment()
 const historicalTurn = 'turn-historical-presentation'
 await store.appendMessage({ role: 'user', text: '你记得无花果吗', turnId: historicalTurn })
+await store.appendMessage({ role: 'assistant', kind: 'final', turnId: historicalTurn, text: '花花去图库找找，再看一遍。' })
 await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: historicalAttachment.id, turnId: historicalTurn, text: '🐾 花花想起以前好像见过……' })
 await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_selected', relation: 'recalled', sourceAttachmentId: historicalAttachment.id, turnId: historicalTurn, text: '↩️ 花花翻到以前的一张照片' })
 await store.appendMessage({ role: 'assistant', kind: 'media_ref', activityType: 'visual_image', relation: 'recalled', sourceAttachmentId: historicalAttachment.id, turnId: historicalTurn, text: '花花重新看看这张', attachment: historicalAttachment })
 await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', relation: 'recalled', turnId: historicalTurn, text: '看到：1788110095163 internal observation dump' })
 await store.appendMessage({ role: 'assistant', kind: 'final', turnId: historicalTurn, text: '我记得这盆无花果。' })
+await store.appendMessage({ role: 'assistant', kind: 'final', turnId: historicalTurn, text: '它的叶子很大。', reasoning: { durationMs: 9907 } })
 const historicalHistory = await store.history(50)
 const historicalActivityRows = historicalHistory.filter((message) => message.turnId === historicalTurn && message.kind === 'activity')
 const historicalMediaRows = historicalHistory.filter((message) => message.turnId === historicalTurn && message.kind === 'media_ref')
@@ -128,6 +130,9 @@ const historicalRendered = renderHistory(legacyHistoricalHistory)
 assert.equal(historicalRendered.imageCount, 1)
 assert.match(historicalRendered.text, /↩️ 花花翻到以前的一张照片/u)
 assert.match(historicalRendered.text, /👀 花花重新看了看/u)
+assert.match(historicalRendered.text, /我记得这盆无花果。/u)
+assert.match(historicalRendered.text, /它的叶子很大。/u)
+assert.match(historicalRendered.text, /9\.9/u)
 assert.doesNotMatch(historicalRendered.text, /花花想起以前好像见过/u)
 assert.doesNotMatch(historicalRendered.text, /1788110095163/u)
 assert.doesNotMatch(historicalRendered.text, /internal observation dump/u)
@@ -155,9 +160,9 @@ assert.match(currentRendered.text, /👀 花花仔细看了看/u)
 assert.doesNotMatch(currentRendered.text, /看到：/u)
 assert.match(currentRendered.text, /第一条。/u)
 assert.match(currentRendered.text, /第二条。/u)
-assert.doesNotMatch(currentRendered.text, /第三条不应默认拆出/u)
+assert.match(currentRendered.text, /第三条不应默认拆出/u)
 console.log('CURRENT_IMAGE_DUPLICATE_RENDER=NO')
-console.log('CURRENT_FINAL_MAX_BUBBLES=2')
+console.log('ARCHIVED_FINAL_MESSAGES_PRESERVED=PASS')
 
 // Distinct A/B references remain visible, while a real A -> B -> A revisit
 // remains observable because the ownership unit is an inspection stage, not a
@@ -229,6 +234,14 @@ assert.equal(ordinaryResult.final.replyMessages.length, 2)
 console.log('ORIGINAL_IMAGE_REOPEN=PASS')
 console.log('LOCAL_BRAIN_REINSPECTION=PASS')
 console.log('ORDINARY_FINAL_MAX_BUBBLES=2')
+
+messages.replaceChildren()
+context.__showSubmissionStatus('正在恢复连接并补收回复。')
+assert.match(messages.outerHTML, /chat-system-status/u)
+assert.match(findText(messages), /系统 · 消息同步/u)
+assert.doesNotMatch(messages.outerHTML, /pet-line|message-bubble/u)
+assert.doesNotMatch(findText(messages), /李花花/u)
+console.log('SYSTEM_STATUS_SEPARATE_FROM_PET=PASS')
 
 await rm(root, { recursive: true, force: true })
 console.log('VISUAL_PRESENTATION_CLEANUP=PASS')

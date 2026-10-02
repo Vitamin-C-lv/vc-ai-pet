@@ -394,6 +394,14 @@ export class ConversationStore {
           role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
           payload TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS chat_submission_receipts (
+          submission_id TEXT PRIMARY KEY,
+          turn_id TEXT NOT NULL,
+          message TEXT NOT NULL,
+          attachment_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS chat_submission_receipts_turn_id_idx
+          ON chat_submission_receipts(turn_id);
       `)
       // Import before trimming the recent cache. Already-pruned legacy records
       // cannot be reconstructed; every record still present is retained as-is.
@@ -436,6 +444,101 @@ export class ConversationStore {
     if (!key) return null
     const row = this.archive.prepare('SELECT payload FROM raw_messages WHERE id = ?').get(key)
     return row ? JSON.parse(row.payload) : null
+  }
+
+  chatSubmissionReceipt(submissionId) {
+    const key = cleanId(submissionId)
+    if (!key || !this.archive) return null
+    const row = this.archive.prepare(
+      'SELECT submission_id, turn_id, message, attachment_id FROM chat_submission_receipts WHERE submission_id = ?',
+    ).get(key)
+    return row ? {
+      submissionId: row.submission_id,
+      turnId: row.turn_id,
+      message: row.message,
+      attachmentId: row.attachment_id ?? null,
+    } : null
+  }
+
+  chatSubmissionReceiptForTurn(turnId) {
+    const key = cleanId(turnId)
+    if (!key || !this.archive) return null
+    const row = this.archive.prepare(
+      'SELECT submission_id, turn_id, message, attachment_id FROM chat_submission_receipts WHERE turn_id = ?',
+    ).get(key)
+    return row ? {
+      submissionId: row.submission_id,
+      turnId: row.turn_id,
+      message: row.message,
+      attachmentId: row.attachment_id ?? null,
+    } : null
+  }
+
+  recordChatSubmissionReceipt({ submissionId, turnId, message, attachmentId = null } = {}) {
+    if (!this.archive) throw storeError('PET_CONVERSATION_STORE_NOT_INITIALIZED')
+    const id = cleanId(submissionId)
+    const turn = cleanId(turnId)
+    if (!id || !turn) throw storeError('PET_CONVERSATION_SUBMISSION_RECEIPT_INVALID')
+    const payload = {
+      message: String(message ?? ''),
+      attachmentId: cleanId(attachmentId),
+    }
+    const inserted = this.archive.prepare(`
+      INSERT OR IGNORE INTO chat_submission_receipts(submission_id, turn_id, message, attachment_id)
+      VALUES (?, ?, ?, ?)
+    `).run(id, turn, payload.message, payload.attachmentId)
+    const receipt = this.chatSubmissionReceipt(id)
+    if (!receipt) throw storeError('PET_CONVERSATION_SUBMISSION_RECEIPT_MISSING')
+    if (receipt.message !== payload.message || receipt.attachmentId !== payload.attachmentId) {
+      const error = new Error('submission id payload conflict')
+      error.code = 'SUBMISSION_ID_CONFLICT'
+      error.statusCode = 409
+      throw error
+    }
+    return { receipt, created: Number(inserted.changes) > 0 }
+  }
+
+  async recoverChatTurn(turnId, after = 0) {
+    await this.initialize()
+    const key = cleanId(turnId)
+    if (!key) return null
+    const receipt = this.chatSubmissionReceiptForTurn(key)
+    const messages = this.archive.prepare(
+      "SELECT payload FROM raw_messages WHERE json_extract(payload, '$.turnId') = ? ORDER BY sequence",
+    ).all(key).map((row) => JSON.parse(row.payload))
+    if (!receipt && messages.length === 0) return null
+
+    const cursor = Math.max(0, Math.floor(Number(after) || 0))
+    const lastAssistant = [...messages].reverse().find((message) =>
+      message.role === 'assistant' && !['activity', 'proactive'].includes(message.kind),
+    )
+    if (lastAssistant?.reasoning && typeof lastAssistant.reasoning === 'object') {
+      return {
+        ok: true,
+        turnId: key,
+        status: 'done',
+        events: [],
+        lastSeq: cursor,
+        result: { ok: true },
+        historyRecovered: true,
+      }
+    }
+
+    const seq = cursor + 1
+    return {
+      ok: true,
+      turnId: key,
+      status: 'error',
+      events: [{
+        seq,
+        turnId: key,
+        type: 'turn_failed',
+        at: this.now(),
+        payload: { code: 'TURN_INTERRUPTED', retryable: false, visualInspectionCount: 0 },
+      }],
+      lastSeq: seq,
+      result: null,
+    }
   }
 
   async rawHistory({ afterId = null, limit = CONVERSATION_HISTORY_LIMIT } = {}) {
