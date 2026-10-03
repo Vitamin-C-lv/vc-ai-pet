@@ -31,9 +31,9 @@ function visualFailure({ reason = 'visual-step-failed', unavailable = false, req
 }
 
 export class VisualWorkingSession {
-  constructor({ turnId, userText, recallQuery = userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null, recallGoal = 'find_photo', photoCount = 3 }) {
+  constructor({ turnId, userText, taskUserText = userText, recallQuery = userText, candidatePool, comparison = false, comparisonPair = [], conversationStore, brain, emit, now = () => Date.now(), experienceStore = null, recallGoal = 'find_photo', photoCount = 3 }) {
     this.turnId = turnId
-    this.userText = String(userText ?? '')
+    this.userText = String(taskUserText ?? userText ?? '')
     this.recallQuery = String(recallQuery ?? '')
     this.recallGoal = recallGoal
     this.multiPhotoSummary = recallGoal === 'summarize_photos'

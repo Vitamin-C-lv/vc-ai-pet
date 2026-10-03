@@ -15,7 +15,7 @@ import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
 import { ConversationStore, CONVERSATION_MAX_MESSAGES } from '../conversation/conversation-store.js'
 import { normalizeConversationReasoning } from '../conversation/reasoning-metadata.js'
-import { detectVisualRecallCorrection, isDirectRecentVisualReference, isExplicitVisualSearch, needsVisualRecallTaskPlan, RecentVisualResolver } from '../conversation/recent-visual-context.js'
+import { RecentVisualResolver } from '../conversation/recent-visual-context.js'
 import { selectContextTurns } from '../conversation/context-budget.js'
 import { resolveMemoryPipelineConfig } from '../memory/memory-pipeline-config.js'
 import { ExplicitMemoryController } from '../memory/explicit-memory-controller.js'
@@ -43,9 +43,8 @@ import { normalizeVisionImage, VISION_ONLY_MESSAGE } from '../brain/vision-input
 import { VisualExperienceStore } from '../vision/visual-experience-store.js'
 import { VisualSemanticIndex } from '../vision/visual-semantic-index.js'
 import { visualTermsFor } from '../vision/visual-keywords.js'
-import { readConfirmedVisualNames } from '../memory/visual-naming-context.js'
 import { importLegacyObservations } from '../vision/legacy-observation-importer.js'
-import { detectLongTermVisualIntent, LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
+import { LongTermVisualResolver } from '../vision/long-term-visual-recall.js'
 import { buildVisualDreamContext } from '../dream/visual-dream-context.js'
 import { isEmbodiedTransientAttachment, isStackchanCameraMessage, STACKCHAN_CAMERA_SOURCE, EMBODIED_TRANSIENT_VISUAL_CLASS } from '../vision/visual-source.js'
 
@@ -861,13 +860,6 @@ export class PetRuntime {
     }
   }
 
-  #shouldRouteVisualFollowUp(followUp, preResolve) {
-    const status = preResolve?.status
-    return status === 'matched'
-      || status === 'ambiguous'
-      || followUp?.retryOnNone === true
-  }
-
   chat(userText, image = null, attachment = null, options = {}) {
     const turnId = options.turnId ?? createTurnId()
     return this.runReasoningTurn(turnId, () => this.#chat(userText, image, attachment, { ...options, turnId }), { userText, source: options.source })
@@ -882,39 +874,6 @@ export class PetRuntime {
     const startedAt = Date.now()
     const ownerText = String(userText ?? '')
     const currentVisionImage = normalizeVisionImage(image)
-    const needsRecallPlan = !currentVisionImage && this.visualSemanticIndex && needsVisualRecallTaskPlan(ownerText)
-    if (!currentVisionImage && this.conversationPersistenceReady && detectVisualRecallCorrection(ownerText)) {
-      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, source })
-    }
-    // D-022: explicit long-term visual references take priority over the recent
-    // resolver's generic-boilerplate overlapScore, so they always reach the
-    // long-term resolver instead of being short-circuited to a wrong recent image.
-    if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady && detectLongTermVisualIntent(ownerText)) {
-      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, source })
-    }
-    const recalled = !needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady
-      ? await this.recentVisualResolver.resolveFromStore(this.conversationStore, ownerText)
-      : null
-    if ((currentVisionImage || recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') && typeof this.brain?.visualStep === 'function') {
-      let currentAttachment = attachment
-      if (currentVisionImage && !currentAttachment) currentAttachment = await this.conversationStore.saveAttachment({ image: currentVisionImage })
-      return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: currentAttachment, source })
-    }
-    // Long-Term Visual stage (elliptical follow-up within an active recall
-    // context). A normal topic shift needs a long-term candidate first;
-    // clarification and subject-correction turns are retrieval retries even
-    // when the retry currently has no candidate.
-    if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady) {
-      const followUp = this.turnOrchestrator.planFollowUp(ownerText)
-      if (followUp) {
-        const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
-          : await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
-        if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
-          return this.runVisualTurn({ turnId, emit, userText: ownerText, attachment: null, followUp: { ...followUp, preResolve }, source })
-        }
-        if (!this.brain?.visualSearch) this.turnOrchestrator.clearVisualRecallContext()
-      }
-    }
     this.chatInFlight += 1
 
     try {
@@ -931,31 +890,20 @@ export class PetRuntime {
         }
       }
 
-      let recalledVisionImage = null
-      let recalledVisual = null
-      if (!needsRecallPlan && !currentVisionImage && this.conversationPersistenceReady) {
-        const recentMessages = await this.conversationStore.listForRecentVisualRecall()
-        recalledVisual = this.recentVisualResolver.resolve(ownerText, recentMessages)
-        if (recalledVisual.matched && isDirectRecentVisualReference(ownerText, recentMessages)) {
-          try {
-            const stored = await this.conversationStore.readAttachmentDataUrl(recalledVisual.attachmentId)
-            if (stored?.dataUrl) recalledVisionImage = normalizeVisionImage({ dataUrl: stored.dataUrl })
-          } catch (error) {
-            this.logger?.warn?.(
-              `PET_RECENT_VISUAL_RECALL_READ_FAILURE code=${String(error?.code ?? 'UNKNOWN')} `
-              + `attachmentId=${String(recalledVisual.attachmentId)}`,
-            )
-          }
-        }
-      }
-
-      // A newly uploaded image always wins. A recalled image is loaded only
-      // when the current turn has no image, preserving the single-image
-      // Local Brain contract.
-      const effectiveVisionImage = currentVisionImage ?? recalledVisionImage
-      const visualContext = effectiveVisionImage && !currentVisionImage && recalledVisual?.matched
-        ? { source: 'recent-visual-recall' }
-        : null
+      // Every owner message reaches the model before any tool executes.
+      const effectiveVisionImage = currentVisionImage
+      const visualContext = null
+      const visualMessages = this.conversationPersistenceReady
+        ? await this.conversationStore.listForRecentVisualRecall() : []
+      const recentVisuals = visualMessages.filter((row) => (row.attachment?.id || row.sourceAttachmentId)
+        && !isStackchanCameraMessage(row) && !isEmbodiedTransientAttachment(row.attachment))
+        .slice(-24).map((row) => ({
+          attachmentId: row.sourceAttachmentId ?? row.attachment.id,
+          role: row.role, text: row.text, timestamp: row.timestamp,
+          turnId: row.turnId, current: row.turnId === turnId,
+        }))
+      if (persistedAttachment) recentVisuals.push({ attachmentId: persistedAttachment.id,
+        role: 'user', text: ownerText, timestamp: persistedAttachment.createdAt, turnId, current: true })
       const promptText = ownerText.trim() || (effectiveVisionImage ? VISION_ONLY_MESSAGE : ownerText)
       const memoryRequest = detectExplicitMemoryRequest(ownerText)
       const voiceFastMode = shouldUseFastVoiceMode({
@@ -966,15 +914,12 @@ export class PetRuntime {
       })
 
       if (this.conversationPersistenceReady) {
-        ownerMessage = await this.conversationStore.appendMessage({
-          role: 'user',
-          text: ownerText,
-          timestamp: Date.now(),
-          attachment: persistedAttachment,
-          turnId,
-        })
+        ownerMessage = await this.conversationStore.appendMessage({ role: 'user', text: ownerText,
+          timestamp: Date.now(), attachment: persistedAttachment, turnId, source })
+        const currentVisual = recentVisuals.find((row) => row.current)
+        if (currentVisual) currentVisual.timestamp = ownerMessage.timestamp
+        if (persistedAttachment) await this.syncVisualExperiences()
       }
-
       const recentMessages = this.#shortTermContext()
       const invitation = this.conversationPersistenceReady
         ? await this.conversationStore.unansweredProactiveMessage(turnId) : null
@@ -985,7 +930,7 @@ export class PetRuntime {
         userText: promptText,
         image: effectiveVisionImage,
         imageUploadedAt: persistedAttachment?.createdAt ?? null,
-        imageUploadTimes: effectiveVisionImage ? await readVisualUploadTimes(this.visualExperience, persistedAttachment ?? (recalledVisual?.attachmentId ? await this.conversationStore.attachment(recalledVisual.attachmentId) : null)) : [],
+        imageUploadTimes: effectiveVisionImage ? await readVisualUploadTimes(this.visualExperience, persistedAttachment) : [],
         imageRelation: currentVisionImage ? 'current' : 'recalled',
         visualContext,
         recentMessages,
@@ -993,35 +938,23 @@ export class PetRuntime {
         // the prompt builder can never cap it at some other hard-coded number.
         contextTurns: this.pipelineConfig.shortTermContextTurns,
         voiceFastMode,
-        allowVisualRecall: Boolean(this.visualSemanticIndex && !effectiveVisionImage && !voiceFastMode),
+        allowVisualRecall: Boolean(this.conversationPersistenceReady),
+        recentVisuals,
         visualRecallContext: this.turnOrchestrator.recallContext.snapshot()?.query ?? null,
       })
 
       if (!result?.ok) return result
 
       if (result.visualRecall) {
-        const followUp = this.turnOrchestrator.planFollowUp(ownerText)
-        const recentOwnerMessages = recentMessages.filter((message) => message.role === 'user' && typeof message.content === 'string').slice(-3)
-        // A planner can resolve an omitted named subject, but only owner text
-        // grounds that name. Do not execute its invented appearance/scene terms.
-        const contextualNames = readConfirmedVisualNames(this.memory, result.visualRecall.query).names
-          .filter((name) => !ownerText.includes(name) && recentOwnerMessages.some((message) => message.content.includes(name)))
-        const refersToEarlierSubject = readConfirmedVisualNames(this.memory, ownerText).names.length === 0
-          && (/(?:他|她|它|这个|那个|这只|那只)/u.test(ownerText) || contextualNames.length > 0)
-        const ownerContext = refersToEarlierSubject
-          ? recentOwnerMessages.map((message) => message.content).join('\n')
-          : ''
-        // Carry the owner's antecedent through search, each inspection and the
-        // final summary. Assistant descriptions and planner inventions are not
-        // evidence for the target or its appearance.
-        const recallQuery = followUp?.query ?? (ownerContext
-          ? `${ownerText}\n当前指代的主人前文（最新陈述优先）：\n${ownerContext}`
-          : ownerText)
+        const originalQuestion = result.visualRecall.originalQuestion
+        const groundedQuestion = typeof originalQuestion === 'string'
+          && recentMessages.some((message) => message.role === 'user' && message.content === originalQuestion)
+          ? originalQuestion : null
+        const taskUserText = groundedQuestion && groundedQuestion !== ownerText
+          ? `主人此前尚待回答的问题：${groundedQuestion}\n主人本轮补充：${ownerText}` : ownerText
         const recalledResult = await this.runVisualTurn({ turnId, emit, userText: ownerText, source,
-          // The model chooses the tool. Search constraints come from the owner:
-          // live tests showed the planner inventing another cat's coat color.
-          toolRecall: { ...result.visualRecall, query: recallQuery,
-            preamble: result.text, ownerMessageStored: Boolean(ownerMessage), startedAt } })
+          toolRecall: { ...result.visualRecall, taskUserText,
+            preamble: result.text, ownerMessageStored: Boolean(ownerMessage), ownerMessageId: ownerMessage?.id, startedAt } })
         return { ...recalledResult, visualTurn: true }
       }
       this.turnOrchestrator.clearVisualRecallContext()
@@ -1328,29 +1261,8 @@ export class PetRuntime {
         attachment = stored.attachment
         normalized = normalizeVisionImage(image)
       }
-      if (normalized) {
-        const currentAttachment = attachment ?? await this.conversationStore.saveAttachment({ image: normalized })
-        return this.runVisualTurn({ turnId, emit, userText, attachment: currentAttachment, source })
-      }
-      // D-022: explicit long-term visual references take priority over the recent
-      // resolver's generic-boilerplate overlapScore, so they reach the long-term
-      // resolver instead of being short-circuited to a wrong recent image.
-      const needsRecallPlan = this.visualSemanticIndex && needsVisualRecallTaskPlan(userText)
-      if (!needsRecallPlan && detectLongTermVisualIntent(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      if (!needsRecallPlan && isExplicitVisualSearch(userText)) return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      const recalled = !needsRecallPlan && await this.recentVisualResolver.resolveFromStore(this.conversationStore, userText)
-      if (recalled?.matched || recalled?.reason === 'ambiguous-visual-reference') return this.runVisualTurn({ turnId, emit, userText, attachment: null })
-      const followUp = !needsRecallPlan && this.turnOrchestrator.planFollowUp(userText)
-      if (followUp) {
-        const preResolve = this.brain?.visualSearch ? { status: followUp.retryOnNone ? 'matched' : 'defer' }
-          : await this.longTermVisualResolver.resolve(followUp.query, { limit: 8 })
-        if (this.#shouldRouteVisualFollowUp(followUp, preResolve)) {
-          return this.runVisualTurn({ turnId, emit, userText, attachment: null, followUp: { ...followUp, preResolve } })
-        }
-        if (!this.brain?.visualSearch) this.turnOrchestrator.clearVisualRecallContext()
-      }
       emit('turn_started', { mode: 'text' }); emit('thinking', {})
-      const result = await this.chat(userText, null, null, { turnId, source, emit })
+      const result = await this.chat(userText, normalized, attachment, { turnId, source, emit })
       if (!result?.ok) return result
       if (result.visualTurn) return result
       const replies = Array.isArray(result.replyMessages) && result.replyMessages.length ? result.replyMessages : [result.text]

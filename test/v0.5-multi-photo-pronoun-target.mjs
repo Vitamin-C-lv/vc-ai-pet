@@ -11,12 +11,8 @@ const OWNER_TEXTS = [
   '你不知道黑莓的品种吗，我说的猫猫就是黑莓',
   '那你去图库里面看看总结一下他呗',
 ]
-const fabricatedQuery = '黑莓品种体重和猫猫日常照片'
-const expectedQuery = OWNER_TEXTS[2]
-  + '\n当前指代的主人前文（最新陈述优先）：\n'
-  + OWNER_TEXTS[0]
-  + '\n'
-  + OWNER_TEXTS[1]
+const expectedQuery = '黑莓的照片 外观 品种'
+const expectedTask = `主人此前尚待回答的问题：${OWNER_TEXTS[1]}\n主人本轮补充：${OWNER_TEXTS[2]}`
 
 const root = await mkdtemp(join(tmpdir(), 'vc-ai-pet-multi-photo-routing-'))
 const runtime = new PetRuntime({ sandboxRoot: root })
@@ -59,8 +55,7 @@ async function runTurn(userText) {
 try {
   await runtime.initialize()
 
-  // This confirmed identity is what lets the existing caption filter remove
-  // generic wallpaper and another named cat from semantic candidates.
+  // Confirmed owner identity remains evidence for model verification.
   runtime.memory.remember('fact', '我们家的猫叫黑莓', 2, {
     provenance: { source: 'USER_STATEMENT', evidence: 'confirmed' },
   })
@@ -102,7 +97,8 @@ try {
           tool: 'search_visual_memory',
           goal: 'summarize_photos',
           photoCount: 3,
-          query: fabricatedQuery,
+          query: expectedQuery,
+          originalQuestion: OWNER_TEXTS[1],
         },
         memoryCandidate: null,
         rawMemoryCandidate: null,
@@ -113,6 +109,7 @@ try {
       assert.fail('semantic retrieval already supplies candidate captions')
     },
     async visualStep(request) {
+      const accepted = request.ownerCaption.startsWith('黑莓')
       visualSteps.push({
         userText: request.userText,
         recallQuery: request.recallQuery,
@@ -125,8 +122,8 @@ try {
         action: 'answer',
         nextVisualId: '',
         focus: '黑莓和所在环境',
-        replyMessages: ['单图回复不能提前成为总结。'],
-        match: 'match',
+        replyMessages: accepted ? ['单图回复不能提前成为总结。'] : [],
+        match: accepted ? 'match' : 'mismatch',
       }
     },
     async summarizeVisualRecall(request) {
@@ -155,20 +152,16 @@ try {
   assert.equal(indexRequests.length, 1)
   assert.equal(indexRequests[0].query, expectedQuery)
   assert.ok(indexRequests[0].query.includes('黑莓'))
-  assert.ok(indexRequests[0].query.includes(OWNER_TEXTS[2]))
-  assert.ok(indexRequests[0].query.includes(OWNER_TEXTS[1]))
-  assert.ok(indexRequests[0].query.includes(OWNER_TEXTS[0]))
-  assert.equal(indexRequests[0].query.includes(fabricatedQuery), false, 'planner-generated search constraints are not executed')
   assert.equal(indexRequests[0].options.recallGoal, 'summarize_photos')
   assert.equal(indexRequests[0].options.limit, MAX_VISUAL_INSPECTIONS_PER_TURN)
 
-  assert.equal(visualSteps.length, 3)
-  assert.deepEqual(visualSteps.map((request) => request.ownerCaption), candidates.slice(2).map((candidate) => candidate.userText),
-    'the generic wallpaper and the unrelated named cat are removed by the confirmed-name filter')
-  assert.ok(visualSteps.every((request) => request.userText === OWNER_TEXTS[2]))
+  assert.equal(visualSteps.length, 5)
+  assert.deepEqual(visualSteps.map((request) => request.ownerCaption), candidates.map((candidate) => candidate.userText),
+    'the model inspects and rejects unrelated candidates, without a caption keyword filter')
+  assert.ok(visualSteps.every((request) => request.userText === expectedTask))
   assert.ok(visualSteps.every((request) => request.recallQuery === expectedQuery))
   assert.equal(summaries.length, 1)
-  assert.equal(summaries[0].userText, OWNER_TEXTS[2])
+  assert.equal(summaries[0].userText, expectedTask)
   assert.equal(summaries[0].recallQuery, expectedQuery)
   assert.deepEqual(summaries[0].observations.map((item) => item.attachmentId),
     candidates.slice(2).map((candidate) => candidate.attachmentId))

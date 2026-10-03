@@ -1,20 +1,9 @@
-import { buildVisualCandidatePool, detectVisualIntent, detectVisualRecallCorrection, isDirectRecentVisualReference, isExplicitPreviousVisualReference, isExplicitVisualSearch, isImmediatePreviousVisualReference, isVisualIdentityStatement, RecentVisualResolver } from '../conversation/recent-visual-context.js'
-import { detectLongTermVisualIntent } from '../vision/long-term-visual-recall.js'
-import { hasVisualContentDescription } from '../vision/visual-keywords.js'
 import { MAX_VISUAL_INSPECTIONS_PER_TURN, VisualWorkingSession } from '../vision/visual-working-session.js'
-import { sanitizeSafeTraceText } from './pet-turn-events.js'
-import { detectContextualVisualRecallFollowUp, VisualRecallContext } from './visual-recall-context.js'
-import { readConfirmedVisualNames, captionIdentityLabels, captionMatchesNamedSubject } from '../memory/visual-naming-context.js'
-
-function buildPrimaryComparisonPair(pool, intent) {
-  if (intent !== 'comparison' || !Array.isArray(pool)) return []
-  const current = pool.find((candidate) => candidate?.relation === 'current')
-  const previous = pool.find((candidate) => candidate?.relation === 'previous' && candidate.attachmentId !== current?.attachmentId)
-  return current && previous ? [current, previous] : []
-}
+import { visualTermsFor } from '../vision/visual-keywords.js'
+import { VisualRecallContext } from './visual-recall-context.js'
 
 export class PetTurnOrchestrator {
-  constructor({ runtime, resolver = new RecentVisualResolver(), longTermResolver = null, experienceStore = null, semanticIndex = null, recallContext = null, now = () => Date.now() } = {}) {
+  constructor({ runtime, resolver = null, longTermResolver = null, experienceStore = null, semanticIndex = null, recallContext = null, now = () => Date.now() } = {}) {
     this.runtime = runtime
     this.resolver = resolver
     this.longTermResolver = longTermResolver
@@ -24,245 +13,78 @@ export class PetTurnOrchestrator {
     this.now = now
   }
 
-  async runVisual({ turnId, emit, userText, attachment, followUp = null, source = null, toolRecall = null }) {
-    const startedAt = toolRecall?.startedAt ?? this.now()
-    const store = this.runtime.conversationStore
-    if (attachment) this.recallContext.clear()
-    const messages = typeof store.listForRecentVisualRecall === 'function'
-      ? await store.listForRecentVisualRecall()
-      : typeof store.list === 'function'
-        ? await store.list(500)
-        : []
-    let pool = buildVisualCandidatePool({ currentAttachment: attachment, userText, messages })
-    const resolved = await this.resolver.resolve(userText, messages)
-    const correction = !attachment && detectVisualRecallCorrection(userText)
-    const frame = this.recallContext.active() ? this.recallContext.snapshot() : null
-    const previousMessages = messages.filter((message) => message.turnId !== turnId)
-    const lastMedia = previousMessages.findLast((message) => message.role === 'assistant' && message.kind === 'media_ref')
-    const lastShown = correction && lastMedia ? previousMessages
-      .filter((message) => message.role === 'assistant' && message.kind === 'media_ref')
-      .filter((message) => lastMedia.turnId ? message.turnId === lastMedia.turnId : message === lastMedia)
-      .map((message) => message.sourceAttachmentId ?? message.attachment?.id).filter(Boolean) : []
-    const excludedAttachmentIds = correction
-      ? [...new Set([...(frame?.excludedAttachmentIds ?? []), ...lastShown])].slice(-5)
-      : followUp ? frame?.excludedAttachmentIds ?? [] : []
-    const ownerCorrection = !attachment && !correction && isVisualIdentityStatement(userText)
-      && resolved?.matched && resolved.reason === 'active-visual-reference'
-    if (ownerCorrection) pool = pool.filter((candidate) => candidate.attachmentId === resolved.attachmentId)
-    const intent = detectVisualIntent(userText, { hasCurrent: Boolean(attachment), candidateCount: pool.length - (attachment ? 1 : 0) })
-    const comparisonPair = buildPrimaryComparisonPair(pool, intent)
-    // A new upload is the subject unless the owner explicitly refers to an
-    // earlier image or asks for a comparison.
-    if (attachment && intent !== 'comparison' && !isExplicitPreviousVisualReference(userText)) pool = pool.filter((candidate) => candidate.relation === 'current')
-    if (!toolRecall) { emit('turn_started', { mode: 'visual' }); emit('thinking', {}) }
-    const historicalCandidateCount = pool.length - (attachment ? 1 : 0)
-    const explicitPreviousReference = intent === 'temporal_followup' && isImmediatePreviousVisualReference(userText)
-    const unresolvedHistoricalReference = intent === 'temporal_followup'
-      && historicalCandidateCount > 0
-      && !resolved?.matched
-      && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
-    if (!toolRecall && !correction && (intent === 'ambiguous' || unresolvedHistoricalReference
-      || (intent === 'none' && resolved?.reason === 'ambiguous-visual-reference')
-      || (intent === 'comparison' && comparisonPair.length < 2))) {
-      return this.#finishAmbiguous({
-        turnId,
-        emit,
-        userText,
-        attachment,
-        startedAt,
-        recordRecallContext: !attachment && (intent === 'ambiguous' || unresolvedHistoricalReference),
-      })
+  async runVisual({ turnId, emit, userText, source = null, toolRecall = null }) {
+    if (!toolRecall) throw Object.assign(new Error('visual tool requires a model decision'), { code: 'PET_VISUAL_DECISION_REQUIRED' })
+    return this.#runModelSelectedVisual({ turnId, emit, userText, source, toolRecall,
+      startedAt: toolRecall.startedAt ?? this.now(), store: this.runtime.conversationStore })
+  }
+
+  async #runModelSelectedVisual({ turnId, emit, userText, source, toolRecall, startedAt, store }) {
+    const { query, taskUserText = userText, goal: recallGoal, photoCount, excludeAttachmentIds = [] } = toolRecall
+    if (!toolRecall.ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId, source })
+    const preamble = toolRecall.preamble || '花花再仔细看看。'
+    await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
+    emit('assistant_message', { text: preamble })
+    if (toolRecall.tool === 'search_visual_memory') {
+      return this.#runIndexedVisual({ turnId, emit, userText, taskUserText, query, recallGoal, photoCount,
+        excludedAttachmentIds: excludeAttachmentIds, startedAt, store })
     }
-    const longTermQuery = correction
-      ? correction.query ?? frame?.query ?? userText
-      : toolRecall?.query ?? followUp?.query ?? userText
-    const ownerMessageStored = toolRecall?.ownerMessageStored === true
-    // D-022: an explicit long-term visual reference always reaches the long-term
-    // resolver, even when the recent resolver produced a generic-boilerplate
-    // match; only the recent-only historical path still defers to resolved.matched.
-    const longTermIntent = !attachment
-      ? (followUp ? { mode: 'long-term-visual' } : detectLongTermVisualIntent(userText))
-      : null
-    const semanticRequest = !attachment && (toolRecall || longTermIntent || isExplicitVisualSearch(userText)
-      || (intent === 'historical_visual' && !isDirectRecentVisualReference(userText, messages)
-        && !/(这张图|这张图片|这张照片|这个图|那张图|那张照片)/u.test(userText)))
-    if (semanticRequest && !toolRecall && !hasVisualContentDescription(longTermQuery)) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt, ownerMessageStored, recordRecallContext: true })
-    }
-    if (semanticRequest && this.semanticIndex && this.runtime.brain?.visualSearch) {
-      const preamble = toolRecall?.preamble || '花花去图库里找找，再仔细看看有没有认错～'
-      if (!ownerMessageStored) {
-        await store.appendMessage({ role: 'user', text: userText, turnId })
+    if (toolRecall.ownerCaption && toolRecall.attachmentIds.length === 1 && toolRecall.ownerMessageId) {
+      const experience = await this.experienceStore?.findExperienceByAttachmentId(toolRecall.attachmentIds[0])
+      if (experience) {
+        await this.experienceStore.recordEvent({ experienceId: experience.experienceId, turnId,
+          kind: 'owner_caption', summary: userText, evidence: 'raw', eventId: toolRecall.ownerMessageId,
+          occurredAt: startedAt })
+        await this.experienceStore.indexTerms(experience.experienceId, visualTermsFor(userText, { boost: 3 }),
+          { sourceKind: 'user_text', sourceRef: toolRecall.ownerMessageId })
       }
-      await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
-      emit('assistant_message', { text: preamble })
-      return this.#runIndexedVisual({ turnId, emit, userText, query: longTermQuery,
-        recallGoal: toolRecall?.goal ?? 'find_photo', photoCount: toolRecall?.photoCount,
-        excludedAttachmentIds, retryCorrection: Boolean(correction), startedAt, store })
     }
-    if (semanticRequest && !longTermIntent) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
-    }
-    if (!attachment && !longTermIntent && intent === 'historical_visual' && !resolved?.matched) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt, recordRecallContext: true })
-    }
-    if (!attachment && longTermIntent) {
-      return this.#runLongTermVisual({ turnId, emit, userText, resolveQuery: longTermQuery, followUp, startedAt, store })
-    }
-    if (pool.length === 0) {
-      return this.#finishAmbiguous({
-        turnId,
-        emit,
-        userText,
-        attachment,
-        startedAt,
-        recordRecallContext: !attachment && intent === 'ambiguous',
-      })
-    }
-    const resolvedVisual = pool.find((candidate) => candidate.attachmentId === resolved?.attachmentId)?.visualId
-    const preferResolvedHistorical = resolvedVisual && (!attachment || intent === 'historical_visual' || explicitPreviousReference)
-    const first = preferResolvedHistorical
-      ? resolvedVisual
-      : attachment || intent === 'comparison'
-        ? pool[0]?.visualId
-        : resolvedVisual ?? pool[0]?.visualId
-    // An explicit image reference/naming correction identifies one picture;
-    // a failed check must not silently switch to another image in the pool.
-    if (!attachment && intent !== 'comparison' && (ownerCorrection || isDirectRecentVisualReference(userText, messages))) {
-      pool = pool.filter((candidate) => candidate.visualId === first)
-    }
-    await store.appendMessage({ role: 'user', text: userText, attachment, turnId, source,
-      ...(ownerCorrection ? { sourceAttachmentId: resolved.attachmentId, activityType: 'visual_owner_caption' } : {}) })
-    if (ownerCorrection) {
-      pool[0].userText += `\n${userText}`
-      this.recallContext.clear()
-    }
-    // The current upload must become an occurrence before VisualWorkingSession
-    // records its inspection/observation event. This is still archive-only and
-    // zero-model; the outer runVisualTurn performs the idempotent follow-up sync.
-    if (typeof this.runtime.syncVisualExperiences === 'function') await this.runtime.syncVisualExperiences()
-    await this.#appendMemoryRecall({ turnId, emit, userText, store })
-    const session = new VisualWorkingSession({
-      turnId,
-      userText,
-      candidatePool: pool,
-      comparison: intent === 'comparison',
-      comparisonPair,
-      conversationStore: store,
-      brain: this.runtime.brain,
-      emit,
-      now: this.now,
-      experienceStore: this.experienceStore,
+    const messages = await store.listForRecentVisualRecall()
+    const pool = toolRecall.attachmentIds.map((attachmentId, index) => {
+      const owner = messages.findLast((row) => row.role === 'user' && row.attachment?.id === attachmentId)
+      return { visualId: `V${index}`, attachmentId, relation: 'recalled',
+        userText: [owner?.text, toolRecall.ownerCaption ? userText : ''].filter(Boolean).join('\n'),
+        timestamp: owner?.timestamp }
     })
-    const result = await session.run(first)
+    const session = new VisualWorkingSession({ turnId, userText, taskUserText, recallQuery: query,
+      candidatePool: pool, conversationStore: store, brain: this.runtime.brain, emit, now: this.now,
+      experienceStore: this.experienceStore, recallGoal, photoCount })
+    const result = await session.run(pool[0]?.visualId)
     if (!result.ok) return result
-    return this.#finishVisualResult({ turnId, emit, userText, attachment, startedAt, result })
+    this.recallContext.record({ mode: 'long_term_visual_recall', query: taskUserText,
+      result, excludedAttachmentIds: excludeAttachmentIds })
+    return this.#finishVisualResult({ turnId, emit, userText, attachment: null, startedAt, result })
   }
 
   recallContextActive() {
     return this.recallContext.active()
   }
 
-  planFollowUp(userText) {
-    if (!this.recallContext.active()) return null
-    const detected = detectContextualVisualRecallFollowUp(userText)
-    if (!detected) return null
-    const query = this.recallContext.buildFollowUpQuery({ ...detected, text: userText })
-    if (!query) return null
-    return {
-      kind: detected.kind,
-      query,
-      subject: detected.subject,
-      subjectCorrection: detected.subjectCorrection === true,
-      clarification: detected.clarification === true,
-      retryOnNone: detected.subjectCorrection === true || detected.clarification === true,
-    }
-  }
-
   clearVisualRecallContext() {
     this.recallContext.clear()
   }
 
-  async #appendMemoryRecall({ turnId, emit, userText, store }) {
-    const recalledCandidates = String(userText ?? '').trim()
-      ? (this.runtime.memory?.recall?.(userText, 2, { bumpHits: false }) ?? [])
-      : []
-    const recalledMemory = (Array.isArray(recalledCandidates) ? recalledCandidates : [])
-      .filter((item) => ['user', 'project', 'fact', 'lesson', 'topic'].includes(item?.level))
-    for (const memory of recalledMemory) {
-      const memorySource = String(memory?.source ?? memory?.sourceKind ?? memory?.provenance?.source ?? '').toLowerCase()
-      const provenance = memory?.provenance?.evidence === 'inferred'
-        || ['dream', 'reflection', 'inferred', 'dream_derived', 'reflection_derived'].includes(memorySource)
-        ? 'inferred'
-        : 'confirmed'
-      const summary = sanitizeSafeTraceText(memory.content, 180)
-      if (!summary) continue
-      const recallEvent = emit('memory_recall', { summary, provenance })
-      const text = sanitizeSafeTraceText(`${provenance === 'inferred' ? '联想到：' : '想起：'}${summary}`, 300)
-      await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'memory_recall', provenance, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text })
-    }
-  }
-
-  async #runIndexedVisual({ turnId, emit, userText, query, recallGoal, photoCount, startedAt, store, excludedAttachmentIds = [], retryCorrection = false }) {
+  async #runIndexedVisual({ turnId, emit, userText, taskUserText = userText, query, recallGoal, photoCount, startedAt, store, excludedAttachmentIds = [] }) {
     let resolved
     try { resolved = await this.semanticIndex.search(query, { limit: MAX_VISUAL_INSPECTIONS_PER_TURN, recallGoal, excludedAttachmentIds }) } catch {
-      return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, excludedAttachmentIds, unavailable: true })
+      return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: taskUserText, excludedAttachmentIds, unavailable: true })
     }
-    const { names } = readConfirmedVisualNames(this.runtime.memory, query)
     const pool = (resolved?.candidates ?? []).slice(0, MAX_VISUAL_INSPECTIONS_PER_TURN)
       .filter((candidate) => !excludedAttachmentIds.includes(candidate.attachmentId))
-      .filter((candidate) => {
-        if (!names.length) return true
-        const caption = candidate.userText ?? ''
-        if (['describe_subject', 'summarize_photos'].includes(recallGoal)) return captionMatchesNamedSubject(caption, names)
-        const labels = captionIdentityLabels(caption)
-        return !labels.length || labels.some((label) => names.some((name) => label.startsWith(name)))
-      })
       .map((candidate, index) => ({ ...candidate, visualId: `V${index}`, relation: 'recalled' }))
     // The embedding model already screens thumbnails. A second VLM preview
     // gate rejected clear matches in live tests; inspect the leading originals.
-    const ranked = pool.slice(0, recallGoal === 'summarize_photos' || retryCorrection ? MAX_VISUAL_INSPECTIONS_PER_TURN : 2)
-    if (ranked.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: query, excludedAttachmentIds, unavailable: resolved?.status === 'index-pending' })
+    const ranked = pool.slice(0, recallGoal === 'summarize_photos' || excludedAttachmentIds.length > 0 ? MAX_VISUAL_INSPECTIONS_PER_TURN : 2)
+    if (ranked.length === 0) return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored: true, recallQuery: taskUserText, excludedAttachmentIds, unavailable: resolved?.status === 'index-pending' })
     return this.#runLongTermVisual({
-      turnId, emit, userText, startedAt, store, resolveQuery: query, recallGoal, photoCount, ownerMessageStored: true, excludedAttachmentIds,
+      turnId, emit, userText, taskUserText, startedAt, store, resolveQuery: query, recallGoal, photoCount, ownerMessageStored: true, excludedAttachmentIds,
       preResolved: { status: 'matched', winner: ranked[0], candidates: ranked },
     })
   }
 
-  async #runLongTermVisual({ turnId, emit, userText, resolveQuery = userText, followUp = null, preResolved = null, startedAt, store, recallGoal = 'find_photo', photoCount, ownerMessageStored = false, excludedAttachmentIds = [] }) {
-    if (!preResolved && !followUp && (!this.longTermResolver || typeof this.longTermResolver.resolve !== 'function')) {
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
-    }
-    if (followUp) this.recallContext.consume({ ...followUp, text: userText })
+  async #runLongTermVisual({ turnId, emit, userText, taskUserText = userText, resolveQuery = userText, preResolved, startedAt, store, recallGoal = 'find_photo', photoCount, ownerMessageStored = false, excludedAttachmentIds = [] }) {
     const contextUses = this.recallContext.snapshot()?.uses ?? 0
-    const result = preResolved ?? followUp?.preResolve ?? await this.longTermResolver.resolve(resolveQuery, { limit: 8 })
-    if (result?.status === 'ambiguous') {
-      this.recallContext.record({
-        mode: 'visual_recall_ambiguous',
-        query: resolveQuery,
-        result,
-        subjectCorrection: followUp?.subjectCorrection ? followUp.subject : null,
-        clarificationRequested: true,
-        uses: contextUses,
-      })
-      return this.#finishAmbiguous({ turnId, emit, userText, attachment: null, startedAt })
-    }
-    if (result?.status !== 'matched' || !result.winner) {
-      if (followUp?.retryOnNone === true) {
-        this.recallContext.record({
-          mode: 'visual_recall_ambiguous',
-          query: resolveQuery,
-          result,
-          subjectCorrection: followUp?.subjectCorrection ? followUp.subject : null,
-          clarificationRequested: followUp?.clarification === true || followUp?.subjectCorrection === true,
-          uses: contextUses,
-        })
-      } else {
-        this.recallContext.clear()
-      }
-      return this.#finishLongTermNone({ turnId, emit, userText, startedAt })
-    }
-
+    const result = preResolved
     const ranked = [result.winner, ...(Array.isArray(result.candidates) ? result.candidates : [])]
     const candidateAttachments = [
       ...ranked.map((candidate) => ({ candidate, attachmentId: candidate?.attachmentId })),
@@ -284,24 +106,15 @@ export class PetTurnOrchestrator {
       if (recalledPool.length >= MAX_VISUAL_INSPECTIONS_PER_TURN) break
     }
     if (recalledPool.length === 0) {
-      const attachmentId = result.winner.attachmentId ?? null
-      const recallCaption = '🐾 花花找到一条旧记录，但原图已经找不到了……'
-      const recallEvent = emit('visual_recall', { sourceAttachmentId: attachmentId, caption: recallCaption })
-      await store.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_recall', sourceAttachmentId: attachmentId, activitySeq: recallEvent?.seq, activityAt: recallEvent?.at, turnId, text: recallCaption })
-      const text = '主人，花花记得以前好像见过，可是原图找不到了，没办法重新确认哦。'
-      const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
-      if (!ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId })
-      await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
-      this.runtime.conversation.append(userText, text)
-      emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
-      return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
+      return this.#finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored,
+        recallQuery: taskUserText, excludedAttachmentIds, failureReason: '找到了旧记录，但对应原图已不可读取，未完成核验' })
     }
 
     if (!ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId })
-    if (!preResolved) await this.#appendMemoryRecall({ turnId, emit, userText, store })
     const session = new VisualWorkingSession({
       turnId,
       userText,
+      taskUserText,
       recallQuery: resolveQuery,
       candidatePool: recalledPool,
       comparison: false,
@@ -323,7 +136,7 @@ export class PetTurnOrchestrator {
       return visualResult
     }
     this.recallContext.record({ mode: visualResult.verifiedAttachmentId ? 'long_term_visual_recall' : 'visual_recall_ambiguous',
-      query: resolveQuery, result, clarificationRequested: !visualResult.verifiedAttachmentId,
+      query: taskUserText, result, clarificationRequested: !visualResult.verifiedAttachmentId,
       uses: contextUses, excludedAttachmentIds })
     return this.#finishVisualResult({ turnId, emit, userText, attachment: null, startedAt, result: visualResult })
   }
@@ -375,9 +188,14 @@ export class PetTurnOrchestrator {
     }
   }
 
-  async #finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored = false, recallQuery = null, unavailable = false, excludedAttachmentIds = [] }) {
-    const text = unavailable ? '花花的图库检索刚刚没准备好，这次先不发图，等恢复后再帮主人找～'
-      : '花花暂时没有找到能确认的那张照片，主人能再说说特征吗？'
+  async #finishLongTermNone({ turnId, emit, userText, startedAt, ownerMessageStored = false, recallQuery = null, unavailable = false, excludedAttachmentIds = [], failureReason = null }) {
+    const reply = await this.runtime.brain.reply({ identity: this.runtime.identitySnapshot(),
+      state: this.runtime.snapshot(), userText: recallQuery ?? userText,
+      recentMessages: this.runtime.conversation.messages(), allowVisualRecall: false,
+      toolResultContext: failureReason ?? (unavailable ? '图库检索服务暂时不可用，未返回已核验照片'
+        : '候选为空或不存在可读取的图片，未找到可核验照片'), now: this.now() })
+    if (!reply?.ok) return reply
+    const text = reply.text
     if (recallQuery) this.recallContext.record({ mode: 'visual_recall_ambiguous', query: recallQuery,
       result: { status: 'none' }, clarificationRequested: true, excludedAttachmentIds })
     const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
@@ -388,21 +206,4 @@ export class PetTurnOrchestrator {
     return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
   }
 
-  async #finishAmbiguous({ turnId, emit, userText, attachment = null, startedAt, recordRecallContext = false, ownerMessageStored = false }) {
-    const text = '主人说的是哪一张呀？花花怕认错，能再说得具体一点吗？'
-    const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
-    if (recordRecallContext) {
-      this.recallContext.record({
-        mode: 'visual_recall_ambiguous',
-        query: userText,
-        result: { status: 'ambiguous' },
-        clarificationRequested: true,
-      })
-    }
-    if (!ownerMessageStored) await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, attachment, turnId })
-    await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
-    this.runtime.conversation.append(attachment ? `[主人发送了一张图片] ${userText}` : userText, text)
-    emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
-    return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
-  }
 }

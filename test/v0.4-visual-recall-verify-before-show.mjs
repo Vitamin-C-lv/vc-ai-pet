@@ -145,15 +145,14 @@ try {
   }
   const orchestrator = new PetTurnOrchestrator({
     runtime,
-    longTermResolver: { async resolve() {
-      return { status: 'matched', winner: groupedWinner, candidates: [groupedWinner, rankedCandidates[1]] }
-    } },
+    semanticIndex: { async search() { return { candidates: [groupedWinner, rankedCandidates[1]] } } },
   })
   const routed = await orchestrator.runVisual({
     turnId: 'recall-verify-routed',
     userText: '你记得以前那张黑莓在纸箱里的照片吗？',
     attachment: null,
     emit(type, payload) { routedEvents.push({ type, payload }); return { seq: routedEvents.length, at: routedEvents.length } },
+    toolRecall: {tool:'search_visual_memory',query:'纸箱里的猫',goal:'find_photo'},
   })
   assert.equal(routed.ok, true)
   assert.equal(routedCalls.length, 2)
@@ -184,6 +183,7 @@ try {
   const semanticResult = await semanticOrchestrator.runVisual({
     turnId: 'recent-semantic-verify', userText: '帮我找猫在纸箱里的照片', attachment: null,
     emit(type, payload) { semanticEvents.push({ type, payload }) },
+    toolRecall: {tool:'search_visual_memory',query:'纸箱里的猫',goal:'find_photo'},
   })
   assert.equal(semanticResult.ok, true)
   assert.equal(semanticSearchCalls.length, 0, 'semantic index replaces VLM gallery screening')
@@ -220,6 +220,7 @@ try {
   const galleryResult = await galleryOrchestrator.runVisual({
     turnId: 'gallery-semantic-verify', userText: '帮我找纸箱里的猫照片', attachment: null,
     emit(type, payload) { galleryEvents.push({ type, payload }) },
+    toolRecall: {tool:'search_visual_memory',query:'纸箱里的猫',goal:'find_photo'},
   })
   assert.equal(galleryResult.ok, true)
   assert.equal(gallerySearchCalls.length, 0, 'no VLM preview gate after semantic retrieval')
@@ -228,25 +229,23 @@ try {
   assert.deepEqual(galleryEvents.filter(({ type }) => type === 'visual_image').map(({ payload }) => payload.sourceAttachmentId), [groupedTarget.id])
   const searchCallsBeforeBareReference = gallerySearchCalls.length
   const bareEvents = []
-  const bareReference = await galleryOrchestrator.runVisual({
-    turnId: 'gallery-bare-reference', userText: '你记得以前那张照片吗', attachment: null,
-    emit(type, payload) { bareEvents.push({ type, payload }) },
-  })
-  assert.equal(bareReference.ok, true)
+  await assert.rejects(galleryOrchestrator.runVisual({
+    turnId:'gallery-bare-reference',userText:'你记得以前那张照片吗',emit() {},
+  }), {code:'PET_VISUAL_DECISION_REQUIRED'}, 'the executor cannot guess a tool without a model decision')
   assert.equal(gallerySearchCalls.length, searchCallsBeforeBareReference)
-  assert.equal(bareEvents.some(({ type }) => type === 'visual_image'), false)
-  assert.match(bareReference.text, /哪一张/u)
+  assert.equal(bareEvents.some(({type})=>type==='visual_image'),false)
 
   const noMatchEvents = []
   const noMatchOrchestrator = new PetTurnOrchestrator({
     runtime: { ...runtime, brain: makeBrain(['mismatch', 'uncertain'], []) },
-    longTermResolver: { async resolve() { return { status: 'matched', winner: rankedCandidates[0], candidates: rankedCandidates } } },
+    semanticIndex: { async search() { return { candidates: rankedCandidates } } },
   })
   const noMatchResult = await noMatchOrchestrator.runVisual({
     turnId: 'recall-verify-routed-none',
     userText: '你记得以前那张黑莓在纸箱里的照片吗？',
     attachment: null,
     emit(type, payload) { noMatchEvents.push({ type, payload }) },
+    toolRecall: {tool:'search_visual_memory',query:'纸箱里的猫',goal:'find_photo'},
   })
   assert.equal(noMatchResult.ok, true)
   assert.match(noMatchResult.text, /先不发图/u)

@@ -12,6 +12,7 @@ const recallValue = (overrides = {}) => ({
   tool: 'search_visual_memory',
   query: '我们家的猫黑莓 外观',
   goal: 'describe_subject',
+  originalQuestion: '',
   ...overrides,
 })
 const emptyMemory = {
@@ -54,20 +55,31 @@ const invalidRecalls = [
   recallValue({ query: '猫'.repeat(241) }),
   recallValue({ goal: 'remember_subject' }),
   recallValue({ tool: 'search_web' }),
+  recallValue({ photoCount: 1 }),
+  recallValue({ photoCount: 6 }),
   { ...recallValue(), extra: true },
 ]
+const inspectedImageId = 'current-image'
+const inspectImageValue = {
+  tool: 'inspect_visual_memory',
+  query: '这张猫的照片长什么样',
+  goal: 'find_photo',
+  originalQuestion: '',
+  attachmentIds: [inspectedImageId],
+  ownerCaption: false,
+}
 const { brain, requests } = makeChatBrain([
   chatValue(recallValue()),
   chatValue(recallValue({ query: '黑莓 毛色' })),
   ...invalidRecalls.map((value) => chatValue(value)),
-  chatValue(recallValue()),
-  chatValue(recallValue()),
-  chatValue(recallValue()),
   chatValue(null),
-  chatValue(recallValue({ query: '我们家的猫黑莓 毛色' })),
+  chatValue(recallValue({ query: '视觉检索算法怎么工作的' })),
+  chatValue(null),
+  chatValue(null),
+  chatValue(recallValue({ query: '我们家的猫黑莓 毛色', originalQuestion: appearanceQuestion })),
   chatValue(null),
   chatValue(recallValue()),
-  chatValue(recallValue()),
+  chatValue(inspectImageValue),
 ])
 
 const selected = await ask(brain, appearanceQuestion, { allowVisualRecall: true })
@@ -89,19 +101,23 @@ const schema = requests[0].responseFormat.schema
 assert.notStrictEqual(schema, PET_CHAT_RESPONSE_SCHEMA, 'the opt-in response schema is additive')
 assert.equal(schema.properties.visualRecall.anyOf[1].type, 'null')
 const recallObjectSchema = schema.properties.visualRecall.anyOf[0]
-assert.equal(recallObjectSchema.properties.tool.enum[0], 'search_visual_memory')
+assert.deepEqual(recallObjectSchema.properties.tool.enum, ['search_visual_memory', 'inspect_visual_memory'])
 assert.equal(recallObjectSchema.properties.query.maxLength, 240)
 assert.deepEqual(recallObjectSchema.properties.goal.enum, ['describe_subject', 'find_photo', 'summarize_photos'])
+assert.equal(recallObjectSchema.properties.photoCount.minimum, 2)
+assert.equal(recallObjectSchema.properties.photoCount.maximum, 5)
+assert.equal(recallObjectSchema.properties.originalQuestion.maxLength, 1200)
+assert.equal(recallObjectSchema.required.includes('originalQuestion'), true)
 assert.equal(schema.required.includes('visualRecall'), true, 'the enabled schema asks the model to return a tool choice or null')
 const selectedPrompt = requests[0].messages[0].content
-assert.match(selectedPrompt, /以前见过的个人主体长什么样/u)
-assert.match(selectedPrompt, /find_photo/u)
+assert.match(selectedPrompt, /直接回答还是调用图片工具/u)
+assert.match(selectedPrompt, /程序不会按关键词替你选工具/u)
+assert.match(selectedPrompt, /inspect_visual_memory/u)
+assert.match(selectedPrompt, /search_visual_memory/u)
+assert.match(selectedPrompt, /originalQuestion/u)
 assert.match(selectedPrompt, /普通聊天/u)
-assert.match(selectedPrompt, /只有本轮确实需要查回历史照片才能回答时才选择工具/u)
-assert.match(selectedPrompt, /当前上下文没有图片不代表图库没有相关图片/u)
-assert.match(selectedPrompt, /不能仅因为当前没有看到图片/u)
-assert.match(selectedPrompt, /memory\.remember 必须为 false/u)
-assert.match(selectedPrompt, /不要给出任何猜测的外观或照片内容/u)
+assert.match(selectedPrompt, /memory\.remember=false/u)
+assert.match(selectedPrompt, /不提前猜图片内容/u)
 
 for (const invalid of invalidRecalls) {
   const result = await ask(brain, appearanceQuestion, { allowVisualRecall: true })
@@ -109,50 +125,55 @@ for (const invalid of invalidRecalls) {
 }
 
 const capabilityMeta = await ask(brain, '你会看照片吗？', { allowVisualRecall: true })
-assert.equal(capabilityMeta.visualRecall, null, 'filter a model-selected tool for a capability question')
+assert.equal(capabilityMeta.visualRecall, null, 'the model can decline a capability question')
 
 const technicalMeta = await ask(brain, '你的视觉检索算法是怎么工作的？', { allowVisualRecall: true })
-assert.equal(technicalMeta.visualRecall, null, 'filter a model-selected tool for a technical meta question')
+assert.deepEqual(technicalMeta.visualRecall, recallValue({ query: '视觉检索算法怎么工作的' }), 'honor the model-selected tool for a technical meta question')
 
 const responseMeta = await ask(brain, '为什么你看了图片以后像机器人？', { allowVisualRecall: true })
 assert.equal(responseMeta.visualRecall, null, 'filter the known meta question about the pet response style')
 
 const ordinary = await ask(brain, '黑莓好像饿了', { allowVisualRecall: true })
 assert.equal(ordinary.visualRecall, null, 'mentioning a familiar photo subject while discussing current needs is ordinary chat')
-assert.match(requests[10].messages[0].content, /黑莓好像饿了/u, 'the model prompt includes the production false-positive example')
-assert.match(requests[10].messages[0].content, /普通聊天/u, 'ordinary chat is excluded by the model selection prompt')
-assert.equal(requests[10].reasoningEffort, 'low', 'tool-enabled planner calls use the text-chat reasoning profile')
-assert.equal(requests[10].maxTokens, 896)
+assert.match(requests[12].messages[0].content, /黑莓好像饿了/u, 'the model prompt includes an ordinary-chat example')
+assert.match(requests[12].messages[0].content, /普通聊天/u, 'ordinary chat is described for model selection')
+assert.equal(requests[12].reasoningEffort, 'low', 'tool-enabled planner calls use the text-chat reasoning profile')
+assert.equal(requests[12].maxTokens, 896)
 
 const relevantFollowup = await ask(brain, '那毛色呢？', {
   allowVisualRecall: true,
   visualRecallContext: appearanceQuestion,
+  recentMessages: [{ role: 'user', content: appearanceQuestion }],
 })
-assert.deepEqual(relevantFollowup.visualRecall, recallValue({ query: '我们家的猫黑莓 毛色' }))
-const followupPrompt = requests[11].messages[0].content
-assert.match(followupPrompt, /未解决的视觉回忆请求原文/u)
+assert.deepEqual(relevantFollowup.visualRecall, recallValue({ query: '我们家的猫黑莓 毛色', originalQuestion: appearanceQuestion }))
+const followupPrompt = requests[13].messages[0].content
+assert.match(followupPrompt, /未解决的视觉任务/u)
 assert.match(followupPrompt, /你知不知道我们家的猫黑莓长什么样子/u)
-assert.match(followupPrompt, /组合成自包含 query/u)
+assert.match(followupPrompt, /尚待回答的原始问题/u)
+assert.match(followupPrompt, /新话题不继承/u)
 
 const unrelatedFollowup = await ask(brain, '那晚饭呢？', {
   allowVisualRecall: true,
   visualRecallContext: appearanceQuestion,
 })
 assert.equal(unrelatedFollowup.visualRecall, null, 'an unrelated topic stays outside the active visual recall')
-assert.match(requests[12].messages[0].content, /晚饭等无关话题/u)
+assert.match(requests[14].messages[0].content, /晚饭等新话题/u)
 
 const disabled = await ask(brain, appearanceQuestion)
 assert.equal(disabled.visualRecall, null)
-assert.strictEqual(requests[13].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA, 'the base schema stays unchanged when disabled')
-assert.doesNotMatch(requests[13].messages[0].content, /visualRecall/u, 'the tool instructions stay disabled')
-assert.equal(requests[13].reasoningEffort, 'low', 'ordinary text chat keeps its existing profile')
-assert.equal(requests[13].maxTokens, 896)
+assert.strictEqual(requests[15].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA, 'the base schema stays unchanged when disabled')
+assert.doesNotMatch(requests[15].messages[0].content, /visualRecall/u, 'the tool instructions stay disabled')
+assert.equal(requests[15].reasoningEffort, 'low', 'ordinary text chat keeps its existing profile')
+assert.equal(requests[15].maxTokens, 896)
 
-const imageTurn = await ask(brain, '这张猫的照片长什么样？', { image, allowVisualRecall: true })
-assert.equal(imageTurn.visualRecall, null, 'image input uses the normal vision path without a memory search')
-assert.strictEqual(requests[14].responseFormat.schema, PET_CHAT_RESPONSE_SCHEMA)
-assert.equal(requests[14].reasoningEffort, 'medium', 'ordinary user image chat keeps the vision profile')
-assert.equal(requests[14].maxTokens, 768)
+const imageTurn = await ask(brain, '这张猫的照片长什么样？', { image, allowVisualRecall: true,
+  recentVisuals: [{ attachmentId: inspectedImageId, role: 'user', text: '这张猫的照片长什么样？', timestamp: Date.now(), current: true }] })
+assert.deepEqual(imageTurn.visualRecall, inspectImageValue, 'the model may select the current image to inspect')
+const imageSchema = requests[16].responseFormat.schema
+assert.notStrictEqual(imageSchema, PET_CHAT_RESPONSE_SCHEMA, 'image input keeps the model-selected visual tool schema enabled')
+assert.deepEqual(imageSchema.properties.visualRecall.anyOf[0].properties.tool.enum, ['search_visual_memory', 'inspect_visual_memory'])
+assert.equal(requests[16].reasoningEffort, 'medium', 'image tool choice keeps the vision profile')
+assert.equal(requests[16].maxTokens, 768)
 
 const verifyRequests = []
 const namedRecallCalls = []

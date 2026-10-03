@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { LocalBrain } from '../src/brain/local-brain.js'
-import { needsVisualRecallTaskPlan } from '../src/conversation/recent-visual-context.js'
 import { PetRuntime } from '../src/runtime/pet-runtime.js'
 
 const OWNER_REQUESTS = [
@@ -46,24 +45,19 @@ function makeBrain(responses) {
 function recallValue({ query = '黑莓照片', photoCount, goal = 'summarize_photos' } = {}) {
   return {
     tool: 'search_visual_memory',
+    originalQuestion: '',
     query,
     goal,
     ...(photoCount === undefined ? {} : { photoCount }),
   }
 }
 
-// The task-plan route must take photo-summary requests through the model before
-// any recent-image or explicit-search shortcut gets to choose a single image.
-for (const { text } of OWNER_REQUESTS) assert.equal(needsVisualRecallTaskPlan(text), true)
-assert.equal(needsVisualRecallTaskPlan('你记得黑莓长什么样子吗？'), false)
-
 const metaQuestion = '图库里的多张照片总结功能是怎么实现的？'
-assert.equal(needsVisualRecallTaskPlan(metaQuestion), true, 'the route only sends this request for model planning')
 
 const { brain: plannerBrain, requests: plannerRequests } = makeBrain([
   chatValue(recallValue()),
   chatValue(recallValue({ query: '以前黑莓的照片', photoCount: 2 })),
-  chatValue(recallValue({ query: '图库总结原理', photoCount: 2 })),
+  chatValue(null),
   chatValue(recallValue({ photoCount: 1 })),
 ])
 
@@ -96,9 +90,9 @@ assert.deepEqual(plannerSchema.properties.goal.enum, ['describe_subject', 'find_
 assert.deepEqual(plannerSchema.properties.photoCount, { type: 'integer', minimum: 2, maximum: 5 })
 assert.equal(plannerSchema.required.includes('photoCount'), false, 'photoCount stays optional for the default')
 const plannerPrompt = plannerRequests[0].messages[0].content
-assert.match(plannerPrompt, /goal 必须为 "summarize_photos"/u)
-assert.match(plannerPrompt, /“多看几张”默认3/u)
-assert.match(plannerPrompt, /本轮最多5张/u)
+assert.match(plannerPrompt, /summarize_photos/u)
+assert.match(plannerPrompt, /未指定数量默认3/u)
+assert.match(plannerPrompt, /photoCount 指定2到5张/u)
 
 // Exercise the dedicated text-only summary call and its bounded request shape.
 const summaryRequests = []
@@ -209,7 +203,7 @@ try {
       return {
         ok: true,
         text: '花花去图库多看几张，再整理给主人～',
-        visualRecall: { tool: 'search_visual_memory', query: '黑莓照片', goal: 'summarize_photos', photoCount },
+        visualRecall: { tool: 'search_visual_memory', query: userText, goal: 'summarize_photos', photoCount },
       }
     },
     async visualSearch() {
