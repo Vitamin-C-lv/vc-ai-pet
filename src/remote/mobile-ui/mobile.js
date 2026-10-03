@@ -15,6 +15,8 @@ let removeImage
 let imageStatus
 let playView
 let houseView
+let gomokuView
+let gomokuController
 let chatView
 let appHeader
 let petApp
@@ -50,6 +52,7 @@ const KEYBOARD_CLOSE_THRESHOLD = 72
 const SCREEN = globalThis.VcAiPetNavigation?.VC_SCREEN ?? Object.freeze({
   HOME: 'home',
   HOUSE: 'house',
+  GOMOKU: 'gomoku',
   CHAT: 'chat',
   GALLERY: 'gallery',
   GALLERY_DETAIL: 'gallery-detail',
@@ -358,10 +361,11 @@ function renderScreen(screen, params = {}, { direction = 'forward' } = {}) {
     setKeyboardOpen(false)
   }
   currentScreen = nextScreen
-  const views = [playView, houseView, chatView, innerLifeView, visualGalleryView, visualGalleryDetailView]
+  const views = [playView, houseView, gomokuView, chatView, innerLifeView, visualGalleryView, visualGalleryDetailView]
   views.filter(Boolean).forEach((view) => { view.hidden = true })
   const view = nextScreen === SCREEN.HOME ? playView
     : nextScreen === SCREEN.HOUSE ? houseView
+      : nextScreen === SCREEN.GOMOKU ? gomokuView
       : nextScreen === SCREEN.CHAT ? chatView
         : nextScreen === SCREEN.DREAMS ? innerLifeView
           : nextScreen === SCREEN.GALLERY ? visualGalleryView
@@ -377,7 +381,9 @@ function renderScreen(screen, params = {}, { direction = 'forward' } = {}) {
   petApp?.classList.toggle('chat-active', nextScreen === SCREEN.CHAT)
   if (petApp) petApp.dataset.screen = nextScreen
   homeSpriteAnimator?.setActive(nextScreen === SCREEN.HOME && document.visibilityState !== 'hidden')
+  gomokuController?.setActive(nextScreen === SCREEN.GOMOKU)
   const focusTarget = nextScreen === SCREEN.HOUSE ? '#house-back'
+    : nextScreen === SCREEN.GOMOKU ? '#gomoku-back'
     : nextScreen === SCREEN.CHAT ? '#chat-home'
       : nextScreen === SCREEN.DREAMS ? '#inner-life-back'
         : nextScreen === SCREEN.GALLERY ? '#visual-gallery-back'
@@ -766,7 +772,7 @@ function shouldSkipFirstCurrentMedia(sourceAttachmentId, state, count) {
   return Boolean(sourceAttachmentId && state.currentAttachmentId && sourceAttachmentId === state.currentAttachmentId && count === 0)
 }
 
-function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, turnId = null, id = null, messageId = null, showAttachment = true, animate = false } = {}) {
+function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, reasoning = null, turnId = null, id = null, messageId = null, feedback = null, showAttachment = true, animate = false } = {}) {
   const node = document.createElement('article')
   const userMessage = role === 'user'
   const petMessage = role === 'pet' || role === 'assistant'
@@ -806,6 +812,9 @@ function renderMessage({ role, kind = 'dialogue', text = '', attachment = null, 
   }
 
   node.append(bubble)
+  if (petMessage && cleanText && ['dialogue', 'final', 'proactive'].includes(kind)) {
+    globalThis.VcAiPetHeadpat?.attach(node, { id: id ?? messageId, liked: feedback?.headpat === true })
+  }
   const durationText = petMessage ? formatThinkingDuration(reasoning?.durationMs) : ''
   if (durationText) {
     const meta = createThinkingMeta(durationText, turnId)
@@ -838,8 +847,8 @@ function createThinkingMeta(durationText, turnId) {
   return meta
 }
 
-function line(role, text, attachment = null, reasoning = null, turnId = null) {
-  return renderMessage({ role, text, attachment, reasoning, turnId, animate: true })
+function line(role, text, attachment = null, reasoning = null, turnId = null, messageId = null) {
+  return renderMessage({ role, text, attachment, reasoning, turnId, messageId, animate: true })
 }
 
 const TURN_EVENT_TYPES = new Set(['turn_started', 'thinking', 'visual_recall', 'visual_selected', 'visual_image', 'visual_observation', 'visual_compare', 'memory_recall', 'assistant_message', 'turn_completed', 'turn_failed'])
@@ -876,7 +885,7 @@ function renderTurnEvent(event, state = null) {
     if (presentation.mode === 'visual') return null
     return renderMessage({ role: 'assistant', kind: 'activity', text: `${payload.provenance === 'inferred' ? '💭 联想到：' : '🧠 想起：'}${payload.summary ?? ''}` })
   }
-  if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning, event.turnId)
+  if (event?.type === 'assistant_message') return line('pet', payload.text, null, payload.reasoning, event.turnId, payload.messageId)
   if (event?.type === 'turn_completed') {
     thinkingIndicator?.stop()
     const node = document.createElement('article')
@@ -1631,6 +1640,8 @@ function bindDom() {
   imageStatus = document.querySelector('#image-status')
   playView = document.querySelector('#play-view')
   houseView = document.querySelector('#house-view')
+  gomokuView = document.querySelector('#gomoku-view')
+  gomokuController = globalThis.VcAiPetGomoku?.createGomokuController?.({ root: gomokuView })
   chatView = document.querySelector('#chat-view')
   appHeader = document.querySelector('#app-header')
   innerLifeView = document.querySelector('#inner-life-view')
@@ -1664,6 +1675,9 @@ function bindDom() {
   document.querySelector('#chat-open')?.addEventListener('click', () => navigateTo(SCREEN.CHAT))
   document.querySelector('#house-back')?.addEventListener('click', () => navigateBack(SCREEN.HOME))
   document.querySelector('#house-home')?.addEventListener('click', navigateHome)
+  document.querySelector('#house-gomoku-open')?.addEventListener('click', () => navigateTo(SCREEN.GOMOKU))
+  document.querySelector('#gomoku-back')?.addEventListener('click', () => navigateBack(SCREEN.HOUSE))
+  document.querySelector('#gomoku-home')?.addEventListener('click', navigateHome)
   document.querySelector('#inner-life-back')?.addEventListener('click', () => navigateBack(SCREEN.HOME))
   document.querySelector('#inner-life-home')?.addEventListener('click', navigateHome)
   document.querySelector('#inner-life-refresh')?.addEventListener('click', () => { void loadInnerLife() })
@@ -1685,9 +1699,6 @@ function bindDom() {
   diagnosticsClearButton = document.querySelector('#diagnostics-clear')
   diagnosticsCloseButton = document.querySelector('#diagnostics-close')
 
-  document.querySelector('#pet-button').addEventListener('click', () => action('click'))
-  document.querySelector('#play-button').addEventListener('click', () => action('double_click'))
-  document.querySelector('#long-button').addEventListener('click', () => action('long_press'))
   imageInput.addEventListener('change', () => { void chooseImage() })
   removeImage.addEventListener('click', () => clearImageSelection())
   connection.addEventListener('click', connectionDiagnosticTap)

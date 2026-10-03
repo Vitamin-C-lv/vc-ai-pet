@@ -1,0 +1,27 @@
+#chat-view .message-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 0 8px;
+  flex-wrap: wrap;
+}
+#chat-view .message-headpat {
+  min-height: 36px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--vc-muted, #897b6b);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+#chat-view .message-headpat[aria-pressed="true"] {
+  background: #f4e5d7;
+  border-color: #e7cdb8;
+  color: #99613d;
+}
+#chat-view .message-headpat:disabled { opacity: .55; cursor: wait; }
+#chat-view .message-headpat:focus-visible { outline: 2px solid #b67b53; outline-offset: 2px; }
+#chat-view .message-headpat-status { color: #a06142; font-size: 12px; }

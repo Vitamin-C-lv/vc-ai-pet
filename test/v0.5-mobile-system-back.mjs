@@ -42,6 +42,7 @@ const calls = []
 const input = { blur() { calls.push('blur'); state.document.activeElement = null } }
 let emojiOpen = true
 const state = {
+  reasoningDebug: { isOpen: () => false },
   diagnosticsPanel: { hidden: false },
   closeDiagnosticsPanel() { calls.push('diagnostics'); state.diagnosticsPanel.hidden = true },
   keyboardOpen: true,

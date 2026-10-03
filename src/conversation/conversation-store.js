@@ -394,6 +394,10 @@ export class ConversationStore {
           role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
           payload TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS message_feedback (
+          message_id TEXT PRIMARY KEY NOT NULL,
+          headpat INTEGER NOT NULL CHECK(headpat IN (0, 1))
+        );
         CREATE TABLE IF NOT EXISTS chat_submission_receipts (
           submission_id TEXT PRIMARY KEY,
           turn_id TEXT NOT NULL,
@@ -444,6 +448,32 @@ export class ConversationStore {
     if (!key) return null
     const row = this.archive.prepare('SELECT payload FROM raw_messages WHERE id = ?').get(key)
     return row ? JSON.parse(row.payload) : null
+  }
+
+  async setMessageHeadpat(id, liked) {
+    return this.#enqueue(async () => {
+      await this.initialize()
+      if (typeof liked !== 'boolean') throw storeError('PET_CONVERSATION_FEEDBACK_INVALID')
+      const key = cleanId(id)
+      if (!key) throw storeError('PET_CONVERSATION_MESSAGE_NOT_FOUND')
+
+      const row = this.archive.prepare('SELECT role, payload FROM raw_messages WHERE id = ?').get(key)
+      if (!row) throw storeError('PET_CONVERSATION_MESSAGE_NOT_FOUND')
+      const message = JSON.parse(row.payload)
+      const kind = message.kind ?? 'dialogue'
+      if (row.role !== 'assistant'
+        || !['dialogue', 'final', 'proactive'].includes(kind)
+        || typeof message.text !== 'string'
+        || message.text.trim().length === 0) {
+        throw storeError('PET_CONVERSATION_MESSAGE_FEEDBACK_INELIGIBLE')
+      }
+
+      this.archive.prepare(`
+        INSERT INTO message_feedback(message_id, headpat) VALUES (?, ?)
+        ON CONFLICT(message_id) DO UPDATE SET headpat = excluded.headpat
+      `).run(key, liked ? 1 : 0)
+      return { headpat: liked }
+    })
   }
 
   chatSubmissionReceipt(submissionId) {
@@ -638,12 +668,21 @@ export class ConversationStore {
 
   async history(limit = CONVERSATION_HISTORY_LIMIT) {
     const messages = await this.list(limit)
+    const feedbackById = new Map()
+    if (messages.length > 0) {
+      const placeholders = messages.map(() => '?').join(', ')
+      const feedbackRows = this.archive.prepare(
+        `SELECT message_id, headpat FROM message_feedback WHERE message_id IN (${placeholders})`,
+      ).all(...messages.map(({ id }) => id))
+      for (const row of feedbackRows) feedbackById.set(row.message_id, row.headpat === 1)
+    }
     return messages.map((message) => ({
       id: message.id,
       role: message.role,
       text: message.text,
       timestamp: message.timestamp,
       attachment: message.attachment ? this.publicAttachment(message.attachment) : null,
+      feedback: { headpat: feedbackById.get(message.id) ?? false },
       ...(message.turnId ? { turnId: message.turnId } : {}),
       ...(message.source ? { source: message.source } : {}),
       ...(message.kind ? { kind: message.kind } : {}),

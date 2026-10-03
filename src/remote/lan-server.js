@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { readInnerLifeTimeline } from '../memory/inner-life-timeline.js'
 import { normalizeVisionImage } from '../brain/vision-input.js'
 import { createChatSubmissionIdempotency } from './chat-submission-idempotency.js'
+import { createGomokuSessions } from './gomoku-session.js'
 import { readVisualGallery, readVisualGalleryDetail } from './visual-gallery.js'
 import { EMBODIED_TRANSIENT_VISUAL_CLASS, STACKCHAN_CAMERA_SOURCE } from '../vision/visual-source.js'
 
@@ -65,12 +66,44 @@ export function actionToInteractionKind(action, state = {}) {
 export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console, submissionRegistry = null } = {}) {
   const assets = resolve(assetRoot)
   const chatSubmissionIdempotency = submissionRegistry ?? createChatSubmissionIdempotency({ conversationStore })
+  const gomoku = createGomokuSessions({ getBrain: () => runtime.brain, getMemory: () => runtime.memory, sandboxRoot: runtime.sandbox?.root })
+  // The owning HTTP server closes the game archive with its request handler.
+  const handler = async (req, res) => {
 
-  return async (req, res) => {
     if (!isAllowedLanAddress(req.socket?.remoteAddress)) return sendJson(res, 403, { error: 'lan-only' })
     const url = new URL(req.url ?? '/', 'http://lan.local')
 
     try {
+      if (req.method === 'POST' && url.pathname === '/api/pet/gomoku/start') {
+        await readJsonBody(req, 1024)
+        await gomoku.initialize()
+        return sendJson(res, 200, gomoku.start())
+      }
+      if (req.method === 'GET' && url.pathname === '/api/pet/gomoku/history') {
+        const offset = url.searchParams.get('offset') ?? '0'
+        if (!/^\d{1,7}$/u.test(offset)) return sendJson(res, 400, { ok: false, error: 'invalid-offset' })
+        await gomoku.initialize()
+        return sendJson(res, 200, gomoku.history({ offset: Number(offset) }))
+      }
+      const gomokuRoute = /^\/api\/pet\/gomoku\/([a-z0-9-]{1,80})(?:\/(move|retry|undo|review))?$/iu.exec(url.pathname)
+      if (gomokuRoute) {
+        try {
+          await gomoku.initialize()
+          const [, id, operation] = gomokuRoute
+          if (req.method === 'GET' && !operation) return sendJson(res, 200, gomoku.get(id))
+          if (req.method === 'POST' && operation) {
+            const body = await readJsonBody(req, 1024)
+            const result = operation === 'move' ? await gomoku.move(id, body?.row, body?.col)
+              : operation === 'retry' ? await gomoku.retry(id)
+                : operation === 'review' ? await gomoku.review(id) : gomoku.undo(id)
+            const { statusCode = 200, ...payload } = result
+            return sendJson(res, statusCode, payload)
+          }
+        } catch (error) {
+          if (error.statusCode) return sendJson(res, error.statusCode, { ok: false, error: error.code })
+          throw error
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/api/inner-life') {
         const offset = url.searchParams.get('offset') ?? '0'
         if (!/^\d{1,7}$/u.test(offset)) return sendJson(res, 400, { error: 'invalid-offset' })
@@ -169,6 +202,27 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
           return sendJson(res, 400, { error: 'invalid-after' })
         }
         return sendJson(res, 200, runtime.pollTurnEvents(Number(after)))
+      }
+      const headpatMatch = /^\/api\/pet\/messages\/([^/]+)\/headpat$/u.exec(url.pathname)
+      if (req.method === 'POST' && headpatMatch) {
+        if (typeof conversationStore?.setMessageHeadpat !== 'function') {
+          return sendJson(res, 503, { error: 'conversation-store-unavailable' })
+        }
+        const body = await readJsonBody(req)
+        if (typeof body?.liked !== 'boolean') return sendJson(res, 400, { error: 'invalid-message-feedback' })
+
+        let messageId
+        try { messageId = decodeURIComponent(headpatMatch[1]) }
+        catch { return sendJson(res, 404, { error: 'message-not-found' }) }
+        try {
+          const feedback = await conversationStore.setMessageHeadpat(messageId, body.liked)
+          return sendJson(res, 200, { ok: true, feedback })
+        } catch (error) {
+          if (error?.code === 'PET_CONVERSATION_MESSAGE_NOT_FOUND') return sendJson(res, 404, { error: 'message-not-found' })
+          if (error?.code === 'PET_CONVERSATION_FEEDBACK_INVALID') return sendJson(res, 400, { error: 'invalid-message-feedback' })
+          if (error?.code === 'PET_CONVERSATION_MESSAGE_FEEDBACK_INELIGIBLE') return sendJson(res, 400, { error: 'message-feedback-not-allowed' })
+          throw error
+        }
       }
       if (req.method === 'GET' && url.pathname === '/api/pet/history') {
         const messages = typeof runtime.conversationHistory === 'function'
@@ -323,13 +377,16 @@ export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {},
       return sendJson(res, 500, { error: 'remote-ui-error' })
     }
   }
+  return Object.assign(handler, { close: () => gomoku.close() })
 }
 
 export async function startLanServer({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, port = DEFAULT_PORT, host = '0.0.0.0', logger = console, submissionRegistry = null } = {}) {
   if (!runtime || !assetRoot) throw new TypeError('runtime and assetRoot are required')
   if (host !== '0.0.0.0') throw new TypeError('LAN server must bind 0.0.0.0')
   await conversationStore?.initialize?.()
-  const server = createServer(createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger, submissionRegistry }))
+  const handler = createLanRequestHandler({ runtime, assetRoot, visualConfig, conversationStore, logger, submissionRegistry })
+  const server = createServer(handler)
+  server.once('close', () => handler.close())
   await new Promise((resolveStart, rejectStart) => {
     server.once('error', rejectStart)
     server.listen(port, host, () => {

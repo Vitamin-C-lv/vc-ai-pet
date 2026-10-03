@@ -4,6 +4,8 @@
   "description": "李花花 — an isolated local pixel Bernese Mountain Dog pet for DeepSeek Harness.",
   "type": "module",
   "scripts": {
+    "test:gomoku": "node test/v0.5-gomoku.mjs && node test/v0.5-gomoku-model.mjs && node test/v0.5-gomoku-store.mjs && node test/v0.5-gomoku-session-persistence.mjs && node test/v0.5-gomoku-memory.mjs",
+    "test:message-headpat": "node test/v0.5-message-headpat.mjs && node test/v0.5-message-headpat-live-turn.mjs",
     "test:model-first-context": "node test/v0.5-model-first-context.mjs",
     "test:proactive": "node test/v0.5-proactive-brain.mjs && node test/v0.5-proactive-messages.mjs && node test/v0.5-proactive-ui.mjs",
     "test:chat-developer-debug": "node test/v0.5-thinking-indicator.mjs && node test/v0.5-reasoning-debug-store.mjs && node test/v0.5-reasoning-debug-runtime.mjs && node test/v0.3-thinking-ui.mjs && node test/v0.3-thinking-duration-persistence.mjs",

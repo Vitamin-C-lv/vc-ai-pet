@@ -8,6 +8,7 @@ const REASONING_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max'])
 // contract and no caller can silently promote a normal chat turn.
 export const PET_REASONING_PROFILE = Object.freeze({
   proactive: 'medium',
+  gomoku: 'medium',
   chat: 'low',
   vision: 'medium',
   dream: 'high',

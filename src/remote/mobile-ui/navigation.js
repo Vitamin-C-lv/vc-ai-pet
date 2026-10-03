@@ -2,6 +2,7 @@
   const VC_SCREEN = Object.freeze({
     HOME: 'home',
     HOUSE: 'house',
+    GOMOKU: 'gomoku',
     CHAT: 'chat',
     GALLERY: 'gallery',
     GALLERY_DETAIL: 'gallery-detail',

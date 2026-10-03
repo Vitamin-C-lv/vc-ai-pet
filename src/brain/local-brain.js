@@ -1,5 +1,6 @@
 import { PET_REASONING_PROFILE, validateLocalBrainConfig } from './local-brain-config.js'
 import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
+import { decideGomokuMove, reviewGomokuGame } from './gomoku-decision.js'
 import { buildPetMessages, PET_VOICE_INSTRUCTION } from './prompt-builder.js'
 import { addReasoningHistory } from './reasoning-history-context.js'
 import { formatVisualTimeContext } from './visual-time-context.js'
@@ -264,6 +265,17 @@ export class LocalBrain {
 
   async health() {
     return this.client.health()
+  }
+
+  async gomokuMove({ game }) {
+    const memories = typeof this.memory?.recall === 'function'
+      ? this.memory.recall('五子棋 主人 出招 风格', 4, { bumpHits: false,
+        filter: row => row.content.includes('五子棋') && row.provenance?.evidence === 'inferred' }) : []
+    return decideGomokuMove(this.client, game, memories)
+  }
+
+  async gomokuReview({ game }) {
+    return reviewGomokuGame(this.client, game)
   }
 
   async withReasoningHistory(messages, { kind = 'chat', outputReserveTokens = 1152 } = {}) {

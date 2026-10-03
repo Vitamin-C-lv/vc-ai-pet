@@ -23,8 +23,8 @@ export class PetTurnOrchestrator {
     const { query, taskUserText = userText, goal: recallGoal, photoCount, excludeAttachmentIds = [] } = toolRecall
     if (!toolRecall.ownerMessageStored) await store.appendMessage({ role: 'user', text: userText, turnId, source })
     const preamble = toolRecall.preamble || '花花再仔细看看。'
-    await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
-    emit('assistant_message', { text: preamble })
+    const preambleMessage = await store.appendMessage({ role: 'assistant', kind: 'final', text: preamble, turnId })
+    emit('assistant_message', { text: preamble, messageId: preambleMessage?.id })
     if (toolRecall.tool === 'search_visual_memory') {
       return this.#runIndexedVisual({ turnId, emit, userText, taskUserText, query, recallGoal, photoCount,
         excludedAttachmentIds: excludeAttachmentIds, startedAt, store })
@@ -129,9 +129,9 @@ export class PetTurnOrchestrator {
     const visualResult = await session.run('V0')
     if (!visualResult.ok) {
       const text = '花花这次没能完成照片核对，先不发图。主人可以再试一次，花花会重新找。'
-      await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text })
+      const message = await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text })
       this.runtime.conversation.append(userText, text)
-      emit('assistant_message', { text })
+      emit('assistant_message', { text, messageId: message?.id })
       this.runtime.logger?.warn?.(`vc-ai-pet: photo recall failed code=${visualResult.reason} stage=${visualResult.diagnostic?.stage ?? 'unknown'}`)
       return visualResult
     }
@@ -147,8 +147,8 @@ export class PetTurnOrchestrator {
     const durationMs = Math.max(0, this.now() - startedAt)
     const reasoning = { effort: result.reasoning?.effort ?? 'medium', durationMs, visualInspections: result.inspections.length, visualUniqueImages: new Set(result.inspections.map((item) => item.attachmentId)).size }
     for (const [index, text] of replyMessages.entries()) {
-      emit('assistant_message', { text })
-      await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning: index === replyMessages.length - 1 ? reasoning : null })
+      const message = await store.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning: index === replyMessages.length - 1 ? reasoning : null })
+      emit('assistant_message', { text, messageId: message?.id })
     }
     this.runtime.conversation.append(attachment ? `[主人发送了一张图片] ${userText}` : userText, replyMessages.join('\n'))
     emit('turn_completed', { durationMs, reasoning })
@@ -200,9 +200,9 @@ export class PetTurnOrchestrator {
       result: { status: 'none' }, clarificationRequested: true, excludedAttachmentIds })
     const reasoning = { effort: 'low', durationMs: Math.max(0, this.now() - startedAt) }
     if (!ownerMessageStored) await this.runtime.conversationStore.appendMessage({ role: 'user', text: userText, turnId })
-    await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
+    const message = await this.runtime.conversationStore.appendMessage({ role: 'assistant', kind: 'final', turnId, text, reasoning })
     this.runtime.conversation.append(userText, text)
-    emit('assistant_message', { text, reasoning }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
+    emit('assistant_message', { text, reasoning, messageId: message?.id }); emit('turn_completed', { durationMs: reasoning.durationMs, reasoning })
     return { ok: true, text, replyMessages: [text], memoryWrite: 'skipped', memoryWriteReason: 'vision-context', reasoning }
   }
 

@@ -1266,7 +1266,10 @@ export class PetRuntime {
       if (!result?.ok) return result
       if (result.visualTurn) return result
       const replies = Array.isArray(result.replyMessages) && result.replyMessages.length ? result.replyMessages : [result.text]
-      for (const text of replies) emit('assistant_message', { text })
+      const storedReplies = this.conversationPersistenceReady
+        ? (await this.conversationStore.listForRecentVisualRecall()).filter(message => message.turnId === turnId && message.role === 'assistant' && ['dialogue', 'final'].includes(message.kind ?? 'dialogue'))
+        : []
+      for (const [index, text] of replies.entries()) emit('assistant_message', { text, messageId: storedReplies[index]?.id })
       emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
       return result
     }, { userText, source }), { publish: source !== 'stackchan-bridge' })

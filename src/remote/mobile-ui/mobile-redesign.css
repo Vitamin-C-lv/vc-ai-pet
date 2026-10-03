@@ -440,15 +440,11 @@
   flex-basis: clamp(270px, 50dvh, 420px);
 }
 
-.play-view .interaction,
-#play-view .interaction,
 .home-actions {
   width: 100%;
   min-width: 0;
 }
 
-.play-view .interaction > *,
-#play-view .interaction > *,
 .home-actions > * {
   min-width: 0;
 }

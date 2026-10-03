@@ -32,10 +32,17 @@ assert.match(home, /id="inner-life-open"/u)
 assert.match(home, /花花的梦境/u)
 assert.match(home, /id="house-open"/u)
 assert.match(home, /id="chat-open"/u)
+assert.doesNotMatch(home, /id="pet-button"|id="play-button"|id="long-button"|class="interaction"/u)
 assert.doesNotMatch(home, /visual-gallery-open|花花的图库/u)
 assert.match(html, /id="house-view"[^>]*hidden/u)
-assert.match(html, /正在施工中…/u)
-assert.match(html, /花花正在慢慢布置自己的小窝/u)
+assert.match(html, /id="house-gomoku-open"[^>]*aria-controls="gomoku-view"/u)
+assert.match(html, /id="gomoku-view"[^>]*hidden/u)
+assert.match(html, /id="gomoku-board"[^>]*role="grid"/u)
+assert.match(html, /id="gomoku-history-open"/u)
+assert.match(html, /id="gomoku-history-more"[^>]*hidden/u)
+assert.match(html, /id="gomoku-review-start"[^>]*hidden/u)
+assert.match(html, /花花会用自己的本地模型看棋盘/u)
+
 
 // CASE 2 / 3: Chat owns its persistent header and has no legacy footer.
 assert.match(chat, /class="chat-header"/u)
@@ -47,7 +54,7 @@ assert.doesNotMatch(chat, /bottom-nav|data-tab|玩耍.*聊天/u)
 assert.doesNotMatch(html, /id="bottom-nav"|data-tab="/u)
 
 // CASE 4 / 5 / 6: Every nested content surface has Back + Home controls.
-for (const id of ['inner-life-view', 'visual-gallery-view', 'visual-gallery-detail-view', 'house-view']) {
+for (const id of ['inner-life-view', 'visual-gallery-view', 'visual-gallery-detail-view', 'house-view', 'gomoku-view']) {
   const section = htmlSection(id)
   assert.match(section, /class="subpage-header"/u)
   assert.match(section, /vc-icon-back/u)
@@ -119,10 +126,15 @@ router.back({ fallback: 'home' })
 assert.equal(current, 'chat')
 router.home()
 assert.equal(current, 'home')
+router.push('house')
+router.push(navigationContext.VcAiPetNavigation.VC_SCREEN.GOMOKU)
+router.back({ fallback: 'home' })
+assert.equal(current, 'house')
+router.home()
 current = 'gallery-detail'
 router.back({ fallback: 'gallery' })
 assert.equal(current, 'gallery')
-assert.deepEqual(transitions, ['chat', 'gallery', 'chat', 'home', 'gallery'])
+assert.deepEqual(transitions, ['chat', 'gallery', 'chat', 'home', 'house', 'gomoku', 'house', 'home', 'gallery'])
 
 const emojiContext = {}
 vm.createContext(emojiContext)
@@ -143,9 +155,10 @@ assert.equal(textarea.selectionStart, 4)
 
 console.log('HOME_DREAM_ENTRY=PASS')
 console.log('HOME_GALLERY_ENTRY_REMOVED=PASS')
-console.log('HOUSE_PLACEHOLDER=PASS')
+console.log('HOUSE_GOMOKU_ENTRY_AND_GAME_VIEW=PASS')
 console.log('CHAT_STICKY_HEADER_AND_NO_LEGACY_NAV=PASS')
 console.log('NESTED_BACK_HOME_CONTROLS=PASS')
+console.log('GOMOKU_NAVIGATION_STACK=PASS')
 console.log('COMPOSER_ADD_SEND_STATE=PASS')
 console.log('EMOJI_DRAWER_PROVIDER_AND_INSERT=PASS')
 console.log('MIC_NO_PERMISSION_OR_BACKEND=PASS')

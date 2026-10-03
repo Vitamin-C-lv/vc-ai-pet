@@ -12,6 +12,8 @@
     <link rel="stylesheet" href="/thinking-indicator.css">
     <link rel="stylesheet" href="/developer-settings.css">
     <link rel="stylesheet" href="/proactive-messages.css">
+    <link rel="stylesheet" href="/gomoku.css">
+    <link rel="stylesheet" href="/message-headpat.css">
   </head>
   <body>
     <main class="pet-app">
@@ -41,11 +43,7 @@
               <div class="emotion"><span>开心 <b id="happiness">—</b></span><span>精力 <b id="energy">—</b></span></div>
             </div>
           </div>
-          <div class="interaction" aria-label="和花花互动">
-            <button id="pet-button" type="button">摸摸头</button>
-            <button id="play-button" type="button">玩耍</button>
-            <button id="long-button" type="button">长按</button>
-          </div>
+
           <div class="home-actions" aria-label="主要页面">
             <button id="house-open" class="home-action" type="button" aria-controls="house-view">
               <span class="vc-icon vc-icon-construction" aria-hidden="true"></span><span>花花家</span>
@@ -67,10 +65,98 @@
             <h2>花花家</h2>
           </header>
           <div class="house-content">
-            <span class="house-illustration"><span class="vc-icon vc-icon-construction" aria-hidden="true"></span></span>
-            <h3>花花家</h3>
-            <p>正在施工中…</p>
-            <p class="house-subtext">花花正在慢慢布置自己的小窝。</p>
+            <div class="house-welcome">
+              <span class="house-illustration" aria-hidden="true">🏡</span>
+              <h3>欢迎回家</h3>
+              <p>在这里陪花花安静玩一会儿。</p>
+            </div>
+            <button id="house-gomoku-open" class="house-game-card" type="button" aria-controls="gomoku-view">
+              <span class="house-game-stones" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="house-game-copy"><strong>和花花玩五子棋</strong><small>她会用本地模型认真看棋盘</small></span>
+              <span class="house-game-arrow" aria-hidden="true">›</span>
+            </button>
+            <p class="house-subtext">主人执黑先手，花花执白。</p>
+          </div>
+        </section>
+
+        <section id="gomoku-view" class="app-view gomoku-view" aria-label="和花花下五子棋" hidden>
+          <header class="subpage-header">
+            <button id="gomoku-back" class="icon-button" type="button" aria-label="返回花花家">
+              <span class="vc-icon vc-icon-back" aria-hidden="true"></span>
+            </button>
+            <button id="gomoku-home" class="icon-button" type="button" aria-label="回到主页">
+              <span class="vc-icon vc-icon-home" aria-hidden="true"></span>
+            </button>
+            <h2>和花花下棋</h2>
+          </header>
+          <div class="gomoku-scroll">
+            <div id="gomoku-game-panel" class="gomoku-panel">
+              <div class="gomoku-intro">
+                <span class="gomoku-eyebrow">花花家的小游戏</span>
+                <p>主人执黑，花花执白。陪花花下一局吧，每一步它都会认真想一想。</p>
+              </div>
+              <div class="gomoku-status-card">
+                <p id="gomoku-status" role="status" aria-live="polite">正在准备棋盘…</p>
+                <p id="gomoku-last-move" class="gomoku-last-move">还没有落子</p>
+              </div>
+              <div id="gomoku-pet-turn" class="gomoku-pet-turn" aria-live="polite">
+                <img id="gomoku-pet-avatar" src="/assets/idle-front.png" alt="李花花">
+                <div class="gomoku-pet-comment">
+                  <div class="gomoku-pet-heading">
+                    <strong>李花花</strong>
+                    <span id="gomoku-mood">等待落子</span>
+                    <span id="gomoku-thinking-dots" class="gomoku-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                  </div>
+                  <p id="gomoku-speech">棋局开始后，这里会显示花花的心情和她想说的话。</p>
+                </div>
+              </div>
+              <div class="gomoku-board-wrap">
+                <canvas id="gomoku-board" role="grid" aria-rowcount="15" aria-colcount="15" tabindex="0" aria-label="五子棋棋盘。使用方向键移动光标，按回车落子" aria-describedby="gomoku-help"></canvas>
+              </div>
+              <p id="gomoku-help" class="gomoku-help">轻点交叉点选择落子位置，再按确认落子；键盘可用方向键移动、回车落子。</p>
+              <button id="gomoku-play" class="gomoku-play-button" type="button" disabled>先选一个交叉点</button>
+              <div class="gomoku-legend" aria-label="棋子颜色">
+                <span><i class="gomoku-stone gomoku-stone-black" aria-hidden="true"></i>主人 · 黑棋</span>
+                <span><i class="gomoku-stone gomoku-stone-white" aria-hidden="true"></i>花花 · 白棋</span>
+              </div>
+              <details class="gomoku-rules">
+                <summary>五子棋规则</summary>
+                <p>黑棋先手，双方轮流在交叉点落子；横、竖或斜方向先连成五子的一方获胜。</p>
+              </details>
+              <div id="gomoku-replay-controls" class="gomoku-replay-controls" hidden>
+                <button id="gomoku-replay-history" type="button">回到棋局记录</button>
+                <button id="gomoku-replay-live" type="button">回到当前棋局</button>
+                <button id="gomoku-replay-first" type="button">从头</button>
+                <button id="gomoku-replay-prev" type="button">上一手</button>
+                <span id="gomoku-replay-position" aria-live="polite"></span>
+                <button id="gomoku-replay-next" type="button">下一手</button>
+                <button id="gomoku-replay-last" type="button">到最后</button>
+              </div>
+              <div id="gomoku-review-card" class="gomoku-review-card" hidden>
+                <div class="gomoku-review-heading">
+                  <strong>花花基于这局的理解</strong>
+                  <span id="gomoku-memory-status"></span>
+                </div>
+                <p id="gomoku-review-summary"></p>
+                <div id="gomoku-review-observations" class="gomoku-review-observations"></div>
+                <button id="gomoku-review-start" type="button" hidden>让花花复盘</button>
+              </div>
+              <div class="gomoku-actions">
+                <button id="gomoku-undo" type="button" disabled>悔棋一回合</button>
+                <button id="gomoku-restart" type="button">重新开局</button>
+                <button id="gomoku-history-open" type="button">棋局记录</button>
+                <button id="gomoku-retry" type="button" hidden>再试一次</button>
+              </div>
+            </div>
+            <div id="gomoku-history-panel" class="gomoku-history-panel" hidden>
+              <div class="gomoku-history-heading">
+                <h3>棋局记录</h3>
+                <button id="gomoku-history-back" type="button">返回棋盘</button>
+              </div>
+              <p id="gomoku-history-status" role="status" aria-live="polite">正在读取记录…</p>
+              <div id="gomoku-history-list" class="gomoku-history-list"></div>
+              <button id="gomoku-history-more" type="button" hidden>更早的棋局</button>
+            </div>
           </div>
         </section>
 
@@ -285,6 +371,8 @@
     <script src="/chat-composer.js"></script>
     <script src="/submission-state.js"></script>
     <script src="/home-sprite-animations.js"></script>
+    <script src="/gomoku.js"></script>
+    <script src="/message-headpat.js"></script>
     <script src="/thinking-indicator.js"></script>
     <script src="/reasoning-debug.js"></script>
     <script src="/mobile.js"></script>

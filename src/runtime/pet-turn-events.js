@@ -30,7 +30,8 @@ function publicPayload(type, payload = {}) {
   if (type === 'visual_observation' || type === 'visual_compare') return { relation: visualRelation(payload.relation), comparison: payload.comparison === true, summary: sanitizeSafeTraceText(payload.summary, 180) }
   if (type === 'visual_recall') return { sourceAttachmentId: text(payload.sourceAttachmentId, 100), caption: sanitizeSafeTraceText(payload.caption, 120) }
   if (type === 'memory_recall') return { summary: sanitizeSafeTraceText(payload.summary, 180), provenance: payload.provenance === 'inferred' ? 'inferred' : 'confirmed' }
-  if (type === 'assistant_message') return { text: sanitizeSafeTraceText(payload.text, 300) }
+  if (type === 'assistant_message') return { text: sanitizeSafeTraceText(payload.text, 300),
+    ...(/^[a-z0-9_-]{1,80}$/iu.test(payload.messageId ?? '') ? { messageId: payload.messageId } : {}) }
   if (type === 'turn_completed') return { durationMs: Number.isFinite(Number(payload.durationMs)) ? Math.max(0, Math.round(Number(payload.durationMs))) : 0, ...(safeReasoning(payload.reasoning) ? { reasoning: safeReasoning(payload.reasoning) } : {}) }
   if (type === 'turn_failed') {
     const errorStage = ['asset', 'local-brain', 'structured-output', 'protocol'].includes(payload.errorStage) ? payload.errorStage : null

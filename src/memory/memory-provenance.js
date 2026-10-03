@@ -108,6 +108,8 @@ export function normalizeProvenance(input = {}, { fallbackSource = UNKNOWN_PROVE
   if (['hypothesis', 'evolving'].includes(raw.selfStatus)) normalized.selfStatus = raw.selfStatus
   if (typeof raw.evidenceQuote === 'string') normalized.evidenceQuote = raw.evidenceQuote.slice(0, 200)
   if (typeof raw.messageId === 'string') normalized.messageId = raw.messageId.slice(0, 80)
+  if (typeof raw.gameId === 'string') normalized.gameId = raw.gameId.slice(0, 80)
+  if (Array.isArray(raw.moveNumbers)) normalized.moveNumbers = [...new Set(raw.moveNumbers.filter(number => Number.isInteger(number) && number >= 1 && number <= 225))]
   // The picture a memory is about. Deliberately kept out of `sourceIds`: the
   // evidence chain walks sourceIds as parent *memory* rows, and an attachment id
   // is not a memory row — putting one there would break `rawEvidenceRoots()` and

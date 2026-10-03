@@ -16,10 +16,10 @@ function htmlSection(id) {
 }
 
 const requiredIds = [
-  'pet-sprite', 'pet-button', 'play-button', 'long-button', 'messages', 'chat-form',
+  'pet-sprite', 'messages', 'chat-form',
   'image-button', 'image-input', 'chat-input', 'send-button', 'image-preview',
   'image-thumbnail', 'remove-image', 'image-status', 'connection', 'house-open',
-  'chat-open', 'house-view', 'chat-home', 'chat-gallery',
+  'chat-open', 'house-view', 'house-gomoku-open', 'gomoku-view', 'gomoku-board', 'gomoku-home', 'gomoku-back', 'chat-home', 'chat-gallery',
   'mic-button', 'emoji-button', 'emoji-drawer',
 ]
 for (const id of requiredIds) assert.match(html, new RegExp(`id="${id}"`, 'u'))
@@ -34,12 +34,16 @@ assert.equal((html.match(/id="connection"/gu) ?? []).length, 1)
 const chatView = htmlSection('chat-view')
 const playView = htmlSection('play-view')
 assert.match(playView, /id="pet-sprite"/u)
-assert.match(playView, /id="pet-button"/u)
-assert.match(playView, /id="play-button"/u)
-assert.match(playView, /id="long-button"/u)
+assert.doesNotMatch(playView, /id="pet-button"|id="play-button"|id="long-button"|class="interaction"/u)
 assert.match(playView, /id="inner-life-open"/u)
 assert.match(playView, /id="house-open"/u)
 assert.match(playView, /id="chat-open"/u)
+const gomokuView = htmlSection('gomoku-view')
+assert.match(htmlSection("house-view"), /id="house-gomoku-open"/u)
+assert.match(gomokuView, /id="gomoku-board"/u)
+assert.match(gomokuView, /id="gomoku-play"/u)
+assert.match(gomokuView, /id="gomoku-undo"/u)
+assert.match(gomokuView, /id="gomoku-restart"/u)
 assert.doesNotMatch(playView, /visual-gallery-open|花花的图库/u)
 assert.match(chatView, /id="messages"/u)
 assert.match(chatView, /id="chat-form"/u)
