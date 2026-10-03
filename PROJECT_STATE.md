@@ -45,7 +45,9 @@ bundle。旧v0.3-turn-orchestrator直接调用已淘汰的无模型决策视觉�
 独立sandbox已清除。截图位于Codex visualizations本轮目录。
 
 实现位于独立工作树 vc-ai-pet-mobile-feedback-gomoku，生产链接与运行中的
-3080/17870服务尚未切换；未进行手机实体端上线验收。
+3080/17870服务尚未切换；未进行手机实体端上线验收。主人选择先保留现有
+服务查看页面，验收结束后另起仅loopback监听的独立试玩预览；新局落子和
+复盘使用真实Local Brain及预览专属PetMemory，聊天仅提供布局示例。
 
 ## 2026-10-04 — 故事承接、完整回复与图片决策额度修复
 
