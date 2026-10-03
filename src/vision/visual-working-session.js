@@ -1,4 +1,5 @@
 import { normalizeVisionImage } from '../brain/vision-input.js'
+import { readVisualUploadTimes } from '../brain/visual-time-context.js'
 import { sanitizeSafeTraceText } from '../runtime/pet-turn-events.js'
 import { visualTermsFor, VISUAL_OBSERVATION_TERM_BOOST } from './visual-keywords.js'
 
@@ -186,6 +187,7 @@ export class VisualWorkingSession {
       if (!image) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
       const metadata = stored.attachment ?? await this.conversationStore.attachment?.(candidate.attachmentId)
       if (!metadata) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
+      const imageTime = { uploadedAt: metadata.createdAt, uploadTimes: await readVisualUploadTimes(this.experienceStore, metadata), imageRelation: candidate.relation }
       const alreadyInspected = this.inspections.some((item) => item.visualId === visualId)
       const caption = alreadyInspected
         ? '🔎 花花想再确认一下这张……'
@@ -238,6 +240,8 @@ export class VisualWorkingSession {
           userText: this.userText,
           recallQuery: this.recallQuery,
           image,
+          ...imageTime,
+          now: this.now(),
           candidatePool: this.candidatePool,
           observations: this.observations,
           comparison: this.comparison,
@@ -268,11 +272,11 @@ export class VisualWorkingSession {
       if (verifyRecall) {
         if (step.match === 'match') {
           if (step.action !== 'answer' || step.nextVisualId || step.replyMessages.length === 0) return visualFailure({ reason: 'invalid-visual-recall-answer', stage: 'structured-output', inspectionOrdinal: ordinal + 1, candidate, inspections: this.inspections })
-          verifiedMatches.push({ candidate, step, summary, safeFocus, publishImage })
+          verifiedMatches.push({ candidate, step, summary, safeFocus, publishImage, imageTime })
           if (!this.multiPhotoSummary) break
           if (!summary) return visualFailure({ reason: 'missing-visual-summary-observation', stage: 'structured-output', candidate, inspections: this.inspections })
           await this.#recordVisualEvents(candidate, summary, safeFocus)
-          this.observations.push({ visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary })
+          this.observations.push({ visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary, ...imageTime })
           if (verifiedMatches.length >= this.requestedImages) break
         }
         visualId = this.candidatePool.find((item) => !this.inspections.some((inspected) => inspected.attachmentId === item.attachmentId))?.visualId ?? null
@@ -280,7 +284,7 @@ export class VisualWorkingSession {
       }
       await this.#recordVisualEvents(candidate, summary, safeFocus)
       if (summary) {
-        const observation = { visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary }
+        const observation = { visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary, ...imageTime }
         this.observations.push(observation)
         // Keep the complete safe summary for persistence and the visual ledger;
         // only the public activity projection is compacted for recalled sessions.
@@ -348,6 +352,7 @@ export class VisualWorkingSession {
             observations: this.observations.map((observation) => ({ ...observation,
               ownerCaption: verifiedMatches.find(({ candidate }) => candidate.attachmentId === observation.attachmentId).candidate.userText ?? '' })),
             requestedImages: this.requestedImages,
+            now: this.now(),
             inspectionLimitReached: this.inspections.length >= MAX_VISUAL_INSPECTIONS_PER_TURN })
         } catch (error) {
           return visualFailure({ reason: error?.code ?? 'visual-summary-failed', unavailable: error?.retryable === true,
@@ -360,7 +365,7 @@ export class VisualWorkingSession {
         }
         reasoning = summaryResult.reasoning ?? reasoning
       }
-      for (const { candidate, step, summary, safeFocus, publishImage } of verifiedMatches) {
+      for (const { candidate, step, summary, safeFocus, publishImage, imageTime } of verifiedMatches) {
         try {
           if (!await publishImage()) return visualFailure({ reason: 'PET_CONVERSATION_ATTACHMENT_NOT_FOUND', stage: 'asset', candidate, inspections: this.inspections })
         } catch (error) {
@@ -369,7 +374,7 @@ export class VisualWorkingSession {
         verifiedAttachmentId ??= candidate.attachmentId
         if (!this.multiPhotoSummary) await this.#recordVisualEvents(candidate, summary, safeFocus)
         if (summary) {
-          if (!this.multiPhotoSummary) this.observations.push({ visualId: candidate.visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary })
+          if (!this.multiPhotoSummary) this.observations.push({ visualId: candidate.visualId, attachmentId: candidate.attachmentId, focus: safeFocus, summary, ...imageTime })
           const traceText = '👀 花花重新看了看'
           const observationEvent = this.emit('visual_observation', { relation: candidate.relation, comparison: false, summary: traceText, focus: safeFocus })
           await this.conversationStore.appendMessage({ role: 'assistant', kind: 'activity', activityType: 'visual_observation', relation: candidate.relation, activitySeq: observationEvent?.seq, activityAt: observationEvent?.at, turnId: this.turnId, text: traceText })

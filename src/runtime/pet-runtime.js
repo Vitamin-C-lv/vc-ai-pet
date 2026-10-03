@@ -8,6 +8,8 @@ import { containsSensitiveMemoryText, detectExplicitMemoryRequest, userOptedOutO
 import { containsNonAssertion } from '../memory/current-belief.js'
 import { LocalBrain } from '../brain/local-brain.js'
 import { ReasoningDebugStore } from '../brain/reasoning-debug-store.js'
+import { ReasoningHistoryStore } from '../brain/reasoning-history-store.js'
+import { readVisualUploadTimes } from '../brain/visual-time-context.js'
 import { ProactiveMessages } from './proactive-messages.js'
 import { shouldUseFastVoiceMode } from '../brain/local-brain-config.js'
 import { RecentConversation, RECENT_CONVERSATION_DEFAULT_MAX_TURNS } from '../conversation/recent-conversation.js'
@@ -318,6 +320,7 @@ export class PetRuntime {
     this.conversation = new RecentConversation({ maxTurns: this.pipelineConfig.shortTermContextTurns })
     this.conversationStore = new ConversationStore(this.sandbox.root)
     this.reasoningDebugStore = new ReasoningDebugStore({ sandboxRoot: this.sandbox.root })
+    this.reasoningHistoryStore = new ReasoningHistoryStore({ sandboxRoot: this.sandbox.root })
     this.proactive = new ProactiveMessages({ runtime: this })
     this.lastProactiveCheckAt = 0
     this.recentVisualResolver = new RecentVisualResolver()
@@ -439,7 +442,8 @@ export class PetRuntime {
     this.memory.migrateIdentity(this.identity)
     this.memory.ensureDreamTracking()
     this.memory.ensureReflectionTracking()
-    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger, reasoningDebugStore: this.reasoningDebugStore })
+    await this.reasoningHistoryStore.initialize()
+    this.brain = new LocalBrain({ memory: this.memory, sandbox: this.sandbox, logger: this.logger, reasoningDebugStore: this.reasoningDebugStore, reasoningHistoryStore: this.reasoningHistoryStore })
     this.visualSemanticIndex = new VisualSemanticIndex({ experienceStore: this.visualExperience,
       conversationStore: this.conversationStore, memory: this.memory, logger: this.logger })
     this.turnOrchestrator = new PetTurnOrchestrator({
@@ -794,9 +798,13 @@ export class PetRuntime {
       // with a candidate present it answers `action: 'inspect'` (wanting to look at
       // that picture again) and the schema rejects the reply; with an empty pool it
       // returns a direct, longer observation for the image it is being shown.
+      const reviewedAttachment = await this.conversationStore.attachment(attachment)
       const step = await this.brain.visualStep({
         userText: '花花正在整理记忆，想再看一眼之前看过的那张图片。这是最后一次查看，不要再请求看别的图片，直接描述你看到的。',
         image,
+        uploadedAt: reviewedAttachment?.createdAt ?? null,
+        uploadTimes: await readVisualUploadTimes(this.visualExperience, reviewedAttachment),
+        imageRelation: 'recalled',
         candidatePool: [],
         forceAnswer: true,
         // Perception-only validation: a background tidy-up must not fail on the
@@ -862,7 +870,12 @@ export class PetRuntime {
 
   chat(userText, image = null, attachment = null, options = {}) {
     const turnId = options.turnId ?? createTurnId()
-    return this.reasoningDebugStore.run(turnId, () => this.#chat(userText, image, attachment, { ...options, turnId }))
+    return this.runReasoningTurn(turnId, () => this.#chat(userText, image, attachment, { ...options, turnId }), { userText, source: options.source })
+  }
+
+  runReasoningTurn(turnId, callback, metadata = {}) {
+    return this.reasoningHistoryStore.run(turnId,
+      () => this.reasoningDebugStore.run(turnId, callback), metadata)
   }
 
   async #chat(userText, image = null, attachment = null, { turnId = createTurnId(), source = null, emit = () => {} } = {}) {
@@ -971,6 +984,9 @@ export class PetRuntime {
         state: this.snapshot(),
         userText: promptText,
         image: effectiveVisionImage,
+        imageUploadedAt: persistedAttachment?.createdAt ?? null,
+        imageUploadTimes: effectiveVisionImage ? await readVisualUploadTimes(this.visualExperience, persistedAttachment ?? (recalledVisual?.attachmentId ? await this.conversationStore.attachment(recalledVisual.attachmentId) : null)) : [],
+        imageRelation: currentVisionImage ? 'current' : 'recalled',
         visualContext,
         recentMessages,
         // The window the model is allowed to see, in turns. Passed explicitly so
@@ -1150,7 +1166,7 @@ export class PetRuntime {
 
   runVisualTurn(options = {}) {
     const turnId = options.turnId ?? createTurnId()
-    return this.reasoningDebugStore.run(turnId, () => this.#runVisualTurn({ ...options, turnId }))
+    return this.runReasoningTurn(turnId, () => this.#runVisualTurn({ ...options, turnId }), { userText: options.userText, source: options.source })
   }
 
   async #runVisualTurn({ turnId = createTurnId(), emit = () => {}, userText, attachment = null, followUp = null, source = null, toolRecall = null } = {}) {
@@ -1303,7 +1319,7 @@ export class PetRuntime {
   }
 
   startChatTurn({ userText, image = null, attachment = null, attachmentId = null, source = null } = {}) {
-    return this.turnManager.start(({ turnId, emit }) => this.reasoningDebugStore.run(turnId, async () => {
+    return this.turnManager.start(({ turnId, emit }) => this.runReasoningTurn(turnId, async () => {
       let normalized = normalizeVisionImage(image)
       if (!normalized && attachmentId) {
         const stored = await this.conversationAsset(attachmentId)
@@ -1341,7 +1357,7 @@ export class PetRuntime {
       for (const text of replies) emit('assistant_message', { text })
       emit('turn_completed', { durationMs: result?.reasoning?.durationMs ?? 0, reasoning: result?.reasoning })
       return result
-    }), { publish: source !== 'stackchan-bridge' })
+    }, { userText, source }), { publish: source !== 'stackchan-bridge' })
   }
 
   pollChatTurn(turnId, after = 0) { return this.turnManager.poll(turnId, after) }

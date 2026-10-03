@@ -1153,6 +1153,20 @@ export class VisualExperienceStore {
     return { ...rowToOccurrence(row), experienceId: this.#canonicalId(row.experience_id) }
   }
 
+  async uploadHistoryForAttachment(attachmentId) {
+    const experience = await this.findExperienceByAttachmentId(attachmentId)
+    if (!experience) return []
+    const ids = this.#experienceIds(experience.experienceId)
+    const placeholders = ids.map(() => '?').join(', ')
+    // Occurrences come from owner image uploads; inspection/re-display events
+    // live in visual_events and must not be counted as uploads.
+    return this.db.prepare(`
+      SELECT attachment_id, occurred_at FROM visual_occurrences
+      WHERE experience_id IN (${placeholders})
+      ORDER BY occurred_at ASC, occurrence_id ASC
+    `).all(...ids).map((row) => ({ attachmentId: row.attachment_id, uploadedAt: row.occurred_at }))
+  }
+
   async occurrenceFor(experienceId, { limit = 100 } = {}) {
     await this.initialize()
     if (this.#isTransientExperience(experienceId)) return []
