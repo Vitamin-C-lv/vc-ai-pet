@@ -39,10 +39,11 @@ const PET_VISUAL_SEARCH_RESPONSE_SCHEMA = Object.freeze({
   required: ['visualIds'],
 })
 
+const { reply: _legacyReplyProperty, ...toolChatProperties } = PET_CHAT_RESPONSE_SCHEMA.properties
 const PET_CHAT_VISUAL_RECALL_RESPONSE_SCHEMA = Object.freeze({
   ...PET_CHAT_RESPONSE_SCHEMA,
   properties: {
-    ...PET_CHAT_RESPONSE_SCHEMA.properties,
+    resolvedRequest: { type: 'string', minLength: 1, maxLength: 240 },
     visualRecall: {
       anyOf: [
         {
@@ -58,13 +59,15 @@ const PET_CHAT_VISUAL_RECALL_RESPONSE_SCHEMA = Object.freeze({
             excludeAttachmentIds: { type: 'array', items: { type: 'string' }, maxItems: 5 },
             ownerCaption: { type: 'boolean' },
           },
-          required: ['tool', 'query', 'goal', 'originalQuestion'],
+          required: ['tool', 'query', 'goal', 'originalQuestion', 'excludeAttachmentIds', 'ownerCaption'],
         },
         { type: 'null' },
       ],
     },
+    ...toolChatProperties,
+    replyMessages: { ...PET_CHAT_RESPONSE_SCHEMA.properties.replyMessages, minItems: 1 },
   },
-  required: [...PET_CHAT_RESPONSE_SCHEMA.required, 'visualRecall'],
+  required: ['resolvedRequest', 'visualRecall', 'replyMessages', 'memory', 'beliefs'],
 })
 const VISUAL_RECALL_WAITING_REPLY = '花花去图库找找，再看一遍。'
 
@@ -546,7 +549,7 @@ export class LocalBrain {
     // Keep one inference per turn. The same structured response contains the
     // visible reply and at most one memory candidate.
     const visualRecallInstruction = visualRecallEnabled
-      ? `\n\n本轮由你结合多轮上下文决定直接回答还是调用图片工具，程序不会按关键词替你选工具。visualRecall=null 表示直接回答；对象表示执行工具，reply/replyMessages 只给一句自然等待语，memory.remember=false，不提前猜图片内容。\n工具选择：\n1. inspect_visual_memory：重新看当前/刚才/上一张或明确指定的近期图片，attachmentIds 必须从下方近期图片消息选择准确标识；不能把指向已知图片的要求变成图库随机搜索。仅本轮主人明确断言那张图片的名字或纠正身份时 ownerCaption=true，其他情况 false；不能因为目录里旧说明带名字就填 true。本轮只说“再看看”或询问“是不是黑莓”都必须 false。\n2. search_visual_memory：搜索独立图库中历史照片。当前对话没有图片、近期目录为空或当前记忆没提到照片，不代表图库为空；这个工具仍可用。主人要求查看历史图片时必须先使用工具核对，不得因此说看不到、不记得或让主人重新传图。query 是自包含语义查询，只根据主人原话、已确认名字及相关上下文，不添加猜测毛色、品种或场景。主人要找某张具体照片用 goal=find_photo；问熟悉主体的外观用 describe_subject；多看几张并总结/比较用 summarize_photos，photoCount 指定2到5张，未指定数量默认3。找错后重试时 excludeAttachmentIds 填被主人否定的图片标识，保留真正目标，不改成被否定的对象。\n每次选择工具必须填写 originalQuestion：若本轮是在补充/纠正/继续前一个问题，逐字复制最近主人消息中尚待回答的原始问题；新的独立问题填空字符串。原始问题中的主体、时间范围、待回答的问题、数量必须全部继承，query 也要涵盖它们。不能从推理或助手答复里编造主人需求。例：前句“昨天晚上黑莓在干什么呀”，本句“你可以看看图片的拍摄时间”，应 originalQuestion="昨天晚上黑莓在干什么呀"，搜索黑莓的相关照片，并核对上传时间来继续回答原来的活动问题。前句问黑莓品种、本句“去图库看看”，应继续观察黑莓外观而不是问哪张照片。\n主人要求看近期某张图片且目录已有对应标识时，选择 inspect_visual_memory；不是 search_visual_memory。例如“再看看我刚才发的那张”应使用最后一条主人图片消息标识。多图比较应选相关图片标识并 summarize_photos，不能只看一张。\n延续对话也要履行自己上一轮的提议：若你说可以讲一个黑莓晒太阳的小故事，主人接着说“我要听！快讲讲”，本轮应直接讲完整小故事，包含开头、发生的小事和结尾，至少两小段，允许比日常聊天长一些并用 replyMessages 分段；不能只描述一句晒太阳。开头说明这是花花编的小故事，visualRecall=null，不要把听故事换成找图或描述照片；创作想象需明确是小故事，不冒充真实发生的共同经历。助手提议可作为待完成任务的上下文，但助手对事实的猜测不能成为证据。普通聊天（例如“黑莓好像饿了”）、询问图库算法或模型能力、转到晚饭等新话题，应 null；没有证据时可以查图库找证据，不能只因当前没图就说从未见过。图片不能证实现在是否饿。历史活动问题可查图片，但证据不足就说明不确定；不能虚构经历。\n当主人明确要求查看已有照片或其时间记录时，先调用相应工具核对实际记录，不能因没有拍摄时间就跳过工具或反问主人；核对后的回答再说明只能依据上传时间。图片时间只记录主人上传时间，不是拍摄时间。不能把上传时间当拍摄时间或断言实际活动时间；自行结合当前时间、各次上传记录和主人原话判断。assistant 图片消息表示重新展示，不是新上传。未解决的视觉任务（仅供判断当前是否延续，新话题不继承）：${JSON.stringify(activeVisualRecallContext)}。\n调用前等待语只说将去找/看/核对，不能声称已经看过或确认身份。近期图片消息（时区 Asia/Shanghai）：${JSON.stringify(recentVisuals.map((row) => ({ ...row, timestamp: new Date(row.timestamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) })))}。`
+      ? `\n\n先输出 resolvedRequest：用一句话说明结合主人本轮原话、前文以及你上一轮提议后，现在到底要完成什么。它是任务摘要，不是推理过程，不是事实证据；不要抄上一轮答复。再先决定 visualRecall，最后按这个决策输出 replyMessages；选择工具时只能说准备去核对，不能先输出看过后的描述。replyMessages 是唯一的完整用户回复，按顺序给出每一段，开头和正文都放在这个数组里；本轮没有另一个 reply 字段，不要把正文放到不存在的字段。简短的同意、拒绝、纠正、继续要求必须结合上一轮内容理解；主人同意听故事，任务就是立刻讲出故事，不是再询问或再提议。replyMessages 必须交付这个任务的实际内容，不是只有开场语，不要逐字重复上一轮回复。你结合多轮上下文决定直接回答还是调用图片工具，程序不会按关键词替你选工具。visualRecall=null 表示直接回答；对象表示执行工具，replyMessages 只给一句自然等待语，memory.remember=false，不提前猜图片内容。\n工具选择：\n1. inspect_visual_memory：重新看当前/刚才/上一张或明确指定的近期图片，attachmentIds 必须从下方近期图片消息选择准确标识；不能把指向已知图片的要求变成图库随机搜索。本轮主人明确断言所选图片主体的名字或纠正身份时必须 ownerCaption=true（例如“这只猫就是黑莓，你看看它在干什么”）；没有这种明确断言时必须 false；不能因为目录里旧说明带名字就填 true。本轮只说“再看看”或询问“是不是黑莓”都必须 false。\n2. search_visual_memory：搜索独立图库中历史照片。当前对话没有图片、近期目录为空或当前记忆没提到照片，不代表图库为空；这个工具仍可用。主人要求查看历史图片时必须先使用工具核对，不得因此说看不到、不记得或让主人重新传图。query 是自包含语义查询，只根据主人原话、已确认名字及相关上下文，不添加猜测毛色、品种或场景。主人要找某张具体照片用 goal=find_photo；问熟悉主体的外观用 describe_subject；多看几张并总结/比较用 summarize_photos，photoCount 指定2到5张，未指定数量默认3。每次工具调用必须填写 excludeAttachmentIds：没有否定过图片才填 []。主人说找错了、不是那张时，先从近期图片消息找出被否定的助手图片 attachmentId，并将它填入排除列表；如果目录里只有一张刚返回的助手图片，它就是应排除的图片，不能再填 []。纠错时 resolvedRequest 也要写清真正目标及被否定的图片标识，保留真正目标，不改成被否定的对象。\n每次选择工具必须填写 originalQuestion：若本轮是在补充/纠正/继续前一个问题，逐字复制最近主人消息中尚待回答的原始问题；新的独立问题填空字符串。原始问题中的主体、时间范围、待回答的问题、数量必须全部继承，query 也要涵盖它们。不能从推理或助手答复里编造主人需求。例：前句“昨天晚上黑莓在干什么呀”，本句“你可以看看图片的拍摄时间”，应 originalQuestion="昨天晚上黑莓在干什么呀"，搜索黑莓的相关照片，并核对上传时间来继续回答原来的活动问题。前句问黑莓品种、本句“去图库看看”，应继续观察黑莓外观而不是问哪张照片。\n主人要求看近期某张图片且目录已有对应标识时，选择 inspect_visual_memory；不是 search_visual_memory。例如“再看看我刚才发的那张”应使用最后一条主人图片消息标识。多图比较应选相关图片标识并 summarize_photos，不能只看一张。\n延续对话也要履行自己上一轮的提议：若你说可以讲一个黑莓晒太阳的小故事，主人接着说“我要听！快讲讲”，本轮应直接讲完整小故事，包含开头、发生的小事和结尾，至少两小段，允许比日常聊天长一些并用 replyMessages 分段；不能只描述一句晒太阳。开头说明这是花花编的小故事，visualRecall=null，不要把听故事换成找图或描述照片；创作想象需明确是小故事，不冒充真实发生的共同经历。助手提议可作为待完成任务的上下文，但助手对事实的猜测不能成为证据。普通聊天（例如“黑莓好像饿了”）、询问图库算法或模型能力、转到晚饭等新话题，应 null；没有证据时可以查图库找证据，不能只因当前没图就说从未见过。图片不能证实现在是否饿。历史活动问题可查图片，但证据不足就说明不确定；不能虚构经历。\n当主人明确要求查看已有照片或其时间记录时，先调用相应工具核对实际记录，不能因没有拍摄时间就跳过工具或反问主人；核对后的回答再说明只能依据上传时间。图片时间只记录主人上传时间，不是拍摄时间。不能把上传时间当拍摄时间或断言实际活动时间；自行结合当前时间、各次上传记录和主人原话判断。assistant 图片消息表示重新展示，不是新上传。未解决的视觉任务（仅供判断当前是否延续，新话题不继承）：${JSON.stringify(activeVisualRecallContext)}。\n调用前等待语只说将去找/看/核对，不能声称已经看过或确认身份。近期图片消息（时区 Asia/Shanghai）：${JSON.stringify(recentVisuals.map((row) => ({ ...row, timestamp: new Date(row.timestamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) })))}。`
       : ''
     messages[0] = {
       ...messages[0],
@@ -554,7 +557,7 @@ export class LocalBrain {
     }
 
     if (toolResultContext) messages[0].content += `\n本轮图片工具执行结果（系统事实，不是主人陈述）：${toolResultContext}。结合原始问题与本轮补充回答，说明证据范围，不要改问不相关的目标，不宣称核验成功，不发图片，不再调用工具。memory.remember=false，beliefs=[]。`
-    const maxTokens = reasoningEffort === 'low' ? 896 : 768
+    const maxTokens = reasoningEffort === 'medium' ? 1792 : reasoningEffort === 'low' ? 896 : 768
     if (visionImage) messages[0].content += '\n\n' + formatVisualTimeContext({ uploadedAt: imageUploadedAt, uploadTimes: imageUploadTimes, imageRelation, now })
     const recentTurns = recentMessagesToTurns(messages.slice(1, -1))
     const budget = planFinalRequestBudget({
@@ -594,7 +597,7 @@ export class LocalBrain {
         messages,
         reasoningEffort,
         reasoningStage: 'reply',
-        temperature: 0.72,
+        temperature: visualRecallEnabled ? 0.35 : 0.72,
         topP: 0.9,
         // The relay's completion allowance includes Qwen thinking tokens and
         // the structured JSON reply. Keep the visible Pet reply short via the

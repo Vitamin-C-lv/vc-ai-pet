@@ -324,7 +324,8 @@ export function parseStructuredChatResponse(text, userText) {
 
   try {
     const parsed = JSON.parse(rawText)
-    const reply = typeof parsed?.reply === 'string' ? parsed.reply.trim() : ''
+    const reply = typeof parsed?.reply === 'string' ? parsed.reply.trim()
+      : typeof parsed?.replyMessages?.[0] === 'string' ? parsed.replyMessages[0].trim() : ''
     if (!reply) throw new Error('PET_LOCAL_MODEL_EMPTY_REPLY')
     if (!sanitizeSafeTraceText(reply, 600)) throw new Error('PET_LOCAL_MODEL_UNSAFE_REPLY')
 

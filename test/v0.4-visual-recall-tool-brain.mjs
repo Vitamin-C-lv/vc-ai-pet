@@ -108,6 +108,11 @@ assert.equal(recallObjectSchema.properties.photoCount.minimum, 2)
 assert.equal(recallObjectSchema.properties.photoCount.maximum, 5)
 assert.equal(recallObjectSchema.properties.originalQuestion.maxLength, 1200)
 assert.equal(recallObjectSchema.required.includes('originalQuestion'), true)
+assert.equal(recallObjectSchema.required.includes('excludeAttachmentIds'), true)
+assert.equal(recallObjectSchema.required.includes('ownerCaption'), true)
+assert.equal(schema.required.includes('resolvedRequest'), true)
+assert.equal(schema.required.includes('replyMessages'), true)
+assert.equal(Object.hasOwn(schema.properties, 'reply'), false, 'one authoritative list avoids dropping story opening or body')
 assert.equal(schema.required.includes('visualRecall'), true, 'the enabled schema asks the model to return a tool choice or null')
 const selectedPrompt = requests[0].messages[0].content
 assert.match(selectedPrompt, /直接回答还是调用图片工具/u)
@@ -173,7 +178,7 @@ const imageSchema = requests[16].responseFormat.schema
 assert.notStrictEqual(imageSchema, PET_CHAT_RESPONSE_SCHEMA, 'image input keeps the model-selected visual tool schema enabled')
 assert.deepEqual(imageSchema.properties.visualRecall.anyOf[0].properties.tool.enum, ['search_visual_memory', 'inspect_visual_memory'])
 assert.equal(requests[16].reasoningEffort, 'medium', 'image tool choice keeps the vision profile')
-assert.equal(requests[16].maxTokens, 768)
+assert.equal(requests[16].maxTokens, 1792, 'image planning reserves 1024 reasoning tokens plus room for its structured answer')
 
 const verifyRequests = []
 const namedRecallCalls = []
@@ -292,4 +297,10 @@ assert.equal(ordinaryVisionRequests[0].maxTokens, 4096, 'ordinary visual inspect
 assert.equal(ordinaryVisionRequests[0].requestTimeoutMs, undefined, 'the new deadline is scoped to recall verification')
 assert.match(ordinaryVisionRequests[0].messages[0].content, /候选图片目录/u, 'ordinary inspection keeps its multi-image workflow prompt')
 
+const messagesOnlyBrain = makeChatBrain([{ resolvedRequest:'讲故事',replyMessages:['花花编个小故事，黑莓在阳台晒太阳。','一片叶子飘到它身上，它伸爪接住，又安心睡着了。'],memory:emptyMemory,beliefs:[],visualRecall:null }])
+const story = await ask(messagesOnlyBrain.brain,'我要听！快讲讲',{allowVisualRecall:true})
+assert.equal(story.ok,true)
+assert.equal(story.replyMessages.length,2)
+assert.match(story.replyMessages[0],/小故事/u)
+assert.match(story.replyMessages[1],/伸爪/u)
 console.log('VISUAL_RECALL_TOOL_BRAIN=PASS')
