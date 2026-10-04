@@ -22,6 +22,10 @@ gameId和完整moveNumbers；style/user及lesson仍独立。普通LocalBrain.rep
 定向验证通过：model/session上下文传递与共享当前自我、原有时间/模型优先
 聊天上下文、summary/style/lesson三类记忆重开去重、实际reply请求消费，以及
 无observations时摘要仍可聊。生产服务继续保留原版本，本轮只更新独立预览。
+390×844浏览器仅发一次真实落子：思考时speech为空且hidden、头像动画running；
+返回后气泡等于真实模型speech，同回合本地重绘不重播进入动画，page errors为空。
+预览保持127.0.0.1:46179，保留主人既有11手局、10手完成fixture及聊天反馈；
+既有两局只用已缓存真实review补摘要记忆，没有重新调用模型或改写棋谱发言。
 
 ## 2026-10-04 — 消息摸摸头、模型五子棋、棋局复盘与出招记忆
 
