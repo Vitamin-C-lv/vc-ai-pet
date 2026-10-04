@@ -1,5 +1,28 @@
 # VC AI Pet — Project State
 
+## 2026-10-04 — 棋局延续花花人设、思考后气泡与日常复盘记忆
+
+按主人澄清，表达目标是符合花花既有人设，不固定“可爱”台词。日常聊天、
+棋局落子与复盘复用buildPetPersonaContext/PET_VOICE_INSTRUCTION；模型
+接收同一实例的身份、当前状态、安全规则与已形成的自我认识。LAN会话传入
+runtime identitySnapshot/snapshot，棋局还提供最近三条真实公开发言供表达
+承接。实际落点、状态和可选发言继续全部由现有Local Brain决定。
+
+思考与复盘等待期间保留头像/圆点动画并隐藏旧发言，模型完成后才显示
+头像旁带尾巴的发言气泡。空speech不显示气泡，不生成默认棋评。新棋步或
+复盘发言仅进入一次，重复render不重复动画；历史回放读取保存的真实发言。
+
+此前复盘summary只在棋局DB，本轮另存topic层REFLECTION_DERIVED记忆，
+evidence=inferred，sourceIds/sourceRoots指向同一真实棋谱anchor，保留
+gameId和完整moveNumbers；style/user及lesson仍独立。普通LocalBrain.reply
+现有记忆召回可以读到规则结果、复盘摘要、主人风格及策略理解，不新增棋盘
+关键词路由、工作工具或原始推理归档。命中范围仍由既有相关性检索决定，
+逐手棋谱/公开发言完整记录保留在游戏回放；模型理解不升级为confirmed。
+
+定向验证通过：model/session上下文传递与共享当前自我、原有时间/模型优先
+聊天上下文、summary/style/lesson三类记忆重开去重、实际reply请求消费，以及
+无observations时摘要仍可聊。生产服务继续保留原版本，本轮只更新独立预览。
+
 ## 2026-10-04 — 消息摸摸头、模型五子棋、棋局复盘与出招记忆
 
 手机主页移除摸摸头/玩耍/长按三按钮。assistant 的正文回答和主动消息

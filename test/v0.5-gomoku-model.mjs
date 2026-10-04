@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { decideGomokuMove, reviewGomokuGame } from '../src/brain/gomoku-decision.js';
 import { createGomokuSessions } from '../src/remote/gomoku-session.js';
+import { LocalBrain } from '../src/brain/local-brain.js';
+import { buildPetMessages, PET_VOICE_INSTRUCTION } from '../src/brain/prompt-builder.js';
 import '../src/remote/mobile-ui/gomoku-engine.js';
 
 const Engine = globalThis.VcAiPetGomokuEngine;
@@ -38,6 +40,33 @@ function fakeClient(contents) {
 }
 
 const position = gameWithHistory();
+{
+  const identity = { name: '李花花', breedZh: '伯恩山犬', birthday: '2026-08-31' };
+  const state = { mood: 0.65, energy: 0.55, attachment: 0.9 };
+  const rules = [{ level: 'rules', content: '主人可以纠正花花的理解。' }];
+  const self = [{ level: 'soul', content: '花花最近觉得，认真听主人说话比急着回答更适合自己。',
+    provenance: { source: 'REFLECTION_DERIVED', evidence: 'inferred' } }];
+  const { client, calls } = fakeClient([
+    JSON.stringify({ row: 8, col: 9, mood: 'focused', speech: '' }),
+    JSON.stringify({ summary: '主人形成五连获胜。', mood: 'curious', speech: '', observations: [] }),
+  ]);
+  const brain = new LocalBrain({ client, memory: {
+    stableRulesContext: () => rules,
+    currentSelfContext: () => self,
+    recall: () => [],
+  } });
+  await brain.gomokuMove({ game: position, identity, state });
+  await brain.gomokuReview({ game: humanWinGame(), identity, state });
+  const chatPrompt = buildPetMessages({ identity, state, stableRules: rules, currentSelfContext: self, userText: '陪花花下棋。' })[0].content;
+  for (const prompt of [chatPrompt, ...calls.map(call => call.messages[0].content)]) {
+    assert.ok(prompt.includes(PET_VOICE_INSTRUCTION), 'chat, move and review share the same pet voice');
+    assert.ok(prompt.includes(self[0].content), 'the current self understanding reaches every pet interaction');
+    assert.ok(prompt.includes(rules[0].content));
+    assert.ok(prompt.includes('精力 55/100'), 'the runtime state reaches the model instead of a fixed game personality');
+    assert.ok(prompt.includes('[evidence=inferred]'), 'the pet self understanding keeps its evidence qualifier');
+  }
+}
+
 const moveCases = [
   {
     response: { row: 8, col: 9, mood: 'focused', speech: '花花先稳住。' },
@@ -195,7 +224,9 @@ function humanWinGame() {
 
 function makeSessions(gomokuMove) {
   const calls = [];
+  const petContext = { identity: { name: '李花花' }, state: { energy: 0.55 } };
   const sessions = createGomokuSessions({
+    getPetContext: () => petContext,
     getBrain() {
       return {
         async gomokuMove(request) {
@@ -220,6 +251,8 @@ function makeSessions(gomokuMove) {
   assert.equal(calls[0].game.history.length, 1);
   assert.equal(calls[0].game.board[7][7], 1);
   assert.equal(calls[0].game.history[0].player, 1);
+  assert.deepEqual(calls[0].identity, { name: '李花花' });
+  assert.deepEqual(calls[0].state, { energy: 0.55 });
 
   const repeated = await sessions.move(id, 6, 6);
   assert.equal(repeated.error, 'gomoku-move-not-allowed');

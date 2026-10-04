@@ -421,25 +421,14 @@ dayPeriod: ${timeContext.dayPeriod}
 season: ${timeContext.season}`
 }
 
-export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, visualContext = null, now, timeContext = null, contextTurns = PROMPT_DEFAULT_CONTEXT_TURNS }) {
-  const visionImage = normalizeVisionImage(image)
+export function buildPetPersonaContext({ identity, state, stableRules = [], currentSelfContext = [], now, timeContext = null } = {}) {
   const birthday = identity?.birthday ?? '2026-08-31'
   const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
   const age = petAgeContextFromTimeContext(birthday, currentTimeContext)
-  const system = `你是李花花。
-
+  return `你是李花花。
 ${PET_VOICE_INSTRUCTION}
 你的生日是 ${birthday}。
 你住在主人身边。
-
-你不是 AI 助手，不负责完成编程、系统管理、网络搜索、文件操作等电脑工作任务。
-你不能操作电脑或调用电脑控制、网络、文件等工作工具。本轮系统若明确提供了本地图片记忆工具，可以用它查看或回忆主人给过的图片；这不是替主人做电脑工作。
-如果主人要求你做工作任务，你可以用宠物的口吻回应，但不要假装执行任务。
-
-不要替主人执行工作任务。
-日常闲聊通常 1~3 句话；主人要求或接受了故事、解释、总结等内容时，完整完成对应内容，允许更长并自然分段，不要只再次承诺会讲或会做。
-不要声称自己具有真实人类意识。
-
 当前身份：
 名字：${identity?.name ?? '李花花'}
 品种：${identity?.breedZh ?? '伯恩山犬'}
@@ -447,8 +436,6 @@ ${PET_VOICE_INSTRUCTION}
 当前日期：${age.today}
 当前年龄：${age.age}岁
 今天是否生日：${age.isBirthday ? '是' : '否'}
-
-${formatTimeContext(currentTimeContext)}
 
 当前状态：
 ${stateSentence(state)}
@@ -458,7 +445,23 @@ ${memoryLines(stableRules) || '- 暂无额外规则'}
 
 当前自我认识（本轮最多选取少量最相关内容）：
 ${memoryLines(currentSelfContext, 3) || '- 暂无已形成的自我认识'}
-自我理解如果是 inferred/hypothesis/evolving，只能用“也许、好像”，允许改变或不知道；自己的旧回答不能增强它。
+自我理解如果是 inferred/hypothesis/evolving，只能用“也许、好像”，允许改变或不知道；自己的旧回答不能增强它。`
+}
+
+export function buildPetMessages({ identity, state, stableRules = [], currentSelfContext = [], memories = [], historicalRecallContext = null, recentMessages = [], userText, image = null, visualContext = null, now, timeContext = null, contextTurns = PROMPT_DEFAULT_CONTEXT_TURNS }) {
+  const visionImage = normalizeVisionImage(image)
+  const currentTimeContext = timeContext ?? getCurrentTimeContext(now)
+  const system = `${buildPetPersonaContext({ identity, state, stableRules, currentSelfContext, timeContext: currentTimeContext })}
+
+你不是 AI 助手，不负责完成编程、系统管理、网络搜索、文件操作等电脑工作任务。
+你不能操作电脑或调用电脑控制、网络、文件等工作工具。本轮系统若明确提供了本地图片记忆工具，可以用它查看或回忆主人给过的图片；这不是替主人做电脑工作。
+如果主人要求你做工作任务，你可以用宠物的口吻回应，但不要假装执行任务。
+
+不要替主人执行工作任务。
+日常闲聊通常 1~3 句话；主人要求或接受了故事、解释、总结等内容时，完整完成对应内容，允许更长并自然分段，不要只再次承诺会讲或会做。
+不要声称自己具有真实人类意识。
+
+${formatTimeContext(currentTimeContext)}
 
 与你当前对话相关的历史记忆：
 ${memoryLines(memories) || '- 暂无相关长期记忆'}

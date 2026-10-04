@@ -70,6 +70,7 @@
     let reviewBusy = false
     let reviewTargetId = null
     let reviewError = ''
+    let lastSpeechKey = ''
 
     function rememberGameId(id) {
       if (!id) return
@@ -383,6 +384,37 @@
       return typeof state?.speech === 'string' ? state.speech.trim() : ''
     }
 
+    function speechKeyForDisplay(words) {
+      if (!words || !game) return ''
+      const gameKey = String(game.id || 'current')
+      if (displayedFinal() && typeof game.review?.speech === 'string' && game.review.speech.trim() === words) {
+        return gameKey + ':review:' + words
+      }
+      const moves = displayedHistory()
+      for (let index = moves.length - 1; index >= 0; index -= 1) {
+        const move = moves[index]
+        if (move.player === 2 && typeof move.speech === 'string' && move.speech.trim() === words) {
+          return gameKey + ':move:' + (index + 1) + ':' + words
+        }
+      }
+      return gameKey + ':turn:' + moves.length + ':' + words
+    }
+
+    function renderSpeech(words, key) {
+      if (!words) {
+        speech.textContent = ''
+        speech.hidden = true
+        return
+      }
+      speech.hidden = false
+      speech.textContent = words
+      if (key === lastSpeechKey) return
+      lastSpeechKey = key
+      speech.classList.remove('gomoku-speech-enter')
+      void speech.offsetWidth
+      speech.classList.add('gomoku-speech-enter')
+    }
+
     function renderPetTurn() {
       const thinking = isThinking()
       const moves = displayedHistory()
@@ -391,22 +423,27 @@
       if (thinking) {
         const reviewing = reviewBusy && reviewTargetId === game?.id
         mood.textContent = reviewing ? '复盘中' : '思考中'
-        speech.textContent = reviewing ? '花花正在复盘这局棋…' : '花花正在看棋盘…'
+        renderSpeech('', '')
+        return
+      }
+      if (!archiveMode && game?.modelStatus === 'failed') {
+        mood.textContent = '思考未完成'
+        renderSpeech('', '')
         return
       }
       if (archiveMode && !last) {
         mood.textContent = '开局'
-        speech.textContent = '棋局还没有开始。'
+        renderSpeech('', '')
         return
       }
       if (archiveMode && last?.player === 1) {
         mood.textContent = '主人落子'
-        speech.textContent = '这一手是主人的黑棋。'
+        renderSpeech('', '')
         return
       }
       mood.textContent = moodForDisplay() || (game ? '等待花花' : '等待落子')
       const words = speechForDisplay()
-      speech.textContent = words || (game ? '花花这一步没有说话。' : '棋局开始后，这里会显示花花的心情和她想说的话。')
+      renderSpeech(words, speechKeyForDisplay(words))
     }
 
     function renderLastMove() {

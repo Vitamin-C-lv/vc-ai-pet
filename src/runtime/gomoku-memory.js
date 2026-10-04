@@ -11,6 +11,17 @@ export function rememberGomokuReview(memory, game) {
     2, { title, keywords: ['五子棋', '主人', '花花', '棋局', '出招'],
       provenance: { source: 'SYSTEM_EVENT', evidence: 'confirmed', gameId: game.id } })
   const saved = []
+  const summary = game.review?.summary
+  if (typeof summary === 'string' && summary.trim()) {
+    const candidate = { level: 'topic', content: `五子棋复盘总结（仅基于这一局的模型理解）：${summary.trim()}`,
+      importance: 2, keywords: ['五子棋', '棋局', '复盘', '总结'], sourceIds: [anchor.id],
+      provenance: { source: 'REFLECTION_DERIVED', evidence: 'inferred', gameId: game.id,
+        moveNumbers: game.history.map((_, index) => index + 1) } }
+    candidate.provenance = { ...candidate.provenance, ...memory.derivedEvidence(candidate) }
+    const prior = memory.findSameEvidenceDerivation(candidate)
+    const row = prior ?? memory.rememberReflectionCandidate(candidate)
+    saved.push(row.id)
+  }
   for (const kind of ['style', 'lesson']) {
     const observations = (game.review?.observations ?? []).filter(item => item.kind === kind)
     if (!observations.length) continue

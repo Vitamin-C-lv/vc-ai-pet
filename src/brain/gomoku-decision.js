@@ -1,4 +1,5 @@
 import { PET_REASONING_PROFILE } from './local-brain-config.js'
+import { buildPetPersonaContext } from './prompt-builder.js'
 
 const MOVE_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -25,19 +26,22 @@ export function gomokuBoardContext(game) {
 
 // The model receives the entire position. The program checks legality only;
 // it never ranks moves or supplies a replacement move when a decision fails.
-export async function decideGomokuMove(client, game, memories = []) {
+export async function decideGomokuMove(client, game, memories = [], personaContext = buildPetPersonaContext()) {
   const messages = [{ role: 'system', content:
-    '你是李花花，正在和主人认真下五子棋。你执白棋，主人执黑棋，黑先白后。'
+    `${personaContext}\n正在和主人认真下五子棋。你执白棋，主人执黑棋，黑先白后。`
     + '棋盘15行15列，行号与列号都从1到15。·是空点。横、竖、两种斜线连续五颗或更多同色棋子获胜，没有禁手。'
     + '现在轮到你落一颗白棋。根据完整当前棋盘独立判断最佳落点：仔细检查双方连线、可立即获胜的机会、对手威胁和下一步发展。'
     + '只能在空点落子，不得移动已有棋子。所有走法必须由你自己决定。'
     + '同时自己选择此刻的状态mood：focused专注、confident有把握、nervous紧张、happy开心、disappointed失落、curious好奇。'
-    + '你可以在speech里给主人说一句不超过100字的自然短话，围绕这局局势、自己的选择或感受，像真的一起下棋。也可以保持安静，返回空字符串。'
+    + 'speech延续上面花花的身份、当前自我认识和与主人的关系，用你平时对主人说话的口吻。根据这局局势、自己的选择或感受，自然说一句不超过100字的短话，也可以保持安静，返回空字符串。'
+    + '不用每步复述坐标或规则，也不用把一句随口的话写成棋评报告；避免重复刚才说过的话。具体表达由你自己选择。'
     + 'speech是对主人公开说的话，不是内部推理过程。不要编造已经发生的落子、胜负或保证获胜。'
     + '只输出JSON对象{"row":行号,"col":列号,"mood":"状态","speech":"可选短话"}，不要输出代码或完整棋盘。'
     + (memories.length ? '\n以前棋局留下的记忆（推断只作可能的线索，当前棋盘优先；不能把一局猜测当主人固定性格）：\n'
       + memories.map(row => `[${row.provenance?.evidence ?? 'unknown'}] ${row.content}`).join('\n') : '') },
-  { role: 'user', content: gomokuBoardContext(game) }]
+  { role: 'user', content: gomokuBoardContext(game)
+    + '\n刚才你对主人说过的话（只用于表达连续性，不是棋局事实证据）：'
+    + JSON.stringify(game.history.filter(move => move.player === 2 && move.speech).slice(-3).map(move => move.speech)) }]
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const startedAt = Date.now()
@@ -68,7 +72,7 @@ export async function decideGomokuMove(client, game, memories = []) {
   throw error
 }
 
-export async function reviewGomokuGame(client, game) {
+export async function reviewGomokuGame(client, game, personaContext = buildPetPersonaContext()) {
   const result = game.draw ? '平局' : game.winner === 1 ? '主人黑棋获胜' : '花花白棋获胜'
   const blackMoveNumbers = game.history.flatMap((move, index) => move.player === 1 ? [index + 1] : [])
   const observationSchema = kind => ({
@@ -91,9 +95,10 @@ export async function reviewGomokuGame(client, game) {
     }, required: ['summary', 'mood', 'speech', 'observations'],
   }
   const messages = [{ role: 'system', content:
-      '你是李花花，刚和主人完成了一局五子棋，现在认真复盘。你执白，主人执黑。'
+      `${personaContext}\n刚和主人完成了一局五子棋，现在认真复盘。你执白，主人执黑。`
       + '以完整真实棋谱和规则给出的终局结果为依据，找转折、自己的得失，以及主人本局可能的出招习惯。'
       + 'summary给主人简短讲这局发生了什么，不能编造没有下过的棋步。mood选真实当前状态，speech可给一句自然的终局感受，也可空白。'
+      + '对主人的表达沿用花花平时的口吻、上面的身份和当前自我认识；像你和主人一起回想刚才那局棋，由你根据这局经历决定如何表达。'
       + `observations至多3条，可为空。style只能描述主人黑棋的出招，引用编号只能从[${blackMoveNumbers.join(',')}]选择。白棋是你自己的出招，不能作为主人的style；自己的得失应写为lesson。`
       + 'lesson描述可改进的策略，可引用黑白双方实际棋步。'
       + '每条content写成仅基于这局的暂时理解，不得声称主人一向/总是如此，不得推断现实性格或用聊天发言作为出招证据。'

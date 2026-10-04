@@ -12,7 +12,7 @@ function gameError(code, statusCode = 409) {
   return error
 }
 
-export function createGomokuSessions({ getBrain, getMemory = () => null, sandboxRoot = null }) {
+export function createGomokuSessions({ getBrain, getMemory = () => null, getPetContext = () => ({}), sandboxRoot = null }) {
   const games = new Map()
   const store = sandboxRoot ? new GomokuStore(sandboxRoot) : null
   let ready
@@ -48,7 +48,7 @@ export function createGomokuSessions({ getBrain, getMemory = () => null, sandbox
     try {
       const brain = getBrain()
       if (typeof brain?.gomokuMove !== 'function') throw gameError('gomoku-model-unavailable', 503)
-      const decision = await brain.gomokuMove({ game: publicGame(game) })
+      const decision = await brain.gomokuMove({ ...getPetContext(), game: publicGame(game) })
       if (!play(game, decision.row, decision.col)) throw gameError('GOMOKU_MODEL_INVALID_MOVE')
       Object.assign(game.history.at(-1), { source: 'local-model', mood: decision.mood, speech: decision.speech, requestId: decision.requestId ?? null })
       game.mood = decision.mood
@@ -128,7 +128,7 @@ export function createGomokuSessions({ getBrain, getMemory = () => null, sandbox
         try {
           const brain = getBrain()
           if (typeof brain?.gomokuReview !== 'function') throw gameError('gomoku-model-unavailable', 503)
-          game.review = await brain.gomokuReview({ game: publicGame(game) })
+          game.review = await brain.gomokuReview({ ...getPetContext(), game: publicGame(game) })
           game.mood = game.review.mood
           game.speech = game.review.speech
           game.reviewStatus = 'ready'

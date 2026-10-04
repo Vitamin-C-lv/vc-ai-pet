@@ -66,7 +66,9 @@ export function actionToInteractionKind(action, state = {}) {
 export function createLanRequestHandler({ runtime, assetRoot, visualConfig = {}, conversationStore = runtime?.conversationStore, logger = console, submissionRegistry = null } = {}) {
   const assets = resolve(assetRoot)
   const chatSubmissionIdempotency = submissionRegistry ?? createChatSubmissionIdempotency({ conversationStore })
-  const gomoku = createGomokuSessions({ getBrain: () => runtime.brain, getMemory: () => runtime.memory, sandboxRoot: runtime.sandbox?.root })
+  const gomoku = createGomokuSessions({ getBrain: () => runtime.brain, getMemory: () => runtime.memory,
+    getPetContext: () => ({ identity: runtime.identitySnapshot?.(), state: runtime.snapshot?.() }),
+    sandboxRoot: runtime.sandbox?.root })
   // The owning HTTP server closes the game archive with its request handler.
   const handler = async (req, res) => {
 

@@ -1,7 +1,7 @@
 import { PET_REASONING_PROFILE, validateLocalBrainConfig } from './local-brain-config.js'
 import { LocalBrainApiError, LocalBrainClient } from './local-brain-client.js'
 import { decideGomokuMove, reviewGomokuGame } from './gomoku-decision.js'
-import { buildPetMessages, PET_VOICE_INSTRUCTION } from './prompt-builder.js'
+import { buildPetMessages, buildPetPersonaContext, PET_VOICE_INSTRUCTION } from './prompt-builder.js'
 import { addReasoningHistory } from './reasoning-history-context.js'
 import { formatVisualTimeContext } from './visual-time-context.js'
 import { PET_CHAT_RESPONSE_SCHEMA, MEMORY_OUTPUT_INSTRUCTION, parseStructuredChatResponse } from './memory-candidate.js'
@@ -267,15 +267,22 @@ export class LocalBrain {
     return this.client.health()
   }
 
-  async gomokuMove({ game }) {
+  gomokuPersona({ identity, state } = {}) {
+    return buildPetPersonaContext({ identity, state,
+      stableRules: this.memory?.stableRulesContext?.() ?? this.memory?.stableIdentityContext?.() ?? [],
+      currentSelfContext: this.memory?.currentSelfContext?.(3) ?? [],
+    })
+  }
+
+  async gomokuMove({ game, identity, state }) {
     const memories = typeof this.memory?.recall === 'function'
       ? this.memory.recall('五子棋 主人 出招 风格', 4, { bumpHits: false,
         filter: row => row.content.includes('五子棋') && row.provenance?.evidence === 'inferred' }) : []
-    return decideGomokuMove(this.client, game, memories)
+    return decideGomokuMove(this.client, game, memories, this.gomokuPersona({ identity, state }))
   }
 
-  async gomokuReview({ game }) {
-    return reviewGomokuGame(this.client, game)
+  async gomokuReview({ game, identity, state }) {
+    return reviewGomokuGame(this.client, game, this.gomokuPersona({ identity, state }))
   }
 
   async withReasoningHistory(messages, { kind = 'chat', outputReserveTokens = 1152 } = {}) {

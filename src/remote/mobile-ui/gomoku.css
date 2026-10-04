@@ -112,6 +112,32 @@
 .gomoku-pet-heading { display: flex; align-items: center; gap: 7px; min-height: 18px; color: #674d3d; font-size: 12px; }
 .gomoku-pet-heading > span:nth-child(2) { color: #a87958; font-size: 11px; }
 .gomoku-pet-comment p { margin: 0; color: #796554; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.gomoku-speech-bubble {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin: 3px 0 0;
+  padding: 8px 11px;
+  border: 1px solid #ead8c8;
+  border-radius: 13px 13px 13px 4px;
+  background: #fffdf9;
+  box-shadow: 0 3px 9px rgba(111, 78, 52, .08);
+  white-space: pre-wrap;
+}
+.gomoku-speech-bubble::before {
+  position: absolute;
+  top: 9px;
+  left: -5px;
+  width: 9px;
+  height: 9px;
+  border-bottom: 1px solid #ead8c8;
+  border-left: 1px solid #ead8c8;
+  background: #fffdf9;
+  content: '';
+  transform: rotate(45deg);
+}
+.gomoku-speech-bubble[hidden] { display: none; }
+.gomoku-speech-bubble.gomoku-speech-enter { animation: gomoku-speech-arrive 260ms ease-out both; }
 .gomoku-thinking-dots { display: none; align-items: center; gap: 3px; }
 .gomoku-pet-turn[data-thinking="true"] .gomoku-thinking-dots { display: inline-flex; }
 .gomoku-thinking-dots i {
@@ -132,6 +158,10 @@
   0%, 70%, 100% { opacity: .35; transform: translateY(0); }
   35% { opacity: 1; transform: translateY(-3px); }
 }
+@keyframes gomoku-speech-arrive {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .gomoku-pet-turn[data-thinking="true"] + .gomoku-board-wrap { box-shadow: 0 7px 20px rgba(111, 78, 52, .12); }
 .gomoku-pet-turn[data-thinking="true"] ~ .gomoku-board-wrap { animation: gomoku-board-breathe 2.8s ease-in-out infinite; }
 @keyframes gomoku-board-breathe {
@@ -141,6 +171,7 @@
 @media (prefers-reduced-motion: reduce) {
   .gomoku-pet-turn[data-thinking="true"] > img,
   .gomoku-thinking-dots i,
+  .gomoku-speech-bubble.gomoku-speech-enter,
   .gomoku-pet-turn[data-thinking="true"] ~ .gomoku-board-wrap { animation: none; }
 }
 .gomoku-board-wrap {
