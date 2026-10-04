@@ -1,5 +1,19 @@
 # VC AI Pet — Project State
 
+## 2026-10-04 — 消息反馈与模型五子棋正式上线
+
+主人明确授权“直接推送到生产”后，canonical工作树从0ad9eae快进到c284f8d，
+生产分支feat/stackchan-voice-latency-20260926推送同一版本。保持现有web
+profile的vc-ai-pet源码链接及原sandbox，通过现有restart-server.sh/primary
+manager仅重启3080/17870主进程；Local Brain relay、第二实例、APK与网络
+配置均不变。正式页面含逐消息摸摸头、花花家五子棋、共享人设与气泡资源。
+
+上线检查：正式17870页面与pet/state返回200，gomoku/history返回ok，17862
+Local Brain health为ok。聊天1101条、submission receipts 47条及原记忆各表
+记录数上线前后完全相同；只新增独立message_feedback表与棋局DB。
+预览仍保留在46179，其样例、试玩棋局及独立记忆没有导入生产。手机实体
+端的重新加载与真实使用仍需人工确认，不将服务检查等同于手机体验验收。
+
 ## 2026-10-04 — 棋局延续花花人设、思考后气泡与日常复盘记忆
 
 按主人澄清，表达目标是符合花花既有人设，不固定“可爱”台词。日常聊天、
